@@ -27,6 +27,9 @@ server/uploads/*.gif
 # data cache (قاعدة البيانات المحلية - لا ترفعها)
 server/data/
 
+# supabase CLI (أدوات محلية - لا تُرفع)
+.bin/
+
 # logs
 *.log
 npm-debug.log*
