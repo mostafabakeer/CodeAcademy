@@ -43,6 +43,12 @@ async function main() {
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ extended: true }));
 
+  // تسجيل الطلبات (مؤقت للتشخيص)
+  app.use((req, _res, next) => {
+    console.log(`[req] ${req.method} ${req.originalUrl}`);
+    next();
+  });
+
   // الملفات المرفوعة (فيديوهات وصور)
   fs.mkdirSync(config.uploadsDir, { recursive: true });
   app.use('/uploads', express.static(config.uploadsDir));
