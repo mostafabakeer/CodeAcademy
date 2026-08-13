@@ -1,14 +1,16 @@
 ﻿import { Router } from 'express';
 import type { Response } from 'express';
-import type { AppStore } from '../db/store';
 import { requireAuth, requireAdmin, requireSubscriber, type AuthRequest } from '../middleware/auth';
 import { gradeAllowed, contentVisible, isContentGrade } from '../utils/access';
+import * as examService from '../services/examService';
+import * as questionService from '../services/questionService';
+import * as resultService from '../services/resultService';
 
 function bodyText(v: any): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
-export function examRoutes(store: AppStore): Router {
+export function examRoutes(): Router {
   const r = Router();
 
   // قائمة الامتحانات مع نتيجة الطالب
@@ -16,16 +18,15 @@ export function examRoutes(store: AppStore): Router {
     try {
       const reqUser = (req as AuthRequest).user!;
       const uid = reqUser.id;
-      const exams = (await store.all<any>('exam:')).filter(({ value }) => contentVisible(reqUser.role, value.grade, reqUser.grade));
-      const results = await store.all<any>(`result:${uid}:`);
-      const resultByExam = new Map(results.map((res) => [res.value.examId, res.value]));
+      const exams = (await examService.listAll()).filter((e) => contentVisible(reqUser.role, e.grade, reqUser.grade));
+      const results = await resultService.listByUser(uid);
+      const resultByExam = new Map(results.map((res) => [res.examId, res]));
       const qByExam = new Map<number, number>();
-      const questions = await store.all<any>('question:');
-      for (const { value: q } of questions) {
-        qByExam.set(q.examId, (qByExam.get(q.examId) ?? 0) + 1);
-      }
+      const questions = await Promise.all(exams.map((e) => questionService.listByExam(e.id)));
+      exams.forEach((e, i) => qByExam.set(e.id, questions[i].length));
+
       const out = exams
-        .map(({ value: exam }) => ({
+        .map((exam) => ({
           ...exam,
           questionsCount: qByExam.get(exam.id) ?? 0,
           taken: resultByExam.has(exam.id),
@@ -45,24 +46,21 @@ export function examRoutes(store: AppStore): Router {
       const reqUser = (req as AuthRequest).user!;
       const uid = reqUser.id;
       const id = Number(req.params.id);
-      const exam = await store.get<any>(`exam:${id}`);
+      const exam = await examService.getById(id);
       if (!exam) return res.status(404).json({ error: 'الامتحان غير موجود' });
       if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
         return res.status(404).json({ error: 'الامتحان غير موجود' });
       }
-      const questions = (await store.all<any>('question:'))
-        .filter((q) => q.value.examId === id)
-        .map(({ value: q }) => ({
-          id: q.id,
-          text: q.text,
-          textEn: q.textEn,
-          options: q.options,
-          hasImage: !!q.image,
-          image: q.image,
-          order: q.order,
-        }))
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-      const lastResult = await store.get(`result:${uid}:${id}`);
+      const questions = (await questionService.listByExam(id)).map((q) => ({
+        id: q.id,
+        text: q.text,
+        textEn: q.textEn,
+        options: q.options,
+        hasImage: !!q.image,
+        image: q.image,
+        order: q.order,
+      }));
+      const lastResult = await resultService.get(uid, id);
       res.json({ exam, questions, lastResult });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -75,57 +73,29 @@ export function examRoutes(store: AppStore): Router {
       const reqUser = (req as AuthRequest).user!;
       const uid = reqUser.id;
       const id = Number(req.params.id);
-      const exam = await store.get<any>(`exam:${id}`);
+      const exam = await examService.getById(id);
       if (!exam) return res.status(404).json({ error: 'الامتحان غير موجود' });
       if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
         return res.status(404).json({ error: 'الامتحان غير موجود' });
       }
 
-      const resultKey = `result:${uid}:${id}`;
-      const existing = await store.get<any>(resultKey);
+      const existing = await resultService.get(uid, id);
       // الطالب يمتحن مرة واحدة فقط ما لم يسمح الأدمن بإعادة الامتحان
       if (existing && !exam.allowRetake) {
         return res.status(403).json({ error: 'لقد أديت هذا الامتحان بالفعل ولا يمكنك إعادته' });
       }
 
       const answers: Record<string, number> = req.body?.answers ?? {};
-      const questions = (await store.all<any>('question:')).filter((q) => q.value.examId === id);
+      const outcome = await examService.submit(uid, exam, answers);
 
-      let correct = 0;
-      const review = questions.map(({ value: q }) => {
-        const given = answers[String(q.id)];
-        const isCorrect = given === q.correctIndex;
-        if (isCorrect) correct++;
-        return {
-          id: q.id,
-          text: q.text,
-          textEn: q.textEn,
-          given,
-          correctIndex: q.correctIndex,
-          isCorrect,
-        };
+      res.json({
+        score: outcome.score,
+        best: outcome.best,
+        correct: outcome.correct,
+        total: outcome.total,
+        passed: outcome.passed,
+        review: outcome.review,
       });
-
-      const score = questions.length ? Math.round((correct / questions.length) * 100) : 0;
-
-      const result = existing ?? { userId: uid, examId: id, best: 0, attempts: 0, history: [] };
-      const best = Math.max(result.best ?? 0, score);
-      const updated = {
-        ...result,
-        userId: uid,
-        examId: id,
-        score,
-        best,
-        correct,
-        total: questions.length,
-        answers,
-        attempts: (result.attempts ?? 0) + 1,
-        history: [...(result.history ?? []).slice(-19), { at: Date.now(), score, correct, total: questions.length }],
-        at: Date.now(),
-      };
-      await store.set(resultKey, updated);
-
-      res.json({ score, best, correct, total: questions.length, passed: score >= (exam.passingScore ?? 50), review });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -136,9 +106,7 @@ export function examRoutes(store: AppStore): Router {
     try {
       const { courseId, title, titleEn, timeLimit, passingScore, order, grade, allowRetake } = req.body ?? {};
       if (!bodyText(title)) return res.status(400).json({ error: 'اسم الامتحان مطلوب' });
-      const id = await store.nextId();
-      const exam = {
-        id,
+      const exam = await examService.create({
         courseId: courseId ? Number(courseId) : null,
         title: bodyText(title),
         titleEn: bodyText(titleEn),
@@ -148,8 +116,7 @@ export function examRoutes(store: AppStore): Router {
         allowRetake: !!allowRetake,
         order: Number(order) || 0,
         createdAt: Date.now(),
-      };
-      await store.set(`exam:${id}`, exam);
+      });
       res.json({ exam });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -159,11 +126,10 @@ export function examRoutes(store: AppStore): Router {
   r.put('/exams/:id', requireAuth, requireAdmin, async (req, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const exam = await store.get<any>(`exam:${id}`);
+      const exam = await examService.getById(id);
       if (!exam) return res.status(404).json({ error: 'الامتحان غير موجود' });
       const b = req.body ?? {};
-      const updated = {
-        ...exam,
+      const updated = await examService.update(id, {
         courseId: b.courseId !== undefined ? (b.courseId ? Number(b.courseId) : null) : exam.courseId,
         title: b.title !== undefined ? bodyText(b.title) : exam.title,
         titleEn: b.titleEn !== undefined ? bodyText(b.titleEn) : exam.titleEn,
@@ -172,8 +138,7 @@ export function examRoutes(store: AppStore): Router {
         grade: b.grade !== undefined ? (isContentGrade(b.grade) ? b.grade : exam.grade) : exam.grade,
         allowRetake: b.allowRetake !== undefined ? !!b.allowRetake : exam.allowRetake,
         order: b.order !== undefined ? Number(b.order) : exam.order,
-      };
-      await store.set(`exam:${id}`, updated);
+      });
       res.json({ exam: updated });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -182,12 +147,7 @@ export function examRoutes(store: AppStore): Router {
 
   r.delete('/exams/:id', requireAuth, requireAdmin, async (req, res: Response) => {
     try {
-      const id = Number(req.params.id);
-      const questions = await store.all<any>('question:');
-      for (const { key } of questions) {
-        if ((await store.get<any>(key)).examId === id) await store.remove(key);
-      }
-      await store.remove(`exam:${id}`);
+      await examService.remove(Number(req.params.id));
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -204,9 +164,7 @@ export function examRoutes(store: AppStore): Router {
       if (correctIndex < 0 || correctIndex >= options.length) {
         return res.status(400).json({ error: 'الإجابة الصحيحة خارج نطاق الخيارات' });
       }
-      const id = await store.nextId();
-      const question = {
-        id,
+      const question = await questionService.create({
         examId,
         text: bodyText(text),
         textEn: bodyText(textEn),
@@ -214,8 +172,7 @@ export function examRoutes(store: AppStore): Router {
         correctIndex: Number(correctIndex),
         image: bodyText(image),
         order: Number(order) || 0,
-      };
-      await store.set(`question:${id}`, question);
+      });
       res.json({ question });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -225,7 +182,7 @@ export function examRoutes(store: AppStore): Router {
   r.put('/questions/:id', requireAuth, requireAdmin, async (req, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const q = await store.get<any>(`question:${id}`);
+      const q = await questionService.getById(id);
       if (!q) return res.status(404).json({ error: 'السؤال غير موجود' });
       const b = req.body ?? {};
       const options = b.options !== undefined ? b.options.map((o: any) => ({ text: bodyText(o.text), textEn: bodyText(o.textEn) })) : q.options;
@@ -235,16 +192,14 @@ export function examRoutes(store: AppStore): Router {
           return res.status(400).json({ error: 'الإجابة الصحيحة خارج نطاق الخيارات' });
         }
       }
-      const updated = {
-        ...q,
+      const updated = await questionService.update(id, {
         text: b.text !== undefined ? bodyText(b.text) : q.text,
         textEn: b.textEn !== undefined ? bodyText(b.textEn) : q.textEn,
         options,
         correctIndex: b.correctIndex !== undefined ? Number(b.correctIndex) : q.correctIndex,
         image: b.image !== undefined ? bodyText(b.image) : q.image,
         order: b.order !== undefined ? Number(b.order) : q.order,
-      };
-      await store.set(`question:${id}`, updated);
+      });
       res.json({ question: updated });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -253,7 +208,7 @@ export function examRoutes(store: AppStore): Router {
 
   r.delete('/questions/:id', requireAuth, requireAdmin, async (req, res: Response) => {
     try {
-      await store.remove(`question:${Number(req.params.id)}`);
+      await questionService.remove(Number(req.params.id));
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });

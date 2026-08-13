@@ -4,6 +4,7 @@ node_modules/
 # builds
 dist/
 build/
+server/dist/
 
 # env
 .env

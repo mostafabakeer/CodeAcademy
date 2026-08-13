@@ -1,93 +1,43 @@
-﻿import express from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { config } from './config';
-import { AppStore } from './db/store';
-import { TelegramClient } from './telegram/client';
-import { authRoutes } from './routes/auth';
-import { courseRoutes } from './routes/courses';
-import { progressRoutes } from './routes/progress';
-import { examRoutes } from './routes/exams';
-import { noteRoutes } from './routes/notes';
-import { codeRoutes } from './routes/code';
-import { topStudentsRoutes } from './routes/topStudents';
-import { adminRoutes } from './routes/admin';
-import { seed } from './seed';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+﻿import { loadEnv } from './config/env';
+import { getSupabase } from './db/supabase';
+import { logger } from './utils/logger';
+import { initTelegram } from './services/telegramService';
+import { ensureBuckets } from './services/uploadService';
+import { seedIfNeeded } from './services/configService';
+import { createApp } from './app';
 
 async function main() {
-  // طبقة تلجرام
-  let telegram: TelegramClient | null = null;
-  if (config.botToken && config.channelId) {
-    telegram = new TelegramClient(config.botToken, config.channelId);
-    try {
-      const me = await telegram.getMe();
-      console.log(`[telegram] ✓ متصل: @${me.username} → قناة ${config.channelId}`);
-    } catch (e) {
-      console.warn('[telegram] ✗ غير متصل (سيعمل الموقع على النسخة المحلية):', (e as Error).message);
-      telegram = null;
-    }
-  } else {
-    console.warn('[telegram] لا يوجد TELEGRAM_BOT_TOKEN — يعمل على النسخة المحلية فقط. أضف الإعدادات في server/.env');
+  const env = loadEnv();
+  logger.info('جاري تشغيل DR Code API...');
+
+  // تحقق سريع من الاتصال بـ Supabase
+  const sb = getSupabase();
+  const { error: healthError } = await sb.from('app_config').select('key').limit(1);
+  if (healthError) {
+    logger.error({ err: healthError.message }, '[supabase] تعذّر الاتصال بقاعدة البيانات');
+    process.exit(1);
+  }
+  logger.info('[supabase] متصل بقاعدة البيانات');
+
+  // طبقة تيليجرام (مرآة الكود الاحتياطية)
+  await initTelegram();
+
+  // تأكد من وجود الـ buckets (videos / images / backups)
+  await ensureBuckets();
+
+  // Seed اختياري — يعمل فقط عند الطلب (SEED_ON_START=true)
+  if (env.seedOnStart) {
+    await seedIfNeeded();
   }
 
-  const store = new AppStore(telegram);
-  await store.init();
-  (globalThis as any).__store = store;
+  const app = createApp(env);
 
-  await seed(store);
-
-  const app = express();
-  app.use(express.json({ limit: '25mb' }));
-  app.use(express.urlencoded({ extended: true }));
-
-  // تسجيل الطلبات (مؤقت للتشخيص)
-  app.use((req, _res, next) => {
-    console.log(`[req] ${req.method} ${req.originalUrl}`);
-    next();
-  });
-
-  // الملفات المرفوعة (فيديوهات وصور)
-  fs.mkdirSync(config.uploadsDir, { recursive: true });
-  app.use('/uploads', express.static(config.uploadsDir));
-
-  // الصحة
-  app.get('/api/health', (_req, res) => res.json({ ok: true, telegram: !!telegram }));
-
-  // الواجهات
-  app.use('/api/auth', authRoutes(store));
-  app.use('/api', courseRoutes(store));
-  app.use('/api', progressRoutes(store));
-  app.use('/api', examRoutes(store));
-  app.use('/api', noteRoutes(store));
-  app.use('/api', codeRoutes(store));
-  app.use('/api', topStudentsRoutes(store));
-  app.use('/api/admin', adminRoutes(store));
-
-  // الواجهة الأمامية المبنية (production) — تُخدم من نفس الخادم
-  const clientDist = path.resolve(__dirname, '../../client/dist');
-  if (fs.existsSync(clientDist)) {
-    app.use(express.static(clientDist));
-    app.get(/^\/(?!api\/|uploads\/).*/, (_req, res) => {
-      res.sendFile(path.join(clientDist, 'index.html'));
-    });
-  }
-
-  // معالج الأخطاء العام
-  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error('[server] خطأ:', err);
-    res.status(500).json({ error: err?.message || 'خطأ في الخادم' });
-  });
-
-  app.listen(config.port, () => {
-    console.log(`\n🚀 DR Code API يعمل على http://localhost:${config.port}`);
-    console.log(`   الواجهة الأمامية: http://localhost:5173\n`);
+  app.listen(env.port, () => {
+    logger.info(`🚀 DR Code API يعمل على http://localhost:${env.port}`);
   });
 }
 
 main().catch((e) => {
-  console.error('[server] فشل الإقلاع:', e);
+  logger.error({ err: (e as Error).message }, '[server] فشل الإقلاع');
   process.exit(1);
 });

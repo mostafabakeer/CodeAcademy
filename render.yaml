@@ -1,0 +1,45 @@
+# ===== Render Blueprint — نشر DR Code تلقائياً عبر Git =====
+# بعد رفع المشروع إلى GitHub:
+#   Render Dashboard → New → Blueprint → اختيار المستودع
+# سيقروء هذا الملف ويُنشئ الخدمة تلقائياً.
+services:
+  - type: web
+    name: drcode
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: |
+      npm install --no-audit --no-fund
+      npm install --no-audit --no-fund --prefix client
+      npm install --no-audit --no-fund --prefix server
+      npm run build --prefix client
+      npm run build --prefix server
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # أمان: أدخل القيمة في لوحة Render (القيم الفعلية لا تُحفظ في Git)
+      - key: JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET_VIDEOS
+        value: videos
+      - key: SUPABASE_BUCKET_IMAGES
+        value: images
+      - key: SUPABASE_BUCKET_BACKUPS
+        value: backups
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
+      - key: SEED_ON_START
+        value: "false"
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: LOG_LEVEL
+        value: info

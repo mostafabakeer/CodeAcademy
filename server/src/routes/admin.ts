@@ -1,33 +1,45 @@
 ﻿import { Router } from 'express';
 import type { Response } from 'express';
-import type { AppStore } from '../db/store';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { uploadVideo, uploadImage, multerErrorHandler } from '../middleware/upload';
-import { computeStudentStats, DEFAULT_LEVELS } from '../utils/levels';
+import { computeStudentStats } from '../services/statsService';
+import { loadEnv } from '../config/env';
+import * as userService from '../services/userService';
+import * as courseService from '../services/courseService';
+import * as lessonService from '../services/lessonService';
+import * as examService from '../services/examService';
+import * as noteService from '../services/noteService';
+import * as questionService from '../services/questionService';
+import * as codeFileService from '../services/codeFileService';
+import * as progressService from '../services/progressService';
+import * as resultService from '../services/resultService';
+import * as configService from '../services/configService';
+import * as uploadService from '../services/uploadService';
 import { GRADES } from './auth';
 
-export function adminRoutes(store: AppStore): Router {
+export function adminRoutes(): Router {
   const r = Router();
   r.use(requireAuth, requireAdmin);
 
   r.get('/stats', async (_req, res: Response) => {
     try {
-      const [users, courses, lessons, exams, notes] = await Promise.all([
-        store.all<any>('user:'),
-        store.all<any>('course:'),
-        store.all<any>('lesson:'),
-        store.all<any>('exam:'),
-        store.all<any>('note:'),
+      const [users, courses, lessons, exams, notes, codeFiles] = await Promise.all([
+        userService.listAll(),
+        courseService.list(),
+        lessonService.listAll(),
+        examService.listAll(),
+        noteService.listAll(),
+        countAllCodeFiles(),
       ]);
       res.json({
         stats: {
-          students: users.filter((u) => u.value.role === 'student').length,
-          admins: users.filter((u) => u.value.role === 'admin').length,
+          students: users.filter((u) => u.role === 'student').length,
+          admins: users.filter((u) => u.role === 'admin').length,
           courses: courses.length,
           lessons: lessons.length,
           exams: exams.length,
           notes: notes.length,
-          codeFiles: (await store.all<any>('code:')).length,
+          codeFiles: codeFiles.count,
         },
       });
     } catch (e) {
@@ -35,12 +47,15 @@ export function adminRoutes(store: AppStore): Router {
     }
   });
 
-  r.get('/users', async (_req, res: Response) => {
+  r.get('/users', async (req, res: Response) => {
     try {
-      const users = await store.all<any>('user:');
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const { users, total } = await userService.list({ page, limit, search });
       const out = [];
-      for (const { value: u } of users) {
-        const stats = await computeStudentStats(store, u.id);
+      for (const u of users) {
+        const stats = await computeStudentStats(u.id);
         out.push({
           id: u.id,
           fullName: u.fullName,
@@ -54,7 +69,7 @@ export function adminRoutes(store: AppStore): Router {
           ...stats,
         });
       }
-      res.json({ users: out.sort((a, b) => b.points - a.points) });
+      res.json({ users: out.sort((a, b) => b.points - a.points), total, page, limit });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -63,23 +78,23 @@ export function adminRoutes(store: AppStore): Router {
   r.get('/users/:id', async (req, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const user = await store.get<any>(`user:${id}`);
+      const user = await userService.getById(id);
       if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
-      const stats = await computeStudentStats(store, id);
-      const { passwordHash, ...safe } = user;
-      const progress = await store.all<any>(`progress:${id}:`);
-      const results = await store.all<any>(`result:${id}:`);
-      const codeFiles = (await store.all<any>(`code:${id}:`)).map(({ value }) => ({
-        id: value.id,
-        name: value.name,
-        language: value.language,
-        updatedAt: value.updatedAt,
+      const stats = await computeStudentStats(id);
+      const safe = userService.safeUser(user);
+      const progress = await progressService.listByUser(id);
+      const results = await resultService.listByUser(id);
+      const codeFiles = (await codeFileService.listByUser(id)).map((f) => ({
+        id: f.id,
+        name: f.name,
+        language: f.language,
+        updatedAt: f.updatedAt,
       }));
       res.json({
         user: { ...safe, gradeName: GRADES[safe.grade]?.name ?? safe.grade },
         stats,
-        progress: progress.map((p) => p.value),
-        results: results.map((res) => res.value),
+        progress,
+        results,
         codeFiles,
       });
     } catch (e) {
@@ -91,10 +106,7 @@ export function adminRoutes(store: AppStore): Router {
   r.get('/exams/:id/questions', async (req, res: Response) => {
     try {
       const examId = Number(req.params.id);
-      const questions = (await store.all<any>('question:'))
-        .filter((q) => q.value.examId === examId)
-        .map(({ value }) => value)
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const questions = await questionService.listByExam(examId);
       res.json({ questions });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -105,13 +117,12 @@ export function adminRoutes(store: AppStore): Router {
   r.put('/users/:id/role', async (req, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const user = await store.get<any>(`user:${id}`);
+      const user = await userService.getById(id);
       if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
       const { role } = req.body ?? {};
       if (!['student', 'admin'].includes(role)) return res.status(400).json({ error: 'دور غير صحيح' });
-      const updated = { ...user, role };
-      await store.set(`user:${id}`, updated);
-      res.json({ user: updated });
+      const updated = await userService.setRole(id, role);
+      res.json({ user: userService.safeUser(updated!) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -121,12 +132,11 @@ export function adminRoutes(store: AppStore): Router {
   r.put('/users/:id/subscription', async (req, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const user = await store.get<any>(`user:${id}`);
+      const user = await userService.getById(id);
       if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
       const { subscription } = req.body ?? {};
-      const updated = { ...user, subscription: !!subscription };
-      await store.set(`user:${id}`, updated);
-      res.json({ user: updated });
+      const updated = await userService.setSubscription(id, !!subscription);
+      res.json({ user: userService.safeUser(updated!) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -136,12 +146,11 @@ export function adminRoutes(store: AppStore): Router {
   r.put('/users/:id/block', async (req, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const user = await store.get<any>(`user:${id}`);
+      const user = await userService.getById(id);
       if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
       const { blocked } = req.body ?? {};
-      const updated = { ...user, blocked: !!blocked };
-      await store.set(`user:${id}`, updated);
-      res.json({ user: updated });
+      const updated = await userService.setBlocked(id, !!blocked);
+      res.json({ user: userService.safeUser(updated!) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -149,7 +158,7 @@ export function adminRoutes(store: AppStore): Router {
 
   r.get('/config', async (_req, res: Response) => {
     try {
-      const levels = (await store.get<any>('config:levels')) ?? { tiers: DEFAULT_LEVELS };
+      const levels = await configService.getLevels();
       res.json({ config: { levels, grades: GRADES } });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -162,47 +171,52 @@ export function adminRoutes(store: AppStore): Router {
       if (!Array.isArray(tiers) || tiers.length === 0) {
         return res.status(400).json({ error: 'المستويات غير صحيحة' });
       }
-      const clean = tiers
-        .map((t: any) => ({
-          min: Number(t.min) || 0,
-          key: String(t.key || 'level'),
-          name: String(t.name || ''),
-          nameEn: String(t.nameEn || ''),
-        }))
-        .sort((a: any, b: any) => a.min - b.min);
-      await store.set('config:levels', { tiers: clean });
-      res.json({ config: { levels: { tiers: clean } } });
+      const clean = await configService.setLevels(tiers);
+      res.json({ config: { levels: clean } });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
   });
 
-  // إعادة مزامنة كل البيانات مع تلجرام
+  // إعادة عكس مرآة كل ملفات الكود على تيليجرام (نسخة احتياطية)
   r.post('/sync', async (_req, res: Response) => {
     try {
-      const keys = await store.keys();
-      for (const key of keys) {
-        await store.set(key, await store.get(key));
-      }
-      await store.flushNow();
-      res.json({ ok: true, synced: keys.length });
+      const synced = await codeFileService.resyncAll();
+      res.json({ ok: true, synced });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
   });
 
-  // رفع فيديو / صورة
-  r.post('/upload/video', uploadVideo.single('file'), (req, res: Response) => {
-    if (!req.file) return res.status(400).json({ error: 'لا يوجد ملف' });
-    res.json({ url: `/uploads/${req.file.filename}` });
+  // رفع فيديو / صورة → Supabase Storage
+  r.post('/upload/video', uploadVideo.single('file'), async (req, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'لا يوجد ملف' });
+      const out = await uploadService.uploadFile(loadEnv().bucketVideos, req.file);
+      res.json({ url: out.url });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
   });
 
-  r.post('/upload/image', uploadImage.single('file'), (req, res: Response) => {
-    if (!req.file) return res.status(400).json({ error: 'لا يوجد ملف' });
-    res.json({ url: `/uploads/${req.file.filename}` });
+  r.post('/upload/image', uploadImage.single('file'), async (req, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'لا يوجد ملف' });
+      const out = await uploadService.uploadFile(loadEnv().bucketImages, req.file);
+      res.json({ url: out.url });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
   });
 
   r.use(multerErrorHandler);
 
   return r;
 }
+
+async function countAllCodeFiles(): Promise<{ count: number }> {
+  const { getSupabase } = await import('../db/supabase');
+  const { count } = await getSupabase().from('code_files').select('id', { count: 'exact', head: true });
+  return { count: count ?? 0 };
+}
+

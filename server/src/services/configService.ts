@@ -1,18 +1,44 @@
-﻿import type { AppStore } from './db/store';
+import { getSupabase } from '../db/supabase';
+import * as courseService from './courseService';
+import * as lessonService from './lessonService';
+import * as examService from './examService';
+import * as questionService from './questionService';
+import * as noteService from './noteService';
+import { DEFAULT_LEVELS, type LevelTier } from '../utils/levels';
+import { logger } from '../utils/logger';
+
+const LEVELS_KEY = 'levels';
+
+export async function getLevels(): Promise<{ tiers: LevelTier[] }> {
+  const { data } = await getSupabase().from('app_config').select('value').eq('key', LEVELS_KEY).maybeSingle();
+  const tiers = (data?.value as any)?.tiers;
+  return { tiers: Array.isArray(tiers) && tiers.length ? tiers : DEFAULT_LEVELS };
+}
+
+export async function setLevels(tiers: LevelTier[]): Promise<{ tiers: LevelTier[] }> {
+  const clean = tiers
+    .map((t) => ({
+      min: Number(t.min) || 0,
+      key: String(t.key || 'level'),
+      name: String(t.name || ''),
+      nameEn: String(t.nameEn || ''),
+    }))
+    .sort((a, b) => a.min - b.min);
+  await getSupabase().from('app_config').upsert({ key: LEVELS_KEY, value: { tiers: clean } }, { onConflict: 'key' });
+  return { tiers: clean };
+}
 
 /**
- * بيانات تجريبية تُنشأ أول مرة فقط حتى يظهر الموقع حياً
- * ويمكن للأدمن تعديلها أو حذفها من اللوحة
+ * بيانات تجريبية تُنشأ أول مرة فقط (SEED_ON_START=true) حتى يظهر الموقع حياً.
+ * يمكن للأدمن تعديلها أو حذفها من اللوحة.
  */
-export async function seed(store: AppStore): Promise<void> {
-  const hasCourse = (await store.keys('course:')).length > 0;
-  if (hasCourse) return;
+export async function seedIfNeeded(): Promise<void> {
+  const courses = await courseService.list();
+  if (courses.length > 0) return;
 
-  console.log('[seed] إنشاء بيانات تجريبية أولى...');
+  logger.info('[seed] إنشاء بيانات تجريبية أولى...');
 
-  const courseId = await store.nextId();
-  await store.set(`course:${courseId}`, {
-    id: courseId,
+  const course = await courseService.create({
     title: 'أساسيات JavaScript',
     titleEn: 'JavaScript Basics',
     description: 'ابدأ رحلتك مع لغة JavaScript: المتغيرات، الدوال، الحلقات والشروط.',
@@ -23,10 +49,8 @@ export async function seed(store: AppStore): Promise<void> {
     createdAt: Date.now(),
   });
 
-  const l1 = await store.nextId();
-  await store.set(`lesson:${l1}`, {
-    id: l1,
-    courseId,
+  const l1 = await lessonService.create({
+    courseId: course.id,
     title: 'مقدمة إلى JavaScript',
     titleEn: 'Introduction to JavaScript',
     videoType: 'youtube',
@@ -39,10 +63,8 @@ export async function seed(store: AppStore): Promise<void> {
     createdAt: Date.now(),
   });
 
-  const l2 = await store.nextId();
-  await store.set(`lesson:${l2}`, {
-    id: l2,
-    courseId,
+  const l2 = await lessonService.create({
+    courseId: course.id,
     title: 'المتغيرات وأنواع البيانات',
     titleEn: 'Variables and Data Types',
     videoType: 'youtube',
@@ -55,10 +77,8 @@ export async function seed(store: AppStore): Promise<void> {
     createdAt: Date.now(),
   });
 
-  const l3 = await store.nextId();
-  await store.set(`lesson:${l3}`, {
-    id: l3,
-    courseId,
+  const l3 = await lessonService.create({
+    courseId: course.id,
     title: 'الشروط والحلقات',
     titleEn: 'Conditions and Loops',
     videoType: 'youtube',
@@ -71,10 +91,8 @@ export async function seed(store: AppStore): Promise<void> {
     createdAt: Date.now(),
   });
 
-  const examId = await store.nextId();
-  await store.set(`exam:${examId}`, {
-    id: examId,
-    courseId,
+  const exam = await examService.create({
+    courseId: course.id,
     title: 'امتحان JavaScript التمهيدي',
     titleEn: 'JavaScript Basics Exam',
     timeLimit: 15,
@@ -85,10 +103,8 @@ export async function seed(store: AppStore): Promise<void> {
     createdAt: Date.now(),
   });
 
-  const q1 = await store.nextId();
-  await store.set(`question:${q1}`, {
-    id: q1,
-    examId,
+  await questionService.create({
+    examId: exam.id,
     text: 'ما الكلمة الأساسية لإنشاء متغير لا يمكن تغيير قيمته؟',
     textEn: 'Which keyword declares a constant variable?',
     options: [
@@ -98,13 +114,12 @@ export async function seed(store: AppStore): Promise<void> {
       { text: 'static', textEn: 'static' },
     ],
     correctIndex: 2,
+    image: '',
     order: 1,
   });
 
-  const q2 = await store.nextId();
-  await store.set(`question:${q2}`, {
-    id: q2,
-    examId,
+  await questionService.create({
+    examId: exam.id,
     text: 'ما ناتج `typeof 42` ؟',
     textEn: 'What is the output of `typeof 42`?',
     options: [
@@ -114,13 +129,12 @@ export async function seed(store: AppStore): Promise<void> {
       { text: '42', textEn: '42' },
     ],
     correctIndex: 0,
+    image: '',
     order: 2,
   });
 
-  const q3 = await store.nextId();
-  await store.set(`question:${q3}`, {
-    id: q3,
-    examId,
+  await questionService.create({
+    examId: exam.id,
     text: 'أي حلقة تُنفَّذ مرة واحدة على الأقل؟',
     textEn: 'Which loop runs at least once?',
     options: [
@@ -130,13 +144,12 @@ export async function seed(store: AppStore): Promise<void> {
       { text: 'forEach', textEn: 'forEach' },
     ],
     correctIndex: 2,
+    image: '',
     order: 3,
   });
 
-  const noteId = await store.nextId();
-  await store.set(`note:${noteId}`, {
-    id: noteId,
-    courseId,
+  await noteService.create({
+    courseId: course.id,
     title: 'مذكرة أوامر JavaScript الأساسية',
     titleEn: 'JavaScript Basics Cheatsheet',
     body: '# المتغيرات\n\n```js\nlet name = "علي";\nconst age = 17;\n```\n\n# الدوال\n\n```js\nfunction greet(name) {\n  return "أهلاً " + name;\n}\n```\n\n# الشروط\n\n```js\nif (score >= 50) {\n  console.log("ناجح");\n} else {\n  console.log("راسب");\n}\n```',
@@ -147,5 +160,5 @@ export async function seed(store: AppStore): Promise<void> {
     createdAt: Date.now(),
   });
 
-  console.log('[seed] تم إنشاء كورس + 3 دروس + امتحان 3 أسئلة + مذكرة');
+  logger.info('[seed] تم إنشاء كورس + 3 دروس + امتحان 3 أسئلة + مذكرة');
 }

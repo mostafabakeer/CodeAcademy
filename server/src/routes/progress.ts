@@ -1,9 +1,9 @@
 ﻿import { Router } from 'express';
 import type { Response } from 'express';
-import type { AppStore } from '../db/store';
 import { requireAuth, requireSubscriber, type AuthRequest } from '../middleware/auth';
+import * as progressService from '../services/progressService';
 
-export function progressRoutes(store: AppStore): Router {
+export function progressRoutes(): Router {
   const r = Router();
 
   /**
@@ -17,19 +17,9 @@ export function progressRoutes(store: AppStore): Router {
       if (!lessonId || typeof seconds !== 'number') {
         return res.status(400).json({ error: 'lessonId و seconds مطلوبان' });
       }
-
-      const lesson = await store.get<any>(`lesson:${Number(lessonId)}`);
-      if (!lesson) return res.status(404).json({ error: 'الدرس غير موجود' });
-
-      const key = `progress:${uid}:${Number(lessonId)}`;
-      const existing = (await store.get<any>(key)) ?? { userId: uid, lessonId: Number(lessonId), secondsWatched: 0, completed: false, updatedAt: 0 };
-      const duration = Number(lesson.duration) || 0;
-      const watched = Math.max(existing.secondsWatched || 0, Math.min(Number(seconds), duration));
-      const completed = duration > 0 ? watched >= duration * 0.9 : false;
-
-      const progress = { ...existing, secondsWatched: watched, completed, updatedAt: Date.now() };
-      await store.set(key, progress);
-      res.json({ progress, completed, duration });
+      const outcome = await progressService.upsertWatch(uid, Number(lessonId), Number(seconds));
+      if (!outcome) return res.status(404).json({ error: 'الدرس غير موجود' });
+      res.json({ progress: outcome.progress, completed: outcome.completed, duration: outcome.duration });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }

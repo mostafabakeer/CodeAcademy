@@ -8,15 +8,14 @@ services:
       - "4000:4000"
     environment:
       - PORT=4000
-      # !!! غيّر القيم دي من ملف server/.env عندك !!!
+      # !!! املأ من Supabase Dashboard → Project Settings → API !!!
       - JWT_SECRET=غيّرني-إلى-سلسلة-عشوائية-طويلة
-      - TELEGRAM_BOT_TOKEN=ضع-توكن-البوت-هنا
-      - TELEGRAM_CHANNEL_ID=ضع-رقم-القناة-هنا
-      - RESYNC_ON_START=false
-    volumes:
-      - drcode_data:/app/server/data
-      - drcode_uploads:/app/server/uploads
-
-volumes:
-  drcode_data:
-  drcode_uploads:
+      - SUPABASE_URL=https://xxxx.supabase.co
+      - SUPABASE_SERVICE_ROLE_KEY=eyJ...
+      - SUPABASE_BUCKET_VIDEOS=videos
+      - SUPABASE_BUCKET_IMAGES=images
+      - SUPABASE_BUCKET_BACKUPS=backups
+      # تيليجرام (اختياري — مرآة ملفات الكود فقط)
+      - TELEGRAM_BOT_TOKEN=
+      - TELEGRAM_CHANNEL_ID=
+      - SEED_ON_START=false
