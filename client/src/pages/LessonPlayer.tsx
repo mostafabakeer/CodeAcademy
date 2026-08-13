@@ -5,6 +5,7 @@ import { useLang } from '../i18n';
 import { api } from '../api/client';
 import VideoPlayer from '../components/VideoPlayer';
 import ProgressBar from '../components/ProgressBar';
+import { getVideoProgressLocal, setVideoProgressLocal, clearVideoProgressLocal } from '../lib/localStore';
 
 interface LessonData {
   lesson: {
@@ -33,6 +34,15 @@ export default function LessonPlayer() {
   const [completed, setCompleted] = useState(false);
   const [saved, setSaved] = useState(false);
   const lastReport = useRef(0);
+  const lessonId = id ? Number(id) : null;
+  const [localSeconds, setLocalSeconds] = useState(() => {
+    const p = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
+    return p?.seconds ?? 0;
+  });
+  const [resumeAt, setResumeAt] = useState(() => {
+    const p = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
+    return p?.seconds ?? 0;
+  });
 
   useEffect(() => {
     api<{ lesson: any; lessons: { id: number; title: string; titleEn: string }[] }>(`/api/lesson/${id}`)
@@ -40,22 +50,37 @@ export default function LessonPlayer() {
         setData({ lesson: d.lesson, lessons: d.lessons });
         setDuration(d.lesson.duration || 0);
         setCompleted(!!d.lesson.completed);
+        const local = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
+        if (local) {
+          setLocalSeconds((s) => Math.max(s, local.seconds));
+          if (!d.lesson.completed) setResumeAt(Math.max(local.seconds, resumeAt));
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const reportProgress = (seconds: number) => {
-    if (!id || seconds <= 0) return;
+    if (!lessonId || seconds <= 0) return;
+    setLocalSeconds((s) => Math.max(s, seconds));
+    setVideoProgressLocal(lessonId, seconds, duration);
+    if (seconds >= duration && duration > 0) {
+      setCompleted(true);
+      clearVideoProgressLocal(lessonId);
+    }
     if (seconds - lastReport.current < 5 && seconds > 0) return;
     lastReport.current = seconds;
     api('/api/progress/watch', {
       method: 'POST',
-      body: JSON.stringify({ lessonId: Number(id), seconds }),
+      body: JSON.stringify({ lessonId, seconds }),
     })
       .then((res: any) => {
         setSaved(true);
-        if (res.completed) setCompleted(true);
+        if (res.completed) {
+          setCompleted(true);
+          clearVideoProgressLocal(lessonId);
+        }
         if (res.duration) setDuration(res.duration);
       })
       .catch(() => {});
@@ -69,7 +94,7 @@ export default function LessonPlayer() {
   const idx = lessons.findIndex((l) => l.id === lesson.id);
   const prev = idx > 0 ? lessons[idx - 1] : null;
   const next = idx < lessons.length - 1 ? lessons[idx + 1] : null;
-  const pct = lesson.duration > 0 ? Math.min(100, Math.round(((lesson.watchedSeconds || 0) / lesson.duration) * 100)) : 0;
+  const pct = lesson.duration > 0 ? Math.min(100, Math.round((Math.max(lesson.watchedSeconds || 0, localSeconds) / lesson.duration) * 100)) : 0;
 
   return (
     <div className="space-y-6">
@@ -84,6 +109,7 @@ export default function LessonPlayer() {
       <VideoPlayer
         videoType={lesson.videoType}
         videoUrl={lesson.videoUrl}
+        initialTime={resumeAt}
         onProgress={reportProgress}
         onDuration={(d) => setDuration(d)}
       />

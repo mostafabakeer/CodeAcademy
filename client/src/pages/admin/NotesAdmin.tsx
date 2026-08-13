@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
+import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
@@ -58,16 +59,8 @@ export default function NotesAdmin() {
     if (!file) return;
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/admin/upload/image', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('codeacademy_token') ?? ''}` },
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'upload failed');
-      setForm((f) => ({ ...f, image: data.url }));
+      const url = await uploadFile('images', file);
+      setForm((f) => ({ ...f, image: url }));
     } catch (e) {
       setError((e as Error).message);
     } finally {

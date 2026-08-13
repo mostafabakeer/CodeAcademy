@@ -18,6 +18,8 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      - key: NODE_VERSION
+        value: "20"
       - key: NODE_ENV
         value: production
       # أمان: أدخل القيمة في لوحة Render (القيم الفعلية لا تُحفظ في Git)
@@ -33,10 +35,6 @@ services:
         value: images
       - key: SUPABASE_BUCKET_BACKUPS
         value: backups
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHANNEL_ID
-        sync: false
       - key: SEED_ON_START
         value: "false"
       - key: CORS_ORIGIN

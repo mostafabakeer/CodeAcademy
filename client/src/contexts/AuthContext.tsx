@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, setToken, clearToken, getToken } from '../api/client';
+import { api, clearToken, setToken, ApiError } from '../api/client';
 
 export interface User {
   id: number;
@@ -29,7 +29,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (identifier: string, password: string) => Promise<void>;
   register: (fullName: string, phone: string, grade: string, password: string) => Promise<{ user: User }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -40,22 +40,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [stats, setStats] = useState<StudentStats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const applyUser = (u: User, s: StudentStats | null) => {
+  const applyUser = (u: User | null, s: StudentStats | null) => {
     setUser(u);
     setStats(s);
   };
 
   useEffect(() => {
     const boot = async () => {
-      if (!getToken()) {
-        setLoading(false);
-        return;
-      }
       try {
         const data = await api<{ user: User; stats: StudentStats }>('/api/auth/me');
         applyUser(data.user, data.stats);
-      } catch {
-        clearToken();
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) clearToken();
+        applyUser(null, null);
       }
       setLoading(false);
     };
@@ -83,14 +80,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { user: data.user };
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api('/api/auth/logout', { method: 'POST' });
+    } catch {
+      /* الكوكيز تُمسح محلياً حتى لو فشل الخادم */
+    }
     clearToken();
     setUser(null);
     setStats(null);
   };
 
   const refresh = async () => {
-    if (!getToken()) return;
     const me = await api<{ user: User; stats: StudentStats }>('/api/auth/me');
     applyUser(me.user, me.stats);
   };

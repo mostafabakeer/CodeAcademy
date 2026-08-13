@@ -35,16 +35,17 @@ interface Props {
   onProgress?: (seconds: number) => void;
   onDuration?: (seconds: number) => void;
   onComplete?: () => void;
+  initialTime?: number;
 }
 
-export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuration, onComplete }: Props) {
+export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuration, onComplete, initialTime = 0 }: Props) {
   const playerRef = useRef<any>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const maxWatched = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reportedDuration = useRef(0);
-  const propsRef = useRef({ onProgress, onDuration, onComplete, videoUrl, videoType });
-  propsRef.current = { onProgress, onDuration, onComplete, videoUrl, videoType };
+  const propsRef = useRef({ onProgress, onDuration, onComplete, videoUrl, videoType, initialTime });
+  propsRef.current = { onProgress, onDuration, onComplete, videoUrl, videoType, initialTime };
 
   // ===== رفع محلي =====
   useEffect(() => {
@@ -59,6 +60,10 @@ export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuratio
     const onLoaded = () => {
       reportedDuration.current = el.duration || 0;
       propsRef.current.onDuration?.(Math.floor(el.duration || 0));
+      const resume = propsRef.current.initialTime || 0;
+      if (resume > 0 && resume < (el.duration || 0)) {
+        el.currentTime = resume;
+      }
     };
     const onEnded = () => {
       maxWatched.current = Math.max(maxWatched.current, el.duration || 0);
@@ -95,6 +100,12 @@ export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuratio
             if (dur) {
               reportedDuration.current = dur;
               propsRef.current.onDuration?.(Math.floor(dur));
+            }
+            const resume = propsRef.current.initialTime || 0;
+            if (resume > 0 && resume < dur) {
+              try {
+                e.target.seekTo(resume, true);
+              } catch {}
             }
           },
           onStateChange: (e: any) => {

@@ -15,7 +15,4 @@ services:
       - SUPABASE_BUCKET_VIDEOS=videos
       - SUPABASE_BUCKET_IMAGES=images
       - SUPABASE_BUCKET_BACKUPS=backups
-      # تيليجرام (اختياري — مرآة ملفات الكود فقط)
-      - TELEGRAM_BOT_TOKEN=
-      - TELEGRAM_CHANNEL_ID=
       - SEED_ON_START=false

@@ -18,25 +18,11 @@ interface Stats {
 export default function Dashboard() {
   const { t } = useLang();
   const [stats, setStats] = useState<Stats | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [synced, setSynced] = useState(false);
 
   const load = () => api<{ stats: Stats }>('/api/admin/stats').then((d) => setStats(d.stats)).catch(() => {});
   useEffect(() => {
     load();
   }, []);
-
-  const sync = async () => {
-    setSyncing(true);
-    try {
-      const d = await api<{ ok: boolean; synced: number }>('/api/admin/sync', { method: 'POST' });
-      setSynced(true);
-      setTimeout(() => setSynced(false), 3000);
-      console.log('[sync]', d);
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -45,9 +31,6 @@ export default function Dashboard() {
           <h1 className="text-2xl font-black">📊 {t('admin.dashboard')}</h1>
           <p className="text-sm text-gray-400">{t('admin.title')}</p>
         </div>
-        <button onClick={sync} disabled={syncing} className="btn-ghost-fire rounded-xl px-4 py-2 text-sm font-bold">
-          {syncing ? t('common.loading') : synced ? `✓ ${t('admin.synced')}` : `🔄 ${t('admin.syncTelegram')}`}
-        </button>
       </motion.div>
 
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">

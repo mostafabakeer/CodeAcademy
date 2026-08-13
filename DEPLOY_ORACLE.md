@@ -124,7 +124,7 @@ openssl rand -hex 32
 nano /opt/drcode/docker-compose.yml
 ```
 
-غيّر قيم `JWT_SECRET` و `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHANNEL_ID` إلى قيمك الحقيقية (موجودة في مجلد `server/.env` على جهازك، أو اترك تيليجرام فارغاً لو مش محتاج النسخة الاحتياطية).
+غيّر قيم `JWT_SECRET` و `SUPABASE_URL` و `SUPABASE_SERVICE_ROLE_KEY` إلى قيمك الحقيقية (موجودة في مجلد `server/.env` على جهازك أو من Supabase Dashboard).
 
 احفظ: `Ctrl+X` ثم `Y` ثم `Enter`.
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
+import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
@@ -79,16 +80,8 @@ export default function LessonsAdmin() {
     setUploading(true);
     setError('');
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/admin/upload/video', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('codeacademy_token') ?? ''}` },
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'upload failed');
-      setForm((f) => ({ ...f, videoType: 'upload', videoUrl: data.url }));
+      const url = await uploadFile('videos', file);
+      setForm((f) => ({ ...f, videoType: 'upload', videoUrl: url }));
     } catch (e) {
       setError((e as Error).message);
     } finally {

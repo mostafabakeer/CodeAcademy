@@ -42,7 +42,6 @@ export default function Register() {
         <div className="mb-6 text-center">
           <img src="/logo.png" alt="DR Code" className="mx-auto mb-4 h-20 w-20 rounded-2xl object-contain drop-shadow-lg" />
           <h1 className="text-2xl font-black">{t('auth.registerTitle')}</h1>
-          <p className="mt-1 text-xs text-ember-400">{t('auth.firstUserAdmin')}</p>
         </div>
 
         {error && (

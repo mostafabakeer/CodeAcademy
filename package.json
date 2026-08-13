@@ -4,12 +4,11 @@
   "private": true,
   "description": "منصة تعليم البرمجة - DR Code",
   "scripts": {
-    "dev": "concurrently -n SERVER,CLIENT -c red,cyan \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
-    "dev:server": "npm run dev --prefix server",
+    "dev": "npm run dev --prefix client",
     "dev:client": "npm run dev --prefix client",
-    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
-    "build": "npm run build --prefix client && npm run build --prefix server",
-    "start": "npm run start --prefix server"
+    "build": "npm run build --prefix client",
+    "preview": "npm run preview --prefix client",
+    "deploy": "supabase db push && supabase functions deploy api --no-verify-jwt && supabase functions deploy backup --no-verify-jwt && supabase functions deploy cleanup --no-verify-jwt"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

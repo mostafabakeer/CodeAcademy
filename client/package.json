@@ -13,6 +13,7 @@
     "@codemirror/lang-html": "^6.4.9",
     "@codemirror/lang-javascript": "^6.2.4",
     "@codemirror/lang-python": "^6.2.1",
+    "@supabase/supabase-js": "^2.112.3",
     "@uiw/react-codemirror": "^4.23.10",
     "motion": "^12.15.0",
     "react": "^19.2.0",

@@ -1,13 +1,27 @@
-node_modules
-**/node_modules
-client/dist
-server/data
-server/uploads
-server/.env
-**/.env
+# لا تنسخ الأسرار أبداً إلى الصورة
+.env
+.env.*
+!.env.example
+
+# الاعتماديات (تُثبَّت داخل مرحلة البناء)
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# المخلفات
+dist/
+build/
+server/dist/
 *.log
-.git
-.dockerignore
+
+# البيانات المحلية (مصدر الترحيل فقط — ليست في الصورة)
+server/data/
+server/uploads/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# git
+.git/
 .gitignore
-Dockerfile
-docker-compose.yml

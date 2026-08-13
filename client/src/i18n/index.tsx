@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { getLocal, setLocal } from '../lib/storage';
 import { ar } from './ar';
 import { en } from './en';
 
@@ -21,14 +22,14 @@ function lookup(dict: Record<string, unknown>, key: string): unknown {
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [lang, setLang] = useState<Lang>(() => {
-    const saved = localStorage.getItem('codeacademy_lang');
+    const saved = getLocal('lang');
     return saved === 'en' ? 'en' : 'ar';
   });
 
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
-    localStorage.setItem('codeacademy_lang', lang);
+    setLocal('lang', lang);
   }, [lang]);
 
   const value = useMemo<LanguageContextValue>(() => {

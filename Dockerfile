@@ -8,7 +8,7 @@ COPY package*.json ./
 COPY client/package*.json ./client/
 COPY server/package*.json ./server/
 
-# تثبيت الحزم (client + server)
+# تثبيت الحزم (client + server) — مع كل ما يلزم للبناء (dev deps)
 RUN npm install --no-audit --no-fund --prefix client \
   && npm install --no-audit --no-fund --prefix server
 
@@ -17,16 +17,20 @@ COPY . .
 RUN npm run build --prefix client
 RUN npm run build --prefix server
 
-# ===== مرحلة التشغيل: السيرفر فقط + الواجهة المبنية =====
+# ===== مرحلة التشغيل: سيرفر خفيف + الواجهة المبنية + deps الإنتاجية فقط =====
 FROM node:20-alpine AS runtime
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY --from=build /app/server ./server
+# تثبيت اعتماديات السيرفر الإنتاجية فقط (أصغر وأأمن)
+COPY --from=build /app/server/package*.json ./server/
+RUN npm install --omit=dev --no-audit --no-fund --prefix server
+
+# نسخ السيرفر المُجمَّع والواجهة المبنية
+COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
-COPY package*.json ./
 
 EXPOSE 4000
 

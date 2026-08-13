@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { api } from '../api/client';
 import CodeEditor from '../components/CodeEditor';
+import { getCodeDraft, setCodeDraft, clearCodeDraft } from '../lib/localStore';
 
 interface CodeFile {
   id: number;
@@ -125,6 +126,18 @@ export default function CodeLab() {
   const [running, setRunning] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef('');
+  const currentIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    currentIdRef.current = current?.id ?? null;
+  }, [current]);
+
+  // مسودة محلية فورية — تُكتب مع كل تغيير وتُمسح عند الحفظ في السيرفر
+  useEffect(() => {
+    const cid = currentIdRef.current;
+    if (cid === null) return;
+    setCodeDraft(cid, code);
+  }, [code]);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -152,6 +165,7 @@ export default function CodeLab() {
           body: JSON.stringify({ code }),
         });
         lastSaved.current = code;
+        clearCodeDraft(current.id);
         setFiles((prev) => prev.map((f) => (f.id === current.id ? { ...f, updatedAt: d.file.updatedAt } : f)));
         setCurrent((prev) => (prev && prev.id === current.id ? { ...prev, versions: d.file.versions, updatedAt: d.file.updatedAt } : prev));
         setSaved(true);
@@ -168,8 +182,9 @@ export default function CodeLab() {
   const selectFile = async (id: number) => {
     setError('');
     const d = await api<{ file: CodeFile }>(`/api/code/${id}`);
+    const localDraft = getCodeDraft(id);
     setCurrent(d.file);
-    setCode(d.file.code);
+    setCode(localDraft ?? d.file.code);
     lastSaved.current = d.file.code;
   };
 
@@ -195,6 +210,7 @@ export default function CodeLab() {
     if (!window.confirm(t('code.deleteConfirm'))) return;
     try {
       await api(`/api/code/${id}`, { method: 'DELETE' });
+      clearCodeDraft(id);
       if (current?.id === id) {
         setCurrent(null);
         setCode('');
