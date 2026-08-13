@@ -1,0 +1,131 @@
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { motion } from 'motion/react';
+import { useLang } from '../i18n';
+import { api } from '../api/client';
+import VideoPlayer from '../components/VideoPlayer';
+import ProgressBar from '../components/ProgressBar';
+
+interface LessonData {
+  lesson: {
+    id: number;
+    courseId: number;
+    title: string;
+    titleEn: string;
+    description: string;
+    videoType: 'youtube' | 'upload';
+    videoUrl: string;
+    duration: number;
+    watchedSeconds: number;
+    completed: boolean;
+    progressPct: number;
+  };
+  lessons: { id: number; title: string; titleEn: string }[];
+}
+
+export default function LessonPlayer() {
+  const { id } = useParams();
+  const { t, lang } = useLang();
+  const navigate = useNavigate();
+  const [data, setData] = useState<LessonData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [completed, setCompleted] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const lastReport = useRef(0);
+
+  useEffect(() => {
+    api<{ lesson: any; lessons: { id: number; title: string; titleEn: string }[] }>(`/api/lesson/${id}`)
+      .then((d) => {
+        setData({ lesson: d.lesson, lessons: d.lessons });
+        setDuration(d.lesson.duration || 0);
+        setCompleted(!!d.lesson.completed);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  const reportProgress = (seconds: number) => {
+    if (!id || seconds <= 0) return;
+    if (seconds - lastReport.current < 5 && seconds > 0) return;
+    lastReport.current = seconds;
+    api('/api/progress/watch', {
+      method: 'POST',
+      body: JSON.stringify({ lessonId: Number(id), seconds }),
+    })
+      .then((res: any) => {
+        setSaved(true);
+        if (res.completed) setCompleted(true);
+        if (res.duration) setDuration(res.duration);
+      })
+      .catch(() => {});
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
+  if (!data) return <p className="text-gray-400">{t('errors.generic')}</p>;
+
+  const { lesson, lessons } = data;
+  const idx = lessons.findIndex((l) => l.id === lesson.id);
+  const prev = idx > 0 ? lessons[idx - 1] : null;
+  const next = idx < lessons.length - 1 ? lessons[idx + 1] : null;
+  const pct = lesson.duration > 0 ? Math.min(100, Math.round(((lesson.watchedSeconds || 0) / lesson.duration) * 100)) : 0;
+
+  return (
+    <div className="space-y-6">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+        <Link to={`/courses/${lesson.courseId}`} className="text-sm font-semibold text-gray-400 hover:text-fire-400">
+          ← {t('course.title')}
+        </Link>
+        <h1 className="mt-2 text-2xl font-black">{lang === 'ar' ? lesson.title : lesson.titleEn}</h1>
+        <p className="mt-1 text-sm text-gray-400">{lesson.description}</p>
+      </motion.div>
+
+      <VideoPlayer
+        videoType={lesson.videoType}
+        videoUrl={lesson.videoUrl}
+        onProgress={reportProgress}
+        onDuration={(d) => setDuration(d)}
+      />
+
+      <div className="card-fire rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-40 flex-1">
+            <div className="mb-1 flex justify-between text-xs text-gray-400">
+              <span>{t('course.progress')}</span>
+              <span>{pct}%</span>
+            </div>
+            <ProgressBar value={completed ? 100 : pct} showLabel={false} />
+          </div>
+          <div className="flex items-center gap-3">
+            {saved && <span className="text-xs font-bold text-emerald-400">✓ {t('code.saved')}</span>}
+            {completed ? (
+              <span className="rounded-full bg-emerald-500/20 px-3 py-1.5 text-sm font-bold text-emerald-300">🎉 {t('lessonPage.completed')}</span>
+            ) : (
+              <span className="text-xs text-gray-500">{t('lessonPage.completeHint')}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        {prev ? (
+          <button onClick={() => navigate(`/lessons/${prev.id}`)} className="btn-ghost-fire rounded-xl px-5 py-2.5 text-sm font-bold">
+            → {t('lessonPage.prevLesson')}: {lang === 'ar' ? prev.title : prev.titleEn}
+          </button>
+        ) : (
+          <span />
+        )}
+        {next ? (
+          <button onClick={() => navigate(`/lessons/${next.id}`)} className="btn-fire rounded-xl px-5 py-2.5 text-sm font-bold text-white">
+            {t('lessonPage.nextLesson')}: {lang === 'ar' ? next.title : next.titleEn} ←
+          </button>
+        ) : (
+          <Link to={`/courses/${lesson.courseId}`} className="btn-fire rounded-xl px-5 py-2.5 text-sm font-bold text-white">
+            {t('home.goToCourses')} ←
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
