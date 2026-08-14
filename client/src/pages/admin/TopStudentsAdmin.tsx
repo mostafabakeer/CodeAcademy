@@ -81,8 +81,12 @@ export default function TopStudentsAdmin() {
 
   const remove = async (id: number) => {
     if (!window.confirm(t('common.delete') + '?')) return;
-    await api(`/api/admin/top-students/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      await api(`/api/admin/top-students/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   return (
@@ -118,7 +122,7 @@ export default function TopStudentsAdmin() {
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-ink-800 ring-2 ring-fire-500/30">
                         {s.image ? (
-                          <img src={s.image} alt={s.name} className="h-full w-full object-cover" />
+                          <img src={s.image} alt={s.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-gray-500">🎓</div>
                         )}
@@ -174,7 +178,7 @@ export default function TopStudentsAdmin() {
             {uploading && <p className="mt-1 text-xs text-ember-400">{t('admin.uploading')}...</p>}
             {form.image && (
               <div className="mt-2 flex items-center gap-3">
-                <img src={form.image} alt="preview" className="h-16 w-16 rounded-xl object-cover ring-2 ring-fire-500/40" />
+                <img src={form.image} alt="preview" loading="lazy" decoding="async" className="h-16 w-16 rounded-xl object-cover ring-2 ring-fire-500/40" />
                 <span className="text-xs text-emerald-400">✓ {t('admin.uploaded')}</span>
               </div>
             )}

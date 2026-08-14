@@ -139,23 +139,23 @@ export async function requireAuth(c: Context, next: Next): Promise<Response | vo
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
   if (user.blocked) return c.json({ error: 'تم حظر حسابك من قبل إدارة الموقع' }, 403);
   c.set('user', user);
-  return next();
+  await next();
 }
 
-export function requireAdmin(c: Context, next: Next): Response | void {
+export async function requireAdmin(c: Context, next: Next): Promise<Response | void> {
   const user = c.get('user') as AuthUser | undefined;
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
   if (user.role !== 'admin') return c.json({ error: 'Forbidden: admin only' }, 403);
-  return next();
+  await next();
 }
 
 /** يمنع الطالب غير المشترك من الوصول إلى المحتوى. الأدمن دائماً مسموح. */
-export function requireSubscriber(c: Context, next: Next): Response | void {
+export async function requireSubscriber(c: Context, next: Next): Promise<Response | void> {
   const user = c.get('user') as AuthUser | undefined;
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
-  if (user.role === 'admin') return next();
+  if (user.role === 'admin') { await next(); return; }
   if (!user.subscription) {
     return c.json({ error: 'يجب تفعيل اشتراكك للوصول إلى المحتوى. تواصل مع إدارة الموقع واتساب: 01068633486' }, 403);
   }
-  return next();
+  await next();
 }

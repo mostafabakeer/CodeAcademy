@@ -99,8 +99,8 @@ html[lang='en'] body {
   100% { transform: translateY(var(--rise, -280px)) translateX(var(--drift, 22px)) scale(1.15); opacity: 0; }
 }
 @keyframes sparkle {
-  0%, 100% { filter: brightness(1) drop-shadow(0 0 3px rgba(254, 240, 138, 0.8)); opacity: 0.85; }
-  50% { filter: brightness(2.4) drop-shadow(0 0 9px rgba(253, 224, 71, 1)); opacity: 1; }
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
 }
 @keyframes emberFloat {
   0% { transform: translate(0, 0) scale(1); opacity: 0; }
@@ -330,4 +330,13 @@ html[lang='en'] body {
 }
 .corner-orn {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

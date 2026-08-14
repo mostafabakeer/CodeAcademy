@@ -69,8 +69,12 @@ export default function ExamsAdmin() {
   }, [load]);
 
   const loadQuestions = async (examId: number) => {
-    const d = await api<{ questions: Question[] }>(`/api/admin/exams/${examId}/questions`);
-    setQuestions(d.questions);
+    try {
+      const d = await api<{ questions: Question[] }>(`/api/admin/exams/${examId}/questions`);
+      setQuestions(d.questions);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const openExam = () => {
@@ -103,8 +107,12 @@ export default function ExamsAdmin() {
 
   const removeExam = async (id: number) => {
     if (!window.confirm(t('common.delete') + '?')) return;
-    await api(`/api/exams/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      await api(`/api/exams/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const openQuestions = async (e: Exam) => {
@@ -157,8 +165,12 @@ export default function ExamsAdmin() {
 
   const removeQ = async (id: number) => {
     if (!window.confirm(t('common.delete') + '?')) return;
-    await api(`/api/questions/${id}`, { method: 'DELETE' });
-    if (qmExam) await loadQuestions(qmExam.id);
+    try {
+      await api(`/api/questions/${id}`, { method: 'DELETE' });
+      if (qmExam) await loadQuestions(qmExam.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const courseName = (id: number | null) => {

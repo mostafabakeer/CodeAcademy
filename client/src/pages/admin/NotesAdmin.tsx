@@ -85,8 +85,12 @@ export default function NotesAdmin() {
 
   const remove = async (id: number) => {
     if (!window.confirm(t('common.delete') + '?')) return;
-    await api(`/api/notes/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      await api(`/api/notes/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   return (

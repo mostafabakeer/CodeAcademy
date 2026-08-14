@@ -39,10 +39,22 @@ export default function ExamTake() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
     api<ExamData>(`/api/exams/${id}`)
-      .then(setData)
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false));
+      .then((d) => {
+        if (active) setData(d);
+      })
+      .catch((e) => {
+        if (active) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   const answeredCount = Object.keys(answers).length;
@@ -63,6 +75,13 @@ export default function ExamTake() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const retake = () => {
+    setResult(null);
+    setAnswers({});
+    setError('');
+    setSubmitting(false);
   };
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
@@ -123,7 +142,7 @@ export default function ExamTake() {
           </div>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             {canRetake && (
-              <button onClick={() => navigate(`/exams/${id}`)} className="btn-fire rounded-xl px-6 py-2.5 font-bold text-white">
+              <button onClick={retake} className="btn-fire rounded-xl px-6 py-2.5 font-bold text-white">
                 {t('exam.retake')}
               </button>
             )}

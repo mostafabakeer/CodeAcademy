@@ -86,25 +86,48 @@ export async function findUserById(id: number): Promise<DbUser | null> {
   return data ? userFromRow(data) : null;
 }
 
+/** صيغ محتملة لنفس الرقم في القاعدة (تُستخدم مع فهرس phone الفريد بدلاً من مسح الجدول). */
+function phoneCandidates(norm: string): string[] {
+  const c = new Set<string>();
+  c.add(norm);
+  if (norm.length === 11 && norm.startsWith('0')) {
+    const ten = norm.slice(1); // 1xxxxxxxxxx
+    c.add(ten);
+    c.add('+20' + ten);
+    c.add('20' + ten);
+    c.add('0020' + ten);
+    c.add('00' + ten);
+  } else if (norm.length === 10) {
+    c.add('0' + norm);
+  }
+  return [...c];
+}
+
 export async function findUserByPhone(normPhone: string): Promise<DbUser | null> {
   const target = normalizePhone(normPhone);
-  const { data } = await sb.from('users').select('*');
+  if (!target) return null;
+  const candidates = phoneCandidates(target);
+  let query = sb.from('users').select('*');
+  query = candidates.length === 1 ? query.eq('phone', candidates[0]) : query.in('phone', candidates);
+  const { data } = await query.limit(20);
   const rows = data ?? [];
-  const found = rows.find((r) => normalizePhone(String(r.phone ?? '')) === target && target.length > 0);
+  const found = rows.find((r) => normalizePhone(String(r.phone ?? '')) === target);
   return found ? userFromRow(found) : null;
 }
 
-/** بحث بالتليفون (بعد التوحيد) أو باسم المستخدم (username). */
+/** بحث بالتليفون (بعد التوحيد/بالفهرس) أو باسم المستخدم (username). */
 export async function findUserByIdentifier(identifier: string): Promise<DbUser | null> {
-  const raw = String(identifier);
+  const raw = String(identifier).trim();
   const norm = normalizePhone(raw);
-  const { data } = await sb.from('users').select('*');
-  const rows = data ?? [];
-  const found = rows.find((r) => {
-    if (norm && normalizePhone(String(r.phone ?? '')) === norm) return true;
-    return String(r.username ?? '') === raw;
-  });
-  return found ? userFromRow(found) : null;
+  if (norm) {
+    const byPhone = await findUserByPhone(norm);
+    if (byPhone) return byPhone;
+  }
+  if (raw) {
+    const { data } = await sb.from('users').select('*').eq('username', raw).maybeSingle();
+    if (data) return userFromRow(data);
+  }
+  return null;
 }
 
 export async function createUser(input: Omit<DbUser, 'id'>): Promise<DbUser> {
@@ -145,6 +168,16 @@ export async function listUsers(params: { page?: number; limit?: number; search?
 export async function listAllUsers(): Promise<DbUser[]> {
   const { data } = await sb.from('users').select('*').order('id', { ascending: true });
   return (data ?? []).map(userFromRow);
+}
+
+/** حذف حساب طالب نهائياً مع كل بياناته المرتبطة (التقدم، نتائج الامتحانات، ملفات الكود). */
+export async function deleteUser(id: number): Promise<void> {
+  await Promise.all([
+    sb.from('progress').delete().eq('user_id', id),
+    sb.from('exam_results').delete().eq('user_id', id),
+    sb.from('code_files').delete().eq('user_id', id),
+  ]);
+  await sb.from('users').delete().eq('id', id);
 }
 
 /* =================== الكورسات =================== */
@@ -874,6 +907,76 @@ export async function computeStudentStats(userId: number): Promise<StudentStats>
     examsTaken: scores.length,
     totalExams,
   };
+}
+
+/**
+ * نسخة مجمّعة من computeStudentStats لعدة طلاب معاً (لوحة الأدمن):
+ * تستبدل N×5 استعلامات متتابعة بـ ~5 استعلامات إجمالاً، بنفس النتائج تماماً.
+ */
+export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<number, StudentStats>> {
+  const ids = [...new Set(userIds.filter((x) => Number.isFinite(x) && x > 0))];
+  const out = new Map<number, StudentStats>();
+  if (ids.length === 0) return out;
+
+  const [userRows, allExams, allLessons, progressRows, resultRows, { tiers }] = await Promise.all([
+    sb.from('users').select('id,grade').in('id', ids),
+    listExams(),
+    listAllLessons(),
+    sb.from('progress').select('*').in('user_id', ids),
+    sb.from('exam_results').select('*').in('user_id', ids),
+    getLevels(),
+  ]);
+
+  const progressByUser = new Map<number, Progress[]>();
+  for (const p of (progressRows.data ?? []).map(progressFromRow)) {
+    const arr = progressByUser.get(p.userId) ?? [];
+    arr.push(p);
+    progressByUser.set(p.userId, arr);
+  }
+
+  const resultsByUser = new Map<number, ExamResult[]>();
+  for (const r of (resultRows.data ?? []).map(resultFromRow)) {
+    const arr = resultsByUser.get(r.userId) ?? [];
+    arr.push(r);
+    resultsByUser.set(r.userId, arr);
+  }
+
+  for (const u of userRows.data ?? []) {
+    const id = Number(u.id);
+    const studentGrade = String(u.grade ?? '');
+    const scores = (resultsByUser.get(id) ?? []).map((r) => Number(r.best ?? r.score ?? 0)).filter((s) => !Number.isNaN(s));
+    const examAvg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    const totalExams = allExams.filter(({ grade }) => gradeAllowed(grade, studentGrade)).length;
+    const lessons = allLessons.filter(({ grade }) => gradeAllowed(grade, studentGrade));
+    const watchByLesson = new Map((progressByUser.get(id) ?? []).map((p) => [p.lessonId, Number(p.secondsWatched) || 0]));
+
+    let totalDuration = 0;
+    let totalWatched = 0;
+    let completed = 0;
+    for (const lesson of lessons) {
+      const d = Number(lesson.duration) || 0;
+      totalDuration += d;
+      const w = Math.min(watchByLesson.get(lesson.id) ?? 0, d);
+      totalWatched += w;
+      if (d > 0 && w >= d * 0.9) completed++;
+    }
+
+    const watchRatio = totalDuration > 0 ? totalWatched / totalDuration : 0;
+    const points = Math.min(100, Math.max(0, Math.round(examAvg * 0.6 + watchRatio * 100 * 0.4)));
+
+    out.set(id, {
+      examAvg: Math.round(examAvg),
+      watchRatio,
+      points,
+      level: tierByPoints(points, tiers),
+      completedLessons: completed,
+      totalLessons: lessons.length,
+      examsTaken: scores.length,
+      totalExams,
+    });
+  }
+
+  return out;
 }
 
 /* =================== تصحيح الامتحان =================== */

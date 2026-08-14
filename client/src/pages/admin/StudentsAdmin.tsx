@@ -68,18 +68,41 @@ export default function StudentsAdmin() {
   }, []);
 
   const toggleRole = async (id: number, role: string) => {
-    await api(`/api/admin/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
-    load();
+    try {
+      await api(`/api/admin/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const toggleBlock = async (id: number, blocked: boolean) => {
-    await api(`/api/admin/users/${id}/block`, { method: 'PUT', body: JSON.stringify({ blocked }) });
-    load();
+    try {
+      await api(`/api/admin/users/${id}/block`, { method: 'PUT', body: JSON.stringify({ blocked }) });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const toggleSubscription = async (id: number, subscription: boolean) => {
-    await api(`/api/admin/users/${id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription }) });
-    load();
+    try {
+      await api(`/api/admin/users/${id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription }) });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const deleteStudent = async (s: Student) => {
+    if (!window.confirm(t('admin.deleteAccountConfirm'))) return;
+    try {
+      await api(`/api/admin/users/${s.id}`, { method: 'DELETE' });
+      if (detail?.user?.id === s.id) setDetail(null);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const openDetail = async (id: number) => {
@@ -222,6 +245,12 @@ export default function StudentsAdmin() {
                             className={`rounded-lg px-2.5 py-1 text-xs font-bold ${s.blocked ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' : 'bg-fire-500/20 text-fire-300 hover:bg-fire-500/30'}`}
                           >
                             {s.blocked ? t('admin.unblock') : t('admin.block')}
+                          </button>
+                          <button
+                            onClick={() => deleteStudent(s)}
+                            className="rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30"
+                          >
+                            🗑 {t('admin.deleteAccount')}
                           </button>
                         </>
                       )}

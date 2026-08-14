@@ -35,10 +35,19 @@ export default function CourseDetail() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
+    setLoading(true);
     api<CourseDetailData>(`/api/courses/${id}`)
-      .then(setData)
+      .then((d) => {
+        if (active) setData(d);
+      })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;

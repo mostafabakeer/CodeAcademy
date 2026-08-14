@@ -270,6 +270,8 @@ export const ar = {
     unblock: 'إلغاء الحظر',
     enableSub: 'تفعيل الاشتراك',
     disableSub: 'إيقاف الاشتراك',
+    deleteAccount: 'حذف الحساب',
+    deleteAccountConfirm: 'حذف حساب الطالب نهائياً؟\nسيتم حذف كل بياناته (التقدم، نتائج الامتحانات، ملفات الكود).\nهذا الإجراء لا يمكن التراجع عنه.',
     status: 'الحالة',
     subscribed: 'مشترك',
     notSubscribed: 'غير مشترك',

@@ -41,15 +41,9 @@ export default function LessonsAdmin() {
 
   const load = useCallback(async () => {
     try {
-      const c = await api<{ courses: Course[] }>('/api/courses');
-      setCourses(c.courses);
-      // نجمع كل الدروس من كل دورات
-      const all: Lesson[] = [];
-      for (const course of c.courses) {
-        const d = await api<{ lessons: Lesson[] }>(`/api/courses/${course.id}`);
-        all.push(...d.lessons);
-      }
-      setLessons(all);
+      const d = await api<{ lessons: Lesson[]; courses: Course[] }>('/api/admin/lessons');
+      setCourses(d.courses);
+      setLessons(d.lessons);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -110,8 +104,12 @@ export default function LessonsAdmin() {
 
   const remove = async (id: number) => {
     if (!window.confirm(t('common.delete') + '?')) return;
-    await api(`/api/lessons/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      await api(`/api/lessons/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const courseName = (id: number) => {

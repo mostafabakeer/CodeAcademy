@@ -11,9 +11,6 @@ export default function ProgressBar({ value, className = '', showLabel = true }:
           animate={{ width: `${v}%` }}
           transition={{ duration: 0.8, ease: 'easeOut' }}
         />
-        <div className="absolute inset-0 overflow-hidden rounded-full">
-          <div className="animate-shine h-full w-full bg-[linear-gradient(110deg,transparent_30%,rgba(255,255,255,0.35)_50%,transparent_70%)] bg-[length:200%_100%]" />
-        </div>
       </div>
       {showLabel && (
         <div className="mt-1 flex items-center justify-between text-xs text-gray-400">

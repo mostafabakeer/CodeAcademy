@@ -7,12 +7,14 @@ import { hashPassword, verifyPassword } from '../_shared/password.ts';
 import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared/access.ts';
 import {
   computeStudentStats,
+  computeStudentStatsBatch,
   countAdmins,
   findUserById,
   findUserByPhone,
   findUserByIdentifier,
   createUser,
   updateUser,
+  deleteUser,
   safeUser,
   listUsers,
   listAllUsers,
@@ -62,15 +64,21 @@ import {
   submitExam,
   normalizePhone,
 } from '../_shared/db.ts';
+import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister } from '../_shared/rateLimit.ts';
 
 const CODE_LANGUAGES = ['javascript', 'python', 'html', 'css'];
 const TOP_GRADES = ['bac1', 'bac2'];
 
 const origins = CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
 
-/** يُعيد الأصل المُرسل إذا كان مسموحاً؛ وإذا لم تُضبط قائمة الأصول يُسمح لأي أصل (echo). */
+/**
+ * يُعيد الأصل المُرسل فقط إذا كان ضمن CORS_ORIGIN؛ الطلبات التي تحمل Origin
+ * ولا تظهر في القائمة (أو القائمة فارغة) تُرفض بأمان، بينما الطلبات بلا Origin
+ * (خوادم/أدوات) لا تحتاج رأس CORS وتُترك بلا ACAO.
+ */
 function resolveOrigin(origin: string): string | null {
-  if (origins.length === 0) return origin || '*';
+  if (!origin) return null;
+  if (origins.length === 0) return null; // fail-closed بدون قائمة أصول مضبوطة
   return origins.includes(origin) ? origin : null;
 }
 
@@ -117,6 +125,10 @@ app.get('/health', async (c) => {
 /* =================== المصادقة =================== */
 
 app.post('/auth/register', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  if (!registerAllowed(clientIp)) {
+    return c.json({ error: 'طلبات التسجيل كثيرة من هذا الجهاز، حاول لاحقاً' }, 429);
+  }
   const { fullName, phone, grade, password } = await c.req.json().catch(() => ({}));
   if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 3) {
     return c.json({ error: 'الاسم الكامل مطلوب (3 أحرف على الأقل)' }, 400);
@@ -151,22 +163,31 @@ app.post('/auth/register', async (c) => {
     createdAt: Date.now(),
   });
 
+  recordRegister(clientIp);
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token) });
 });
 
 app.post('/auth/login', async (c) => {
+  const clientIp = ipOf(c.req.raw);
   const { identifier, password } = await c.req.json().catch(() => ({}));
   if (!identifier || !password) return c.json({ error: 'التليفون وكلمة المرور مطلوبان' }, 400);
+  const loginKey = String(identifier);
 
-  const user = await findUserByIdentifier(String(identifier));
+  if (loginBlocked(clientIp, loginKey)) {
+    return c.json({ error: 'محاولات تسجيل دخول كثيرة، حاول بعد 15 دقيقة' }, 429);
+  }
+
+  const user = await findUserByIdentifier(loginKey);
   if (!user || !(await verifyPassword(String(password), user.passwordHash))) {
+    recordLoginFailure(clientIp, loginKey);
     return c.json({ error: 'بيانات الدخول غير صحيحة' }, 401);
   }
   if (user.blocked) {
     return c.json({ error: 'تم حظر حسابك من قبل إدارة الموقع. تواصل مع الإدارة واتساب: 01068633486' }, 403);
   }
 
+  clearLoginFailures(loginKey);
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token) });
 });
@@ -371,9 +392,12 @@ app.get('/exams', requireAuth, requireSubscriber, async (c) => {
   const exams = (await listExams()).filter((e) => contentVisible(reqUser.role, e.grade, reqUser.grade));
   const results = await listResultsByUser(reqUser.id);
   const resultByExam = new Map(results.map((res) => [res.examId, res]));
-  const questions = await Promise.all(exams.map((e) => listQuestionsByExam(e.id)));
+  const { data: allQuestions } = await sb.from('questions').select('exam_id');
   const qByExam = new Map<number, number>();
-  exams.forEach((e, i) => qByExam.set(e.id, questions[i].length));
+  for (const q of allQuestions ?? []) {
+    const ex = Number(q.exam_id);
+    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
+  }
 
   const out = exams
     .map((exam) => ({
@@ -688,23 +712,35 @@ app.get('/admin/users', requireAuth, requireAdmin, async (c) => {
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
   const search = url.searchParams.get('search') ?? undefined;
   const { users, total } = await listUsers({ page, limit, search });
-  const out = [];
-  for (const u of users) {
-    const stats = await computeStudentStats(u.id);
-    out.push({
-      id: u.id,
-      fullName: u.fullName,
-      phone: u.phone,
-      grade: u.grade,
-      gradeName: GRADES[u.grade]?.name ?? u.grade,
-      role: u.role,
-      subscription: !!u.subscription,
-      blocked: !!u.blocked,
-      createdAt: u.createdAt,
-      ...stats,
-    });
-  }
+  const statsMap = await computeStudentStatsBatch(users.map((u) => u.id));
+  const out = users.map((u) => ({
+    id: u.id,
+    fullName: u.fullName,
+    phone: u.phone,
+    grade: u.grade,
+    gradeName: GRADES[u.grade]?.name ?? u.grade,
+    role: u.role,
+    subscription: !!u.subscription,
+    blocked: !!u.blocked,
+    createdAt: u.createdAt,
+    ...(statsMap.get(u.id) ?? {
+      examAvg: 0,
+      watchRatio: 0,
+      points: 0,
+      level: { min: 0, key: 'beginner', name: GRADES[u.grade]?.name ?? '', nameEn: '' },
+      completedLessons: 0,
+      totalLessons: 0,
+      examsTaken: 0,
+      totalExams: 0,
+    }),
+  }));
   return c.json({ users: out.sort((a, b) => b.points - a.points), total, page, limit });
+});
+
+app.get('/admin/lessons', requireAuth, requireAdmin, async (c) => {
+  const lessons = await listAllLessons();
+  const courses = await listCourses();
+  return c.json({ lessons, courses: courses.map((co) => ({ id: co.id, title: co.title, titleEn: co.titleEn, grade: co.grade })) });
 });
 
 app.get('/admin/users/:id', requireAuth, requireAdmin, async (c) => {
@@ -763,6 +799,17 @@ app.put('/admin/users/:id/block', requireAuth, requireAdmin, async (c) => {
   return c.json({ user: safeUser(updated!) });
 });
 
+app.delete('/admin/users/:id', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  const id = Number(c.req.param('id'));
+  if (id === me.id) return c.json({ error: 'لا يمكنك حذف حسابك الخاص' }, 400);
+  const user = await findUserById(id);
+  if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
+  if (user.role === 'admin') return c.json({ error: 'لا يمكن حذف حساب مدير' }, 403);
+  await deleteUser(id);
+  return c.json({ ok: true });
+});
+
 app.get('/admin/config', requireAuth, requireAdmin, async (c) => {
   const levels = await getLevels();
   return c.json({ config: { levels, grades: GRADES } });
@@ -778,12 +825,27 @@ app.put('/admin/config/levels', requireAuth, requireAdmin, async (c) => {
 });
 
 // رابط رفع مباشر إلى Storage (تجاوز حد الحجم في الدوال) — يوقّع URL ثم يرفع المتصفح مباشرة
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/webm', 'video/quicktime', 'video/ogg']);
+const IMAGE_EXTS = /\.(png|jpe?g|webp|gif)$/i;
+const VIDEO_EXTS = /\.(mp4|webm|mov|ogv|ogg)$/i;
+
 app.post('/admin/upload-url', requireAuth, requireAdmin, async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const bucketKey = b.bucket === 'images' ? 'images' : 'videos';
   const bucket = bucketKey === 'images' ? BUCKET_IMAGES : BUCKET_VIDEOS;
   const fileName = String(b.fileName ?? 'file');
   const contentType = String(b.contentType ?? 'application/octet-stream');
+
+  const isImage = bucketKey === 'images';
+  const typeOk = isImage ? ALLOWED_IMAGE_TYPES.has(contentType) : ALLOWED_VIDEO_TYPES.has(contentType);
+  const extOk = isImage ? IMAGE_EXTS.test(fileName) : VIDEO_EXTS.test(fileName);
+  if (!typeOk || !extOk) {
+    return c.json(
+      { error: isImage ? 'صيغة الصورة غير مسموحة (png/jpeg/webp/gif)' : 'صيغة الفيديو غير مسموحة (mp4/webm/mov/ogv)' },
+      400
+    );
+  }
 
   await ensureBucket(bucket);
   const safePath = `${Date.now()}-${fileName.replace(/[^\w\u0600-\u06FF.-]+/g, '-').slice(0, 40)}`;

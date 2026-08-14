@@ -64,6 +64,7 @@ export default function TopStudents() {
         <img
           src="/login-hero.png"
           alt=""
+          fetchPriority="high"
           className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
         />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-ink-950/85 via-ink-950/55 to-ink-950/92" />
@@ -78,7 +79,7 @@ export default function TopStudents() {
                 transition={{ delay: 0.15, type: 'spring', stiffness: 200, damping: 18 }}
                 className="h-16 w-16 overflow-hidden rounded-full border-2 border-fire-500/40 bg-ink-800 shadow-xl shadow-fire-900/50 animate-flame sm:h-20 sm:w-20"
               >
-                <img src="/owner.png" alt={t('top.founder')} className="h-full w-full object-cover" />
+                <img src="/owner.png" alt={t('top.founder')} loading="lazy" decoding="async" className="h-full w-full object-cover" />
               </motion.div>
               <div>
                 <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="text-2xl font-black sm:text-3xl">
@@ -196,7 +197,7 @@ function PodiumCol({ student, height, place }: { student: TopStudent; height: st
     >
       <span className="text-4xl drop-shadow-lg">{MEDALS[student.rank] ?? `#${student.rank}`}</span>
       <div className={`flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-ink-800 ring-2 ${cls.avatar}`}>
-        {student.image ? <img src={student.image} alt={student.name} className="h-full w-full object-cover" /> : <DefaultAvatar />}
+        {student.image ? <img src={student.image} alt={student.name} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <DefaultAvatar />}
       </div>
       <Link
         to={`/top-students/${student.id}`}
@@ -226,7 +227,7 @@ function StudentCard({ s, i }: { s: TopStudent; i: number }) {
       className="card-fire card-fire-hover flex items-center gap-4 rounded-2xl p-4"
     >
       <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-ink-800 ring-2 ring-fire-500/30">
-        {s.image ? <img src={s.image} alt={s.name} className="h-full w-full object-cover" /> : <DefaultAvatar />}
+        {s.image ? <img src={s.image} alt={s.name} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <DefaultAvatar />}
       </div>
       <div className="min-w-0 flex-1">
         <Link to={`/top-students/${s.id}`} className="block truncate font-extrabold text-gray-100 transition-colors hover:text-fire-400 hover:underline" title={s.name}>

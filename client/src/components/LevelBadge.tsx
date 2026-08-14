@@ -16,8 +16,9 @@ export default function LevelBadge({ levelKey, name, nameEn, size = 'md' }: { le
 
   return (
     <motion.span
-      animate={{ opacity: [1, 0.85, 1] }}
-      transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
       className={`inline-flex items-center gap-1 rounded-full border bg-gradient-to-r font-bold ${cls} ${padding}`}
     >
       <span className="text-current">{levelKey === 'expert' ? '🔥' : '⚡'}</span>

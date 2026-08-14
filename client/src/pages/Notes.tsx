@@ -55,7 +55,7 @@ export default function Notes() {
                   {isOpen && (
                     <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25 }}>
                       <div className="px-5 pb-5">
-                        {n.image && <img src={n.image} alt="" className="mb-3 max-h-60 w-full rounded-xl object-cover" />}
+                        {n.image && <img src={n.image} alt="" loading="lazy" decoding="async" className="mb-3 max-h-60 w-full rounded-xl object-cover" />}
                         <div className="markdown-body text-sm">
                           <Suspense fallback={<p className="text-gray-400">{t('common.loading')}</p>}>
                             <Markdown>{lang === 'ar' ? n.body : n.bodyEn}</Markdown>

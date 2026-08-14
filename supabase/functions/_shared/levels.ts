@@ -1,4 +1,5 @@
 import type { LevelTier } from './types.ts';
+export type { LevelTier };
 
 export const DEFAULT_LEVELS: LevelTier[] = [
   { min: 0, key: 'beginner', name: 'مبتدئ', nameEn: 'Beginner' },

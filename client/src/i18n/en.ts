@@ -272,6 +272,8 @@ export const en: TranslationKeys = {
     unblock: 'Unblock',
     enableSub: 'Enable subscription',
     disableSub: 'Disable subscription',
+    deleteAccount: 'Delete account',
+    deleteAccountConfirm: 'Delete this student account permanently?\nAll their data (progress, exam results, code files) will be removed.\nThis action cannot be undone.',
     status: 'Status',
     subscribed: 'Subscribed',
     notSubscribed: 'Not subscribed',

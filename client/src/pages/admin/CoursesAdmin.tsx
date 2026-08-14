@@ -73,8 +73,12 @@ export default function CoursesAdmin() {
 
   const remove = async (id: number) => {
     if (!window.confirm(t('common.delete') + '?')) return;
-    await api(`/api/courses/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      await api(`/api/courses/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   return (

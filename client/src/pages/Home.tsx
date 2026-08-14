@@ -21,17 +21,15 @@ interface Course {
 
 export default function Home() {
   const { t, lang } = useLang();
-  const { user, stats, refresh } = useAuth();
+  const { user, stats } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    refresh().catch(() => {});
     api<{ courses: Course[] }>('/api/courses')
       .then((d) => setCourses(d.courses))
       .catch(() => {})
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const watchHours = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10)) / 10 : 0;

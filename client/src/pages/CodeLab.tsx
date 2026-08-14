@@ -17,44 +17,77 @@ interface CodeFile {
 
 const LANGUAGES = ['javascript', 'python', 'html', 'css'] as const;
 
-function formatValue(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v === undefined) return 'undefined';
-  if (v === null) return 'null';
-  if (typeof v === 'function') return String(v);
-  try {
-    const json = JSON.stringify(v, null, 2);
-    return json === undefined ? String(v) : json;
-  } catch {
-    return String(v);
-  }
-}
+const WORKER_TIMEOUT_MS = 5000;
 
+/**
+ * تشغيل كود المستخدم داخل Web Worker معزول (Blob): لا يصل لأصل الموقع ولا DOM
+ * ولا localStorage، وتُقتل الحلقات اللانهائية عبر terminate بعد المهلة.
+ */
 async function runJavaScript(code: string): Promise<string> {
-  const logs: string[] = [];
-  const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info };
-  const capture = (type: 'log' | 'error' | 'warn' | 'info') => (...args: unknown[]) => {
-    const prefix = type === 'error' ? '❌ ' : type === 'warn' ? '⚠️ ' : type === 'info' ? 'ℹ️ ' : '';
-    logs.push(prefix + args.map(formatValue).join(' '));
-  };
-  console.log = capture('log');
-  console.error = capture('error');
-  console.warn = capture('warn');
-  console.info = capture('info');
-  try {
-    const fn = new Function(code);
-    const result = await fn();
-    if (result !== undefined) logs.push(formatValue(result));
-    if (logs.length === 0) logs.push('✓');
-  } catch (e) {
-    logs.push('❌ ' + (e as Error).message);
-  } finally {
-    console.log = orig.log;
-    console.error = orig.error;
-    console.warn = orig.warn;
-    console.info = orig.info;
-  }
-  return logs.join('\n');
+  const workerSource = `
+    self.onmessage = async (e) => {
+      const code = e.data.code;
+      const logs = [];
+      const formatValue = (v) => {
+        if (typeof v === 'string') return v;
+        if (v === undefined) return 'undefined';
+        if (v === null) return 'null';
+        if (typeof v === 'function') return String(v);
+        try {
+          const json = JSON.stringify(v, null, 2);
+          return json === undefined ? String(v) : json;
+        } catch (_) {
+          return String(v);
+        }
+      };
+      const capture = (prefix) => (...args) => logs.push(prefix + args.map(formatValue).join(' '));
+      self.console.log = capture('');
+      self.console.error = capture('❌ ');
+      self.console.warn = capture('⚠️ ');
+      self.console.info = capture('ℹ️ ');
+      try {
+        const fn = new Function(code);
+        const result = await fn();
+        if (result !== undefined) logs.push(formatValue(result));
+        if (logs.length === 0) logs.push('✓');
+      } catch (err) {
+        logs.push('❌ ' + (err && err.message ? err.message : String(err)));
+      }
+      self.postMessage({ logs });
+    };
+  `;
+
+  return new Promise<string>((resolve) => {
+    let worker: Worker | null = null;
+    let settled = false;
+    const finish = (text: string) => {
+      if (settled) return;
+      settled = true;
+      try {
+        worker?.terminate();
+      } catch {}
+      resolve(text);
+    };
+
+    try {
+      const blob = new Blob([workerSource], { type: 'text/javascript' });
+      worker = new Worker(URL.createObjectURL(blob));
+    } catch {
+      finish('❌ تعذر تشغيل العامل — تحقق من دعم المتصفح');
+      return;
+    }
+
+    const timer = setTimeout(() => finish('❌ انتهت مهلة التنفيذ (5 ثوانٍ) — تحقق من وجود حلقة لا نهائية'), WORKER_TIMEOUT_MS);
+    worker.onmessage = (e) => {
+      clearTimeout(timer);
+      finish(e.data?.logs?.join('\n') ?? '');
+    };
+    worker.onerror = (e) => {
+      clearTimeout(timer);
+      finish('❌ ' + (e.message || 'خطأ في التنفيذ'));
+    };
+    worker.postMessage({ code });
+  });
 }
 
 function resolveLocalRefs(html: string, files: { name: string; language: string; code: string }[]): string {
@@ -181,11 +214,15 @@ export default function CodeLab() {
 
   const selectFile = async (id: number) => {
     setError('');
-    const d = await api<{ file: CodeFile }>(`/api/code/${id}`);
-    const localDraft = getCodeDraft(id);
-    setCurrent(d.file);
-    setCode(localDraft ?? d.file.code);
-    lastSaved.current = d.file.code;
+    try {
+      const d = await api<{ file: CodeFile }>(`/api/code/${id}`);
+      const localDraft = getCodeDraft(id);
+      setCurrent(d.file);
+      setCode(localDraft ?? d.file.code);
+      lastSaved.current = d.file.code;
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const createFile = async () => {
