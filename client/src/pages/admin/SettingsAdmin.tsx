@@ -57,14 +57,14 @@ export default function SettingsAdmin() {
         <p className="text-gray-400">{t('common.loading')}</p>
       ) : (
         <div className="card-fire rounded-2xl p-5">
-          <div className="grid grid-cols-[100px_1fr_1fr] gap-3 border-b border-ink-600 pb-3 text-xs font-bold text-gray-400">
+          <div className="grid grid-cols-1 gap-3 border-b border-ink-600 pb-3 text-xs font-bold text-gray-400 md:grid-cols-[100px_1fr_1fr]">
             <span>{t('admin.minPoints')}</span>
             <span>{t('admin.levelName')}</span>
             <span>{t('admin.levelNameEn')}</span>
           </div>
           <div className="mt-3 space-y-3">
             {tiers.map((tier, i) => (
-              <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }} className="grid grid-cols-[100px_1fr_1fr] gap-3">
+              <motion.div key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }} className="grid grid-cols-1 gap-3 md:grid-cols-[100px_1fr_1fr]">
                 <input type="number" min={0} max={100} className="input-fire rounded-xl px-3 py-2 text-sm" value={tier.min} onChange={(e) => update(i, { min: Number(e.target.value) })} />
                 <input className="input-fire rounded-xl px-3 py-2 text-sm" value={tier.name} onChange={(e) => update(i, { name: e.target.value })} />
                 <input className="input-fire rounded-xl px-3 py-2 text-sm" dir="ltr" value={tier.nameEn} onChange={(e) => update(i, { nameEn: e.target.value })} />

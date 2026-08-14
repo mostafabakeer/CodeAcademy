@@ -47,11 +47,11 @@ export default function Home() {
         <div className="pointer-events-none absolute -top-20 -end-20 h-64 w-64 rounded-full bg-fire-600/20 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-24 -start-10 h-64 w-64 rounded-full bg-ember-500/15 blur-3xl" />
         <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-medium text-ember-400">
               🔥 {stats?.totalLessons ? t('home.welcomeBack') : t('home.startJourney')}،
             </p>
-            <h1 className="mt-1 text-3xl font-black md:text-4xl">
+            <h1 className="mt-1 break-words text-2xl font-black sm:text-3xl md:text-4xl">
               {user?.fullName} <span className="text-fire-shine">👋</span>
             </h1>
             <p className="mt-2 text-gray-400">{t('home.subtitle')}</p>
@@ -60,7 +60,7 @@ export default function Home() {
             <LevelBadge levelKey={stats?.level.key} name={stats?.level.name} nameEn={stats?.level.nameEn} size="lg" />
             <div className="text-center md:text-end">
               <div className="text-sm text-gray-400">{t('home.level')}</div>
-              <div className="text-3xl font-black text-fire-gradient">{levelLabel}</div>
+              <div className="text-2xl font-black text-fire-gradient sm:text-3xl">{levelLabel}</div>
               <div className="text-xs text-gray-500">
                 {t('home.points')}: {stats?.points ?? 0}
               </div>

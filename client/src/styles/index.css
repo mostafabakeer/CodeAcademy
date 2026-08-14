@@ -339,6 +339,20 @@ html[lang='en'] body {
   display: none;
 }
 
+/* منع خروج العناوين الطويلة خارج الشاشة على الشاشات الصغيرة */
+h1, h2, h3 {
+  overflow-wrap: anywhere;
+}
+
+/* منع التكبير التلقائي في iOS عند الكتابة في الحقول وتحسين القراءة على الموبايل */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

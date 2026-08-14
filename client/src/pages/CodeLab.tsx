@@ -354,7 +354,7 @@ export default function CodeLab() {
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-black">💻 {t('code.title')}</h1>
+          <h1 className="text-2xl font-black sm:text-3xl">💻 {t('code.title')}</h1>
           <p className="mt-1 text-sm text-gray-400">{t('code.savedLocally')}</p>
         </div>
         <button onClick={() => setCreating(true)} className="btn-fire rounded-xl px-5 py-2.5 font-bold text-white">

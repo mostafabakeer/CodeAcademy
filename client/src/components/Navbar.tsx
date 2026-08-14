@@ -28,8 +28,8 @@ export default function Navbar() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-fire-900/30 bg-ink-950/85 backdrop-blur-xl print:hidden">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
-        <Link to="/" className="group flex items-center gap-2">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <Link to="/" className="group flex min-w-0 items-center gap-2">
           <img
             src="/logo.png"
             alt="DR Code"
@@ -67,7 +67,7 @@ export default function Navbar() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
             className="btn-ghost-fire rounded-lg px-3 py-2 text-sm font-bold"

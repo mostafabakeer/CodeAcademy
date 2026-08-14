@@ -141,7 +141,7 @@ export default function TopStudentCertificate() {
                   </h1>
 
                   <p className="mt-7 text-base leading-relaxed text-gray-600 sm:text-lg">{t('top.thisIsToCertify')}</p>
-                  <p className="mx-auto mt-3 inline-block border-b-[3px] border-amber-500/70 px-5 pb-2.5 text-3xl font-black tracking-wide text-ink-950 sm:text-[2.6rem]">
+                  <p className="mx-auto mt-3 inline-block break-words border-b-[3px] border-amber-500/70 px-5 pb-2.5 text-2xl font-black tracking-wide text-ink-950 sm:text-[2.6rem]">
                     {student.name}
                   </p>
                   <p className="mx-auto mt-5 max-w-lg text-base leading-relaxed text-gray-600 sm:text-lg">

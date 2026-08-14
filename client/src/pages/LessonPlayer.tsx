@@ -102,7 +102,7 @@ export default function LessonPlayer() {
         <Link to={`/courses/${lesson.courseId}`} className="text-sm font-semibold text-gray-400 hover:text-fire-400">
           ← {t('course.title')}
         </Link>
-        <h1 className="mt-2 text-2xl font-black">{lang === 'ar' ? lesson.title : lesson.titleEn}</h1>
+        <h1 className="mt-2 break-words text-2xl font-black">{lang === 'ar' ? lesson.title : lesson.titleEn}</h1>
         <p className="mt-1 text-sm text-gray-400">{lesson.description}</p>
       </motion.div>
 
@@ -134,7 +134,7 @@ export default function LessonPlayer() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         {prev ? (
           <button onClick={() => navigate(`/lessons/${prev.id}`)} className="btn-ghost-fire rounded-xl px-5 py-2.5 text-sm font-bold">
             → {t('lessonPage.prevLesson')}: {lang === 'ar' ? prev.title : prev.titleEn}

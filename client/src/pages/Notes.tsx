@@ -30,7 +30,7 @@ export default function Notes() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-3xl font-black">📖 {t('note.title')}</h1>
+        <h1 className="text-2xl font-black sm:text-3xl">📖 {t('note.title')}</h1>
         <p className="mt-1 text-gray-400">{t('home.subtitle')}</p>
       </motion.div>
 
