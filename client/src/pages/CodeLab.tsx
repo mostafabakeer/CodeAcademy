@@ -122,6 +122,27 @@ function resolveLocalRefs(html: string, files: { name: string; language: string;
   return out;
 }
 
+const baseOf = (name: string): string => name.split('/').pop()?.replace(/\.\w+$/, '').toLowerCase() ?? '';
+
+/** اختيار ملف HTML المناسب لمعاينة كود CSS: الملف المرتبط بالاسم أولاً، ثم index.html، ثم أول ملف HTML. */
+function pickHtmlForCss(cssName: string, files: { name: string; language: string; code: string }[]): { name: string; language: string; code: string } | null {
+  const htmlFiles = files.filter((f) => f.language === 'html');
+  if (htmlFiles.length === 0) return null;
+  const cssBase = baseOf(cssName);
+  const linked = htmlFiles.find((f) => {
+    const linkTags = [...f.code.matchAll(/<link\b[^>]*>/gi)];
+    return linkTags.some((tag) => {
+      const t = tag[0];
+      if (!/\brel=["']stylesheet["']/i.test(t)) return false;
+      const href = t.match(/\bhref=["']([^"']+)["']/i);
+      return href ? baseOf(href[1]) === cssBase : false;
+    });
+  });
+  if (linked) return linked;
+  const index = htmlFiles.find((f) => baseOf(f.name) === 'index');
+  return index ?? htmlFiles[0];
+}
+
 const cssPreviewHtml = (css: string) => `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -309,8 +330,14 @@ export default function CodeLab() {
           })
         );
         const allFiles = fetched.filter((f): f is CodeFile => f !== null);
-        const html = current.language === 'html' ? code : cssPreviewHtml(code);
-        setPreview(resolveLocalRefs(html, allFiles));
+        // نستخدم الكود الحي الحالي للملف الشغّال بدل النسخة المحفوظة فقط
+        const refs = allFiles.map((f) => (f.id === current.id ? { ...f, code } : f));
+        if (current.language === 'html') {
+          setPreview(resolveLocalRefs(code, refs));
+        } else {
+          const htmlFile = pickHtmlForCss(current.name, refs);
+          setPreview(resolveLocalRefs(htmlFile ? htmlFile.code : cssPreviewHtml(code), refs));
+        }
       } else if (current.language === 'python') {
         setOutput(t('code.pythonNotSupported'));
       } else {
