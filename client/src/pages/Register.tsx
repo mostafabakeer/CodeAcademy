@@ -68,6 +68,8 @@ export default function Register() {
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.fullName')}</label>
               <input
                 type="text"
+                name="fullName"
+                autoComplete="name"
                 className="input-fire w-full rounded-xl px-4 py-3"
                 placeholder="مثال: أحمد محمد علي"
                 value={fullName}
@@ -78,6 +80,8 @@ export default function Register() {
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.phone')}</label>
               <input
                 type="tel"
+                name="phone"
+                autoComplete="username"
                 dir="ltr"
                 className="input-fire w-full rounded-xl px-4 py-3 text-left"
                 placeholder={t('auth.phonePlaceholder')}
@@ -96,6 +100,8 @@ export default function Register() {
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.password')}</label>
               <input
                 type="password"
+                name="password"
+                autoComplete="new-password"
                 className="input-fire w-full rounded-xl px-4 py-3"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

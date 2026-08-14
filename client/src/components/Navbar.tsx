@@ -88,11 +88,11 @@ export default function Navbar() {
             </div>
           ) : (
             <div className="hidden items-center gap-2 sm:flex">
-              <Link to="/login" className="btn-ghost-fire rounded-lg px-4 py-2 text-sm font-semibold">
-                {t('nav.login')}
-              </Link>
-              <Link to="/register" className="btn-fire rounded-lg px-4 py-2 text-sm font-bold text-white">
+              <Link to="/register" className="btn-ghost-fire rounded-lg px-4 py-2 text-sm font-semibold">
                 {t('nav.register')}
+              </Link>
+              <Link to="/login" className="btn-fire rounded-lg px-4 py-2 text-sm font-bold text-white">
+                {t('nav.login')}
               </Link>
             </div>
           )}
@@ -138,11 +138,11 @@ export default function Navbar() {
                   </button>
                 ) : (
                   <>
-                    <Link to="/login" onClick={() => setOpen(false)} className="btn-ghost-fire flex-1 rounded-lg px-4 py-2 text-center text-sm font-semibold">
-                      {t('nav.login')}
-                    </Link>
-                    <Link to="/register" onClick={() => setOpen(false)} className="btn-fire flex-1 rounded-lg px-4 py-2 text-center text-sm font-bold text-white">
+                    <Link to="/register" onClick={() => setOpen(false)} className="btn-ghost-fire flex-1 rounded-lg px-4 py-2 text-center text-sm font-semibold">
                       {t('nav.register')}
+                    </Link>
+                    <Link to="/login" onClick={() => setOpen(false)} className="btn-fire flex-1 rounded-lg px-4 py-2 text-center text-sm font-bold text-white">
+                      {t('nav.login')}
                     </Link>
                   </>
                 )}

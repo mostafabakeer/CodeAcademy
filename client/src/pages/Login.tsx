@@ -65,6 +65,8 @@ export default function Login() {
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.phone')}</label>
               <input
                 type="text"
+                name="username"
+                autoComplete="username"
                 dir="ltr"
                 className="input-fire w-full rounded-xl px-4 py-3 text-left"
                 placeholder={t('auth.phonePlaceholder')}
@@ -76,6 +78,8 @@ export default function Login() {
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.password')}</label>
               <input
                 type="password"
+                name="password"
+                autoComplete="current-password"
                 className="input-fire w-full rounded-xl px-4 py-3"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
