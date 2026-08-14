@@ -11,6 +11,7 @@ const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
 const Home = lazy(() => import('./pages/Home'));
 const TopStudents = lazy(() => import('./pages/TopStudents'));
+const TopStudentCertificate = lazy(() => import('./pages/TopStudentCertificate'));
 const Courses = lazy(() => import('./pages/Courses'));
 const CourseDetail = lazy(() => import('./pages/CourseDetail'));
 const LessonPlayer = lazy(() => import('./pages/LessonPlayer'));
@@ -47,7 +48,7 @@ function Shell() {
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <AnimatedRoutes />
       </main>
-      <footer className="border-t border-fire-900/20 py-6 text-center text-sm text-gray-500">
+      <footer className="border-t border-fire-900/20 py-6 text-center text-sm text-gray-500 print:hidden">
         ⚡ DR Code — {t('footer.rights')} © {new Date().getFullYear()}
       </footer>
     </div>
@@ -69,6 +70,7 @@ function AnimatedRoutes() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/top-students" element={<TopStudents />} />
+          <Route path="/top-students/:id" element={<TopStudentCertificate />} />
           <Route path="/" element={<ProtectedRoute><SubscriberGate><Home /></SubscriberGate></ProtectedRoute>} />
           <Route path="/courses" element={<ProtectedRoute><SubscriberGate><Courses /></SubscriberGate></ProtectedRoute>} />
           <Route path="/courses/:id" element={<ProtectedRoute><SubscriberGate><CourseDetail /></SubscriberGate></ProtectedRoute>} />

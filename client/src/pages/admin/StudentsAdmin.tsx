@@ -40,6 +40,12 @@ const FILTERS: { key: Filter; tKey: string }[] = [
   { key: 'blocked', tKey: 'admin.filterBlocked' },
 ];
 
+const GRADES = [
+  { key: 'all', tKey: 'admin.gradeAll' },
+  { key: 'bac1', tKey: 'auth.bac1' },
+  { key: 'bac2', tKey: 'auth.bac2' },
+];
+
 export default function StudentsAdmin() {
   const { t } = useLang();
   const [students, setStudents] = useState<Student[]>([]);
@@ -47,6 +53,8 @@ export default function StudentsAdmin() {
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
+  const [query, setQuery] = useState('');
+  const [grade, setGrade] = useState('all');
 
   const load = () => {
     api<{ users: Student[] }>('/api/admin/users')
@@ -83,9 +91,18 @@ export default function StudentsAdmin() {
     }
   };
 
+  const q = query.trim().toLowerCase();
   const filtered = students.filter((s) => {
-    if (filter === 'subscribed') return s.subscription && s.role === 'student';
-    if (filter === 'blocked') return s.blocked;
+    if (filter === 'subscribed') {
+      if (!(s.subscription && s.role === 'student')) return false;
+    } else if (filter === 'blocked') {
+      if (!s.blocked) return false;
+    }
+    if (grade !== 'all' && s.grade !== grade) return false;
+    if (q) {
+      const hay = `${s.fullName} ${s.phone}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
   });
 
@@ -100,7 +117,10 @@ export default function StudentsAdmin() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-black">👨‍🎓 {t('admin.studentsList')}</h1>
+        <h1 className="text-2xl font-black">
+          👨‍🎓 {t('admin.studentsList')}{' '}
+          <span className="text-base font-bold text-fire-400">({students.length})</span>
+        </h1>
         <div className="flex flex-wrap gap-2">
           {FILTERS.map((f) => (
             <button
@@ -114,6 +134,33 @@ export default function StudentsAdmin() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative min-w-56 flex-1">
+          <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-gray-500">🔍</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('admin.searchStudents')}
+            className="input-fire w-full rounded-xl py-2.5 pe-10 ps-10 text-sm"
+          />
+        </div>
+        <select
+          value={grade}
+          onChange={(e) => setGrade(e.target.value)}
+          className="input-fire rounded-xl px-3.5 py-2.5 text-sm"
+        >
+          {GRADES.map((g) => (
+            <option key={g.key} value={g.key}>
+              {t(g.tKey)}
+            </option>
+          ))}
+        </select>
+        <span className="rounded-full bg-ink-800 px-3.5 py-1.5 text-xs font-bold text-fire-300">
+          {t('admin.resultsCount', { count: filtered.length, total: students.length })}
+        </span>
       </div>
 
       {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}

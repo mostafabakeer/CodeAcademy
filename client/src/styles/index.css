@@ -91,6 +91,61 @@ html[lang='en'] body {
   100% { opacity: 1; transform: translateY(0); }
 }
 
+/* شظايا صغيرة متطايرة تلمع من الأسفل فوق الفورم */
+@keyframes sparkRise {
+  0% { transform: translateY(0) translateX(0) scale(0.4); opacity: 0; }
+  15% { opacity: 1; }
+  45% { opacity: 0.95; }
+  100% { transform: translateY(var(--rise, -280px)) translateX(var(--drift, 22px)) scale(1.15); opacity: 0; }
+}
+@keyframes sparkle {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 3px rgba(254, 240, 138, 0.8)); opacity: 0.85; }
+  50% { filter: brightness(2.4) drop-shadow(0 0 9px rgba(253, 224, 71, 1)); opacity: 1; }
+}
+@keyframes emberFloat {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  18% { opacity: 0.95; }
+  75% { opacity: 0.65; }
+  100% { transform: translate(var(--fx, 34px), var(--fy, -280px)) scale(0.35); opacity: 0; }
+}
+
+.spark-field {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+.spark-field.behind {
+  z-index: 0;
+}
+.spark {
+  position: absolute;
+  left: var(--x);
+  bottom: -8px;
+  width: var(--s, 5px);
+  height: var(--s, 5px);
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #fde68a 45%, #fbbf24 100%);
+  box-shadow: 0 0 6px 1px rgba(253, 224, 71, 0.85);
+  opacity: 0;
+  animation:
+    sparkRise var(--dur, 2s) cubic-bezier(0.22, 0.9, 0.36, 1) var(--delay, 0s) infinite,
+    sparkle var(--tw, 0.9s) ease-in-out var(--delay, 0s) infinite;
+}
+.ember {
+  position: absolute;
+  left: var(--x);
+  bottom: var(--y, 8%);
+  width: var(--s, 5px);
+  height: var(--s, 5px);
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #fff7ed, #fdba74 55%, #f43f4e 100%);
+  box-shadow: 0 0 8px 1px rgba(249, 115, 22, 0.8);
+  opacity: 0;
+  animation: emberFloat var(--dur, 2.6s) ease-in var(--delay, 0s) infinite;
+}
+
 /* نص متوهج متدرج */
 .text-fire-gradient {
   background: linear-gradient(100deg, #fb7185, #f43f4e 30%, #f97316 60%, #fb923c);
@@ -196,3 +251,83 @@ html[lang='en'] body {
 .markdown-body ul { list-style: disc; padding-inline-start: 1.4rem; }
 .markdown-body li { margin: 0.25rem 0; }
 .markdown-body p { margin: 0.5rem 0; line-height: 1.7; }
+
+/* شهادة التقدير */
+.certificate {
+  position: relative;
+  background:
+    radial-gradient(1300px 540px at 115% -20%, rgba(251, 191, 36, 0.16), transparent 55%),
+    radial-gradient(1000px 540px at -10% 115%, rgba(244, 63, 79, 0.1), transparent 55%),
+    repeating-linear-gradient(45deg, rgba(120, 90, 20, 0.018) 0 2px, transparent 2px 6px),
+    linear-gradient(180deg, #fffdf7, #fbf3e0);
+  box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.65), 0 0 0 6px rgba(251, 191, 36, 0.12);
+}
+.certificate::before {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  border: 2px solid rgba(212, 175, 55, 0.6);
+  border-radius: 1.5rem;
+  pointer-events: none;
+}
+.certificate::after {
+  content: '';
+  position: absolute;
+  inset: 18px;
+  border: 1px dashed rgba(212, 175, 55, 0.4);
+  border-radius: 1.15rem;
+  pointer-events: none;
+}
+.corner-orn {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border: 3px solid #b8860b;
+  pointer-events: none;
+  z-index: 2;
+}
+.corner-orn.tl { top: 22px; inset-inline-start: 22px; border-right: none; border-bottom: none; border-start-start-radius: 14px; }
+.corner-orn.tr { top: 22px; inset-inline-end: 22px; border-left: none; border-bottom: none; border-start-end-radius: 14px; }
+.corner-orn.bl { bottom: 22px; inset-inline-start: 22px; border-right: none; border-top: none; border-end-start-radius: 14px; }
+.corner-orn.br { bottom: 22px; inset-inline-end: 22px; border-left: none; border-top: none; border-end-end-radius: 14px; }
+
+/* ختم الشهادة الذهبي */
+.seal {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 86px;
+  height: 86px;
+  border-radius: 9999px;
+  border: 3px double #b8860b;
+  background: radial-gradient(circle at 50% 35%, #fffdf2, #fbe9bd);
+  box-shadow: 0 0 0 4px rgba(184, 134, 11, 0.18), inset 0 0 0 2px rgba(184, 134, 11, 0.22);
+  transform: rotate(14deg);
+  color: #8a6508;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+}
+.seal img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+    min-height: auto !important;
+  }
+  .certificate {
+    box-shadow: none !important;
+    border-radius: 0;
+  }
+  .certificate::before {
+    border-radius: 0;
+  }
+}
+.corner-orn {
+  display: none;
+}
