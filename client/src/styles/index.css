@@ -252,6 +252,13 @@ html[lang='en'] body {
 .markdown-body li { margin: 0.25rem 0; }
 .markdown-body p { margin: 0.5rem 0; line-height: 1.7; }
 
+/* محرر الأكواد — الكتابة تظل من الشمال (LTR) حتى داخل الواجهة العربية RTL */
+.cm-editor,
+.cm-scroller {
+  direction: ltr;
+  text-align: left;
+}
+
 /* شهادة التقدير */
 .certificate {
   position: relative;
