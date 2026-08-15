@@ -42,3 +42,27 @@ export function setVideoProgressLocal(lessonId: number, seconds: number, duratio
 export function clearVideoProgressLocal(lessonId: number): void {
   removeLocal(VIDEO_PREFIX + lessonId);
 }
+
+/** خريطة كل تقدم المشاهدة المحلي: lessonId → progress (تُستخدم لحساب التقدم والإحصائيات في المتصفح). */
+export function getAllVideoProgressLocal(): Record<number, VideoProgressLocal> {
+  const out: Record<number, VideoProgressLocal> = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith('codeacademy_' + VIDEO_PREFIX)) continue;
+      const lessonId = Number(key.slice(('codeacademy_' + VIDEO_PREFIX).length));
+      if (!Number.isFinite(lessonId)) continue;
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const v = JSON.parse(raw) as VideoProgressLocal;
+        if (typeof v?.seconds === 'number') out[lessonId] = v;
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}

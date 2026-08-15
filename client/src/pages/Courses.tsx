@@ -2,20 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
+import { loadBootstrap, buildCourseList, type CourseWithProgress } from '../lib/content';
+import { getAllVideoProgressLocal } from '../lib/localStore';
 import ProgressBar from '../components/ProgressBar';
-
-interface Course {
-  id: number;
-  title: string;
-  titleEn: string;
-  description: string;
-  descriptionEn: string;
-  lessonCount: number;
-  completedLessons: number;
-  progress: number;
-  duration: number;
-}
 
 function fmtDuration(sec: number): string {
   const h = Math.floor(sec / 3600);
@@ -25,15 +15,18 @@ function fmtDuration(sec: number): string {
 
 export default function Courses() {
   const { t, lang } = useLang();
-  const [courses, setCourses] = useState<Course[]>([]);
+  const { user } = useAuth();
+  const [courses, setCourses] = useState<CourseWithProgress[]>([]);
   const [loading, setLoading] = useState(true);
+  const userId = user?.id;
 
   useEffect(() => {
-    api<{ courses: Course[] }>('/api/courses')
-      .then((d) => setCourses(d.courses))
+    if (!userId) return;
+    loadBootstrap(userId)
+      .then((b) => setCourses(buildCourseList(b, getAllVideoProgressLocal())))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [userId]);
 
   return (
     <div className="space-y-6">

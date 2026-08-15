@@ -1,31 +1,26 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
+import { loadBootstrap, type Note } from '../lib/content';
 
 const Markdown = lazy(() => import('react-markdown'));
 
-interface Note {
-  id: number;
-  title: string;
-  titleEn: string;
-  body: string;
-  bodyEn: string;
-  image?: string;
-}
-
 export default function Notes() {
   const { t, lang } = useLang();
+  const { user } = useAuth();
   const [notes, setNotes] = useState<Note[]>([]);
   const [open, setOpen] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const userId = user?.id;
 
   useEffect(() => {
-    api<{ notes: Note[] }>('/api/notes')
-      .then((d) => setNotes(d.notes))
+    if (!userId) return;
+    loadBootstrap(userId)
+      .then((b) => setNotes(b.notes))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [userId]);
 
   return (
     <div className="space-y-6">

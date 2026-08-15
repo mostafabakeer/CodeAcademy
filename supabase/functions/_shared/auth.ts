@@ -1,7 +1,7 @@
 import * as jose from 'npm:jose@^5.9.6';
 import type { Context, Next } from 'npm:hono@^4.6.3';
 import { JWT_SECRET } from './env.ts';
-import { findUserById, getSessionEpoch, type DbUser } from './db.ts';
+import { findAuthUserById, getSessionEpoch, type DbUser } from './db.ts';
 
 export const AUTH_COOKIE = 'dr_code_token';
 export const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 يوم
@@ -106,7 +106,7 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
     const epoch = await getSessionEpoch();
     if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) return null;
 
-    const user: DbUser | null = await findUserById(decoded.id);
+    const user: DbUser | null = await findAuthUserById(decoded.id);
     if (!user) return null;
 
     return {

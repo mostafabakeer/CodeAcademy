@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'npm:hono@^4.6.3';
 import { cors } from 'npm:hono@^4.6.3/cors';
-import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES, BUCKET_BACKUPS } from '../_shared/env.ts';
+import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES, BUCKET_BACKUPS, ADMIN_PHONE } from '../_shared/env.ts';
 import { sb } from '../_shared/supabase.ts';
 import { requireAuth, requireAdmin, requireSubscriber, signToken, authCookieHeader, clearAuthCookieHeader, type AuthUser } from '../_shared/auth.ts';
 import { hashPassword, verifyPassword } from '../_shared/password.ts';
@@ -9,6 +9,7 @@ import {
   computeStudentStats,
   computeStudentStatsBatch,
   countAdmins,
+  findAuthUserById,
   findUserById,
   findUserByPhone,
   findUserByIdentifier,
@@ -49,11 +50,11 @@ import {
   updateTopStudent,
   deleteTopStudent,
   listProgressByUser,
-  getProgress,
-  upsertWatch,
   getResult,
   listResultsByUser,
+  listResultSummariesByUser,
   listCodeFilesByUser,
+  getCodeFileByUser,
   createCodeFile,
   updateCodeFile,
   patchCodeFile,
@@ -99,7 +100,7 @@ app.use(
 
 app.onError((err, c) => {
   console.error(`[api] ${c.req.method} ${c.req.path}:`, err);
-  return c.json({ error: (err as Error).message || 'Internal error' }, 500);
+  return c.json({ error: 'خطأ داخلي في الخادم' }, 500);
 });
 
 function bodyText(v: unknown): string {
@@ -149,9 +150,9 @@ app.post('/auth/register', async (c) => {
     return c.json({ error: 'رقم التليفون مسجل بالفعل' }, 400);
   }
 
-  const isFirstAdmin = (await countAdmins()) === 0;
+  const isAdminByPhone = !!ADMIN_PHONE && normalizePhone(ADMIN_PHONE) === normPhone;
   const passwordHash = await hashPassword(String(password));
-  const role = isFirstAdmin ? ('admin' as const) : ('student' as const);
+  const role = isAdminByPhone ? ('admin' as const) : ('student' as const);
   const user = await createUser({
     fullName: fullName.trim(),
     phone: normPhone,
@@ -195,12 +196,81 @@ app.post('/auth/login', async (c) => {
 app.get('/auth/me', requireAuth, async (c) => {
   const user = await findUserById(getUser(c).id);
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
-  const stats = await computeStudentStats(user.id);
-  return c.json({ user: safeUser(user), stats });
+  const [levels, results] = await Promise.all([getLevels(), listResultSummariesByUser(user.id)]);
+  const examResults = results.map((r) => ({
+    examId: r.examId,
+    best: r.best,
+    score: r.score,
+    correct: r.correct,
+    total: r.total,
+    attempts: r.attempts,
+  }));
+  return c.json({ user: safeUser(user), levels: levels.tiers, examResults });
 });
 
 app.post('/auth/logout', async (c) => {
   return c.json({ ok: true }, 200, { 'Set-Cookie': clearAuthCookieHeader() });
+});
+
+/* =================== المحتوى الكامل (bootstrap) =================== */
+
+/**
+ * يعيد كل المحتوى الثابت في طلب واحد (كورسات، دروس، امتحانات بعدد الأسئلة،
+ * مذكرات، أوائل الطلبة، مستويات، مراحل) بعد الفلترة حسب دور/مرحلة المستخدم.
+ * تُحفظ النتيجة مؤقتاً في المتصفح لتقليل استعلامات الباك اند بشكل كبير.
+ */
+app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
+  const reqUser = getUser(c);
+  const [allCourses, allLessons, allExams, allNotes, topItems, levels] = await Promise.all([
+    listCourses(),
+    listAllLessons(),
+    listExams(),
+    listNotes(),
+    listTopStudents(),
+    getLevels(),
+  ]);
+
+  const courses = allCourses
+    .filter((co) => contentVisible(reqUser.role, co.grade, reqUser.grade))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const lessons = allLessons
+    .filter((l) => contentVisible(reqUser.role, l.grade, reqUser.grade))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const exams = allExams
+    .filter((e) => contentVisible(reqUser.role, e.grade, reqUser.grade))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const notes = allNotes
+    .filter((n) => contentVisible(reqUser.role, n.grade, reqUser.grade))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  const { data: allQuestions } = await sb.from('questions').select('exam_id');
+  const qByExam = new Map<number, number>();
+  for (const q of allQuestions ?? []) {
+    const ex = Number(q.exam_id);
+    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
+  }
+
+  const students = topItems
+    .filter((s) => TOP_GRADES.includes(s.grade))
+    .sort((a, b) => (a.grade === b.grade ? (a.rank ?? 0) - (b.rank ?? 0) : 0))
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      image: s.image ?? '',
+      rank: Number(s.rank) || 0,
+      grade: s.grade,
+      gradeName: GRADES[s.grade]?.name ?? s.grade,
+    }));
+
+  return c.json({
+    courses,
+    lessons,
+    exams: exams.map((e) => ({ ...e, questionsCount: qByExam.get(e.id) ?? 0 })),
+    notes,
+    topStudents: students,
+    levels: levels.tiers,
+    grades: GRADES,
+  });
 });
 
 /* =================== الكورسات والدروس =================== */
@@ -210,28 +280,17 @@ app.get('/courses', requireAuth, requireSubscriber, async (c) => {
   const allCourses = await listCourses();
   const courses = allCourses.filter((co) => contentVisible(reqUser.role, co.grade, reqUser.grade));
   const lessons = await listAllLessons();
-  const progresses = await listProgressByUser(reqUser.id);
-  const watchByLesson = new Map(progresses.map((p) => [p.lessonId, Number(p.secondsWatched) || 0]));
 
   const out = courses.map((course) => {
     const courseLessons = lessons.filter((l) => l.courseId === course.id && contentVisible(reqUser.role, l.grade, reqUser.grade));
-    let duration = 0;
-    let watched = 0;
-    let completed = 0;
-    for (const l of courseLessons) {
-      const d = Number(l.duration) || 0;
-      duration += d;
-      const w = Math.min(watchByLesson.get(l.id) ?? 0, d);
-      watched += w;
-      if (d > 0 && w >= d * 0.9) completed++;
-    }
+    const duration = courseLessons.reduce((s, l) => s + (Number(l.duration) || 0), 0);
     return {
       ...course,
       lessonCount: courseLessons.length,
-      completedLessons: completed,
+      completedLessons: 0,
       duration,
-      watchedSeconds: watched,
-      progress: duration > 0 ? Math.round((watched / duration) * 100) : 0,
+      watchedSeconds: 0,
+      progress: 0,
     };
   });
 
@@ -249,14 +308,11 @@ app.get('/courses/:id', requireAuth, requireSubscriber, async (c) => {
 
   const allLessons = await listAllLessons();
   const lessons = allLessons.filter((l) => l.courseId === id && contentVisible(reqUser.role, l.grade, reqUser.grade));
-  const progresses = await listProgressByUser(reqUser.id);
-  const watchByLesson = new Map(progresses.map((p) => [p.lessonId, Number(p.secondsWatched) || 0]));
 
   const lessonList = lessons
     .map((l) => {
       const d = Number(l.duration) || 0;
-      const w = Math.min(watchByLesson.get(l.id) ?? 0, d);
-      return { ...l, watchedSeconds: w, completed: d > 0 && w >= d * 0.9, progressPct: d > 0 ? Math.round((w / d) * 100) : 0 };
+      return { ...l, watchedSeconds: 0, completed: false, progressPct: 0 };
     })
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
@@ -281,17 +337,13 @@ app.get('/lesson/:id', requireAuth, requireSubscriber, async (c) => {
   const lessons = allLessons.filter(
     (l) => l.courseId === lesson.courseId && contentVisible(reqUser.role, l.grade ?? course?.grade, reqUser.grade)
   );
-  const progress = await getProgress(reqUser.id, id);
-  const progresses = await listProgressByUser(reqUser.id);
-  const watchByLesson = new Map(progresses.map((p) => [p.lessonId, Number(p.secondsWatched) || 0]));
 
   const duration = Number(lesson.duration) || 0;
-  const watched = progress?.secondsWatched ?? Math.min(watchByLesson.get(id) ?? 0, duration);
   const out = {
     ...lesson,
-    watchedSeconds: watched,
-    completed: duration > 0 ? watched >= duration * 0.9 : false,
-    progressPct: duration > 0 ? Math.round((watched / duration) * 100) : 0,
+    watchedSeconds: 0,
+    completed: false,
+    progressPct: 0,
   };
 
   return c.json({
@@ -390,8 +442,6 @@ app.delete('/lessons/:id', requireAuth, requireAdmin, async (c) => {
 app.get('/exams', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
   const exams = (await listExams()).filter((e) => contentVisible(reqUser.role, e.grade, reqUser.grade));
-  const results = await listResultsByUser(reqUser.id);
-  const resultByExam = new Map(results.map((res) => [res.examId, res]));
   const { data: allQuestions } = await sb.from('questions').select('exam_id');
   const qByExam = new Map<number, number>();
   for (const q of allQuestions ?? []) {
@@ -403,9 +453,6 @@ app.get('/exams', requireAuth, requireSubscriber, async (c) => {
     .map((exam) => ({
       ...exam,
       questionsCount: qByExam.get(exam.id) ?? 0,
-      taken: resultByExam.has(exam.id),
-      bestScore: resultByExam.get(exam.id)?.best ?? null,
-      attempts: resultByExam.get(exam.id)?.attempts ?? 0,
     }))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   return c.json({ exams: out });
@@ -607,19 +654,6 @@ app.delete('/notes/:id', requireAuth, requireAdmin, async (c) => {
   return c.json({ ok: true });
 });
 
-/* =================== التقدم =================== */
-
-app.post('/progress/watch', requireAuth, requireSubscriber, async (c) => {
-  const reqUser = getUser(c);
-  const { lessonId, seconds } = await c.req.json().catch(() => ({}));
-  if (!lessonId || typeof seconds !== 'number') {
-    return c.json({ error: 'lessonId و seconds مطلوبان' }, 400);
-  }
-  const outcome = await upsertWatch(reqUser.id, Number(lessonId), Number(seconds));
-  if (!outcome) return c.json({ error: 'الدرس غير موجود' }, 404);
-  return c.json({ progress: outcome.progress, completed: outcome.completed, duration: outcome.duration });
-});
-
 /* =================== ملفات الكود =================== */
 
 app.get('/code', requireAuth, requireSubscriber, async (c) => {
@@ -649,7 +683,7 @@ app.post('/code', requireAuth, requireSubscriber, async (c) => {
 
 app.get('/code/:id', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  const file = await listCodeFilesByUser(reqUser.id).then((all) => all.find((f) => f.id === Number(c.req.param('id'))) ?? null);
+  const file = await getCodeFileByUser(reqUser.id, Number(c.req.param('id')));
   if (!file) return c.json({ error: 'الملف غير موجود' }, 404);
   return c.json({ file });
 });
@@ -711,7 +745,17 @@ app.get('/admin/users', requireAuth, requireAdmin, async (c) => {
   const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
   const search = url.searchParams.get('search') ?? undefined;
-  const { users, total } = await listUsers({ page, limit, search });
+  const filter = url.searchParams.get('filter') ?? 'all';
+  const grade = url.searchParams.get('grade') ?? 'all';
+  const { users, total, counts } = await listUsers({
+    page,
+    limit,
+    search,
+    role: filter === 'subscribed' || filter === 'unsubscribed' ? 'student' : undefined,
+    grade: grade !== 'all' ? grade : undefined,
+    subscription: filter === 'subscribed' ? true : filter === 'unsubscribed' ? false : undefined,
+    blocked: filter === 'blocked' ? true : undefined,
+  });
   const statsMap = await computeStudentStatsBatch(users.map((u) => u.id));
   const out = users.map((u) => ({
     id: u.id,
@@ -734,7 +778,37 @@ app.get('/admin/users', requireAuth, requireAdmin, async (c) => {
       totalExams: 0,
     }),
   }));
-  return c.json({ users: out.sort((a, b) => b.points - a.points), total, page, limit });
+  return c.json({ users: out.sort((a, b) => b.points - a.points), total, page, limit, counts });
+});
+
+/** نسخة كاملة من كل المستخدمين مع إحصائياتهم في طلب واحد (بدون pagination أو استعلامات count) —
+ *  تُستخدم في لوحة الطلبة حيث تتم الفلترة والبحث والترقيم في المتصفح لتخفيف الضغط على الباك اند. */
+app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
+  const all = await listAllUsers();
+  const statsMap = await computeStudentStatsBatch(all.map((u) => u.id));
+  const out = all.map((u) => {
+    const stats = statsMap.get(u.id);
+    return {
+      id: u.id,
+      fullName: u.fullName,
+      phone: u.phone,
+      grade: u.grade,
+      gradeName: GRADES[u.grade]?.name ?? u.grade,
+      role: u.role,
+      subscription: !!u.subscription,
+      blocked: !!u.blocked,
+      createdAt: u.createdAt,
+      examAvg: stats?.examAvg ?? 0,
+      watchRatio: stats?.watchRatio ?? 0,
+      points: stats?.points ?? 0,
+      level: stats?.level ?? { min: 0, key: 'beginner', name: GRADES[u.grade]?.name ?? '', nameEn: '' },
+      completedLessons: stats?.completedLessons ?? 0,
+      totalLessons: stats?.totalLessons ?? 0,
+      examsTaken: stats?.examsTaken ?? 0,
+      totalExams: stats?.totalExams ?? 0,
+    };
+  }).sort((a, b) => b.points - a.points);
+  return c.json({ users: out });
 });
 
 app.get('/admin/lessons', requireAuth, requireAdmin, async (c) => {
@@ -772,17 +846,24 @@ app.get('/admin/exams/:id/questions', requireAuth, requireAdmin, async (c) => {
 });
 
 app.put('/admin/users/:id/role', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
   const id = Number(c.req.param('id'));
+  if (id === me.id) return c.json({ error: 'لا يمكنك تغيير دور حسابك الخاص' }, 400);
   const user = await findUserById(id);
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
   const { role } = await c.req.json().catch(() => ({}));
   if (!['student', 'admin'].includes(role)) return c.json({ error: 'دور غير صحيح' }, 400);
+  if (user.role === 'admin' && role === 'student' && (await countAdmins()) <= 1) {
+    return c.json({ error: 'لا يمكن تنزيل آخر مدير في النظام' }, 403);
+  }
   const updated = await updateUser(id, { role });
   return c.json({ user: safeUser(updated!) });
 });
 
 app.put('/admin/users/:id/subscription', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
   const id = Number(c.req.param('id'));
+  if (id === me.id) return c.json({ error: 'لا يمكنك تغيير اشتراك حسابك الخاص' }, 400);
   const user = await findUserById(id);
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
   const { subscription } = await c.req.json().catch(() => ({}));
@@ -791,9 +872,14 @@ app.put('/admin/users/:id/subscription', requireAuth, requireAdmin, async (c) =>
 });
 
 app.put('/admin/users/:id/block', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
   const id = Number(c.req.param('id'));
+  if (id === me.id) return c.json({ error: 'لا يمكنك حظر حسابك الخاص' }, 400);
   const user = await findUserById(id);
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
+  if (user.role === 'admin' && (await countAdmins()) <= 1) {
+    return c.json({ error: 'لا يمكن حظر آخر مدير في النظام' }, 403);
+  }
   const { blocked } = await c.req.json().catch(() => ({}));
   const updated = await updateUser(id, { blocked: !!blocked });
   return c.json({ user: safeUser(updated!) });

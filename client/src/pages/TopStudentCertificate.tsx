@@ -2,17 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
+import { loadTopStudents, type TopStudent } from '../lib/content';
 import Sparkles from '../components/Sparkles';
-
-interface TopStudent {
-  id: number;
-  name: string;
-  image: string;
-  rank: number;
-  grade: string;
-  gradeName: string;
-}
 
 const RANK_LABEL: Record<string, { ar: string; en: string }> = {
   '1': { ar: 'الأول', en: '1st' },
@@ -29,9 +20,9 @@ export default function TopStudentCertificate() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    api<{ students: TopStudent[] }>('/api/top-students')
-      .then((d) => {
-        const found = d.students.find((s) => s.id === Number(id));
+    loadTopStudents()
+      .then((students) => {
+        const found = students.find((s) => s.id === Number(id));
         if (!found) setError(t('top.empty'));
         else setStudent(found);
       })

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import ProgressBar from '../components/ProgressBar';
 
 interface Question {
@@ -31,6 +32,7 @@ export default function ExamTake() {
   const { id } = useParams();
   const { t, lang } = useLang();
   const navigate = useNavigate();
+  const { applyExamResult } = useAuth();
   const [data, setData] = useState<ExamData | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [result, setResult] = useState<Result | null>(null);
@@ -70,6 +72,14 @@ export default function ExamTake() {
         body: JSON.stringify({ answers }),
       });
       setResult(res);
+      applyExamResult({
+        examId: Number(id),
+        best: res.best,
+        score: res.score,
+        correct: res.correct,
+        total: res.total,
+        attempts: (data?.lastResult?.attempts ?? 0) + 1,
+      });
     } catch (e) {
       setError((e as Error).message);
     } finally {

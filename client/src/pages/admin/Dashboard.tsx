@@ -8,6 +8,7 @@ import StatCard from '../../components/StatCard';
 interface Stats {
   students: number;
   admins: number;
+  subscribed: number;
   courses: number;
   lessons: number;
   exams: number;
@@ -35,7 +36,8 @@ export default function Dashboard() {
 
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard icon="👨‍🎓" label={t('admin.studentsCount')} value={stats?.students ?? 0} />
-        <StatCard icon="📚" label={t('admin.coursesCount')} value={stats?.courses ?? 0} delay={0.05} />
+        <StatCard icon="⭐" label={t('admin.subscribedCount')} value={stats?.subscribed ?? 0} delay={0.05} />
+        <StatCard icon="📚" label={t('admin.coursesCount')} value={stats?.courses ?? 0} delay={0.1} />
         <StatCard icon="🎬" label={t('admin.lessonsCount')} value={stats?.lessons ?? 0} delay={0.15} />
         <StatCard icon="📝" label={t('admin.examsCount')} value={stats?.exams ?? 0} delay={0.2} />
         <StatCard icon="📖" label={t('admin.notesCount')} value={stats?.notes ?? 0} delay={0.25} />

@@ -2,33 +2,23 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
-
-interface Exam {
-  id: number;
-  title: string;
-  titleEn: string;
-  courseId: number | null;
-  questionsCount: number;
-  timeLimit: number | null;
-  passingScore: number;
-  taken: boolean;
-  bestScore: number | null;
-  attempts: number;
-  allowRetake?: boolean;
-}
+import { useAuth } from '../contexts/AuthContext';
+import { loadBootstrap, buildExamList, type ExamListItem } from '../lib/content';
 
 export default function Exams() {
   const { t, lang } = useLang();
-  const [exams, setExams] = useState<Exam[]>([]);
+  const { user, examResults } = useAuth();
+  const [exams, setExams] = useState<ExamListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const userId = user?.id;
 
   useEffect(() => {
-    api<{ exams: Exam[] }>('/api/exams')
-      .then((d) => setExams(d.exams))
+    if (!userId) return;
+    loadBootstrap(userId)
+      .then((b) => setExams(buildExamList(b, examResults)))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [userId, examResults]);
 
   return (
     <div className="space-y-6">

@@ -2,17 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
+import { loadTopStudents, type TopStudent } from '../lib/content';
 import Sparkles from '../components/Sparkles';
-
-interface TopStudent {
-  id: number;
-  name: string;
-  image: string;
-  rank: number;
-  grade: string;
-  gradeName: string;
-}
 
 const MEDALS: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
@@ -24,8 +15,8 @@ export default function TopStudents() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    api<{ students: TopStudent[] }>('/api/top-students')
-      .then((d) => setStudents(d.students))
+    loadTopStudents()
+      .then((s) => setStudents(s))
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
   }, []);

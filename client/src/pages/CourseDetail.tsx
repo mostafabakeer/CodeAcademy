@@ -2,25 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
+import { loadBootstrap, buildCourseDetail, type CourseDetailData } from '../lib/content';
 import ProgressBar from '../components/ProgressBar';
-
-interface Lesson {
-  id: number;
-  title: string;
-  titleEn: string;
-  videoType: string;
-  duration: number;
-  completed: boolean;
-  progressPct: number;
-  watchedSeconds: number;
-}
-
-interface CourseDetailData {
-  course: { id: number; title: string; titleEn: string; description: string; descriptionEn: string };
-  lessons: Lesson[];
-  examsCount: number;
-}
 
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -31,15 +15,22 @@ function fmt(sec: number): string {
 export default function CourseDetail() {
   const { id } = useParams();
   const { t, lang } = useLang();
+  const { user } = useAuth();
   const [data, setData] = useState<CourseDetailData | null>(null);
   const [loading, setLoading] = useState(true);
+  const courseId = id ? Number(id) : null;
+  const userId = user?.id;
 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    api<CourseDetailData>(`/api/courses/${id}`)
-      .then((d) => {
-        if (active) setData(d);
+    if (!courseId || !userId) {
+      setLoading(false);
+      return;
+    }
+    loadBootstrap(userId)
+      .then((b) => {
+        if (active) setData(buildCourseDetail(b, courseId));
       })
       .catch(() => {})
       .finally(() => {
@@ -48,7 +39,7 @@ export default function CourseDetail() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [courseId, userId]);
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
   if (!data) return <p className="text-gray-400">{t('errors.generic')}</p>;

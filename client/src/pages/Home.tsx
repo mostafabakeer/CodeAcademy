@@ -3,34 +3,26 @@ import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { api } from '../api/client';
+import { loadBootstrap, buildCourseList, type CourseWithProgress } from '../lib/content';
+import { getAllVideoProgressLocal } from '../lib/localStore';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
 import ProgressBar from '../components/ProgressBar';
 
-interface Course {
-  id: number;
-  title: string;
-  titleEn: string;
-  description: string;
-  descriptionEn: string;
-  lessonCount: number;
-  completedLessons: number;
-  progress: number;
-}
-
 export default function Home() {
   const { t, lang } = useLang();
   const { user, stats } = useAuth();
-  const [courses, setCourses] = useState<Course[]>([]);
+  const [courses, setCourses] = useState<CourseWithProgress[]>([]);
   const [loading, setLoading] = useState(true);
+  const userId = user?.id;
 
   useEffect(() => {
-    api<{ courses: Course[] }>('/api/courses')
-      .then((d) => setCourses(d.courses))
+    if (!userId) return;
+    loadBootstrap(userId)
+      .then((b) => setCourses(buildCourseList(b, getAllVideoProgressLocal())))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [userId]);
 
   const watchHours = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10)) / 10 : 0;
   const nextCourse = courses.filter((c) => c.progress > 0 && c.progress < 100).sort((a, b) => b.progress - a.progress)[0];
@@ -113,37 +105,37 @@ export default function Home() {
 
       {/* الدورات */}
       <section>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-extrabold">{t('home.myCourses')}</h2>
-          <Link to="/courses" className="text-sm font-bold text-fire-400 hover:text-fire-300">
-            {t('common.back')} ←
-          </Link>
-        </div>
-        {loading ? (
-          <p className="text-gray-400">{t('common.loading')}</p>
-        ) : courses.length === 0 ? (
-          <p className="text-gray-400">{t('home.noCourses')}</p>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {courses.map((c, i) => (
-              <motion.div key={c.id} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-                <Link to={`/courses/${c.id}`} className="card-fire card-fire-hover block rounded-2xl p-5">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-2xl">📚</span>
-                    {c.progress === 100 ? <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-bold text-emerald-300">✓ {t('course.completed')}</span> : null}
-                  </div>
-                  <h3 className="font-extrabold">{lang === 'ar' ? c.title : c.titleEn}</h3>
-                  <p className="mt-1 line-clamp-2 text-xs text-gray-400">{lang === 'ar' ? c.description : c.descriptionEn}</p>
-                  <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
-                    <span>{c.completedLessons}/{c.lessonCount} {t('course.lessons')}</span>
-                    <span>{c.progress}%</span>
-                  </div>
-                  <ProgressBar value={c.progress} showLabel={false} className="mt-1.5" />
-                </Link>
-              </motion.div>
-            ))}
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-xl font-extrabold">{t('home.myCourses')}</h2>
+            <Link to="/courses" className="text-sm font-bold text-fire-400 hover:text-fire-300">
+              {t('common.back')} ←
+            </Link>
           </div>
-        )}
+          {loading ? (
+            <p className="text-gray-400">{t('common.loading')}</p>
+          ) : courses.length === 0 ? (
+            <p className="text-gray-400">{t('home.noCourses')}</p>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {courses.map((c, i) => (
+                <motion.div key={c.id} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
+                  <Link to={`/courses/${c.id}`} className="card-fire card-fire-hover block rounded-2xl p-5">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-2xl">📚</span>
+                      {c.progress === 100 ? <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-bold text-emerald-300">✓ {t('course.completed')}</span> : null}
+                    </div>
+                    <h3 className="font-extrabold">{lang === 'ar' ? c.title : c.titleEn}</h3>
+                    <p className="mt-1 line-clamp-2 text-xs text-gray-400">{lang === 'ar' ? c.description : c.descriptionEn}</p>
+                    <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+                      <span>{c.completedLessons}/{c.lessonCount} {t('course.lessons')}</span>
+                      <span>{c.progress}%</span>
+                    </div>
+                    <ProgressBar value={c.progress} showLabel={false} className="mt-1.5" />
+                  </Link>
+                </motion.div>
+              ))}
+            </div>
+          )}
       </section>
     </div>
   );

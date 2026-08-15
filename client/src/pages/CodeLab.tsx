@@ -181,6 +181,9 @@ export default function CodeLab() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef('');
   const currentIdRef = useRef<number | null>(null);
+  // كاش محلي لكود كل ملف (يُحدَّث عند الفتح/الإنشاء/الحفظ) — يعتمد عليه تشغيل
+  // المعاينة HTML/CSS دون إعادة جلب من السيرفر مع كل ضغطة Run.
+  const fileCacheRef = useRef<Map<number, CodeFile>>(new Map());
 
   useEffect(() => {
     currentIdRef.current = current?.id ?? null;
@@ -220,6 +223,7 @@ export default function CodeLab() {
         });
         lastSaved.current = code;
         clearCodeDraft(current.id);
+        fileCacheRef.current.set(current.id, d.file);
         setFiles((prev) => prev.map((f) => (f.id === current.id ? { ...f, updatedAt: d.file.updatedAt } : f)));
         setCurrent((prev) => (prev && prev.id === current.id ? { ...prev, versions: d.file.versions, updatedAt: d.file.updatedAt } : prev));
         setSaved(true);
@@ -238,6 +242,7 @@ export default function CodeLab() {
     try {
       const d = await api<{ file: CodeFile }>(`/api/code/${id}`);
       const localDraft = getCodeDraft(id);
+      fileCacheRef.current.set(id, d.file);
       setCurrent(d.file);
       setCode(localDraft ?? d.file.code);
       lastSaved.current = d.file.code;
@@ -255,6 +260,7 @@ export default function CodeLab() {
       });
       setNewName('');
       setCreating(false);
+      fileCacheRef.current.set(d.file.id, d.file);
       await loadFiles();
       setCurrent(d.file);
       setCode('');
@@ -269,6 +275,7 @@ export default function CodeLab() {
     try {
       await api(`/api/code/${id}`, { method: 'DELETE' });
       clearCodeDraft(id);
+      fileCacheRef.current.delete(id);
       if (current?.id === id) {
         setCurrent(null);
         setCode('');
@@ -286,6 +293,7 @@ export default function CodeLab() {
         method: 'PATCH',
         body: JSON.stringify(patch),
       });
+      fileCacheRef.current.set(current.id, d.file);
       setCurrent(d.file);
       await loadFiles();
     } catch (e) {
@@ -303,6 +311,7 @@ export default function CodeLab() {
         method: 'PUT',
         body: JSON.stringify({ code: v.code }),
       });
+      fileCacheRef.current.set(current.id, d.file);
       setCurrent(d.file);
     } catch (e) {
       setError((e as Error).message);
@@ -319,17 +328,25 @@ export default function CodeLab() {
     setOutput('');
     try {
       if (current.language === 'html' || current.language === 'css') {
-        const fetched = await Promise.all(
-          files.map(async (f) => {
-            try {
-              const d = await api<{ file: CodeFile }>(`/api/code/${f.id}`);
-              return d.file;
-            } catch {
-              return null;
-            }
-          })
-        );
-        const allFiles = fetched.filter((f): f is CodeFile => f !== null);
+        // جلب كود الملفات غير الموجود في الكاش المحلي فقط (مرة واحدة لكل ملف)
+        const missing = files.filter((f) => !fileCacheRef.current.has(f.id));
+        if (missing.length) {
+          const fetched = await Promise.all(
+            missing.map(async (f) => {
+              try {
+                const d = await api<{ file: CodeFile }>(`/api/code/${f.id}`);
+                fileCacheRef.current.set(f.id, d.file);
+                return d.file;
+              } catch {
+                return null;
+              }
+            })
+          );
+          fetched.filter((f): f is CodeFile => f !== null).forEach((f) => fileCacheRef.current.set(f.id, f));
+        }
+        const allFiles = files
+          .map((f) => fileCacheRef.current.get(f.id))
+          .filter((f): f is CodeFile => !!f);
         // نستخدم الكود الحي الحالي للملف الشغّال بدل النسخة المحفوظة فقط
         const refs = allFiles.map((f) => (f.id === current.id ? { ...f, code } : f));
         if (current.language === 'html') {

@@ -1,39 +1,22 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
+import { loadBootstrap, buildLessonDetail, type LessonDetailData } from '../lib/content';
+import { getVideoProgressLocal, setVideoProgressLocal, clearVideoProgressLocal } from '../lib/localStore';
 import VideoPlayer from '../components/VideoPlayer';
 import ProgressBar from '../components/ProgressBar';
-import { getVideoProgressLocal, setVideoProgressLocal, clearVideoProgressLocal } from '../lib/localStore';
-
-interface LessonData {
-  lesson: {
-    id: number;
-    courseId: number;
-    title: string;
-    titleEn: string;
-    description: string;
-    videoType: 'youtube' | 'upload';
-    videoUrl: string;
-    duration: number;
-    watchedSeconds: number;
-    completed: boolean;
-    progressPct: number;
-  };
-  lessons: { id: number; title: string; titleEn: string }[];
-}
 
 export default function LessonPlayer() {
   const { id } = useParams();
   const { t, lang } = useLang();
   const navigate = useNavigate();
-  const [data, setData] = useState<LessonData | null>(null);
+  const { user } = useAuth();
+  const [data, setData] = useState<LessonDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [duration, setDuration] = useState(0);
   const [completed, setCompleted] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const lastReport = useRef(0);
   const lessonId = id ? Number(id) : null;
   const [localSeconds, setLocalSeconds] = useState(() => {
     const p = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
@@ -43,48 +26,47 @@ export default function LessonPlayer() {
     const p = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
     return p?.seconds ?? 0;
   });
+  const userId = user?.id;
 
   useEffect(() => {
-    api<{ lesson: any; lessons: { id: number; title: string; titleEn: string }[] }>(`/api/lesson/${id}`)
-      .then((d) => {
-        setData({ lesson: d.lesson, lessons: d.lessons });
-        setDuration(d.lesson.duration || 0);
-        setCompleted(!!d.lesson.completed);
-        const local = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
-        if (local) {
-          setLocalSeconds((s) => Math.max(s, local.seconds));
-          if (!d.lesson.completed) setResumeAt(Math.max(local.seconds, resumeAt));
+    if (!lessonId || !userId) return;
+    let active = true;
+    setLoading(true);
+    loadBootstrap(userId)
+      .then((b) => {
+        if (!active) return;
+        const d = buildLessonDetail(b, lessonId);
+        if (d) {
+          setData(d);
+          setDuration(d.lesson.duration || 0);
+          setCompleted(!!d.lesson.completed);
+          const local = getVideoProgressLocal(lessonId);
+          if (local) {
+            setLocalSeconds((s) => Math.max(s, local.seconds));
+            if (!d.lesson.completed) setResumeAt(Math.max(local.seconds, resumeAt));
+          }
+        } else {
+          setData(null);
         }
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .catch(() => setData(null))
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, userId]);
 
   const reportProgress = (seconds: number) => {
     if (!lessonId || seconds <= 0) return;
     setLocalSeconds((s) => Math.max(s, seconds));
     setVideoProgressLocal(lessonId, seconds, duration);
-    if (seconds >= duration && duration > 0) {
+    if (duration > 0 && seconds >= duration * 0.9) {
       setCompleted(true);
       clearVideoProgressLocal(lessonId);
     }
-    if (seconds - lastReport.current < 5 && seconds > 0) return;
-    lastReport.current = seconds;
-    api('/api/progress/watch', {
-      method: 'POST',
-      body: JSON.stringify({ lessonId, seconds }),
-    })
-      .then((res: any) => {
-        setSaved(true);
-        if (res.completed) {
-          setCompleted(true);
-          clearVideoProgressLocal(lessonId);
-        }
-        if (res.duration) setDuration(res.duration);
-      })
-      .catch(() => {});
-    setTimeout(() => setSaved(false), 2500);
   };
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
@@ -124,7 +106,6 @@ export default function LessonPlayer() {
             <ProgressBar value={completed ? 100 : pct} showLabel={false} />
           </div>
           <div className="flex items-center gap-3">
-            {saved && <span className="text-xs font-bold text-emerald-400">✓ {t('code.saved')}</span>}
             {completed ? (
               <span className="rounded-full bg-emerald-500/20 px-3 py-1.5 text-sm font-bold text-emerald-300">🎉 {t('lessonPage.completed')}</span>
             ) : (

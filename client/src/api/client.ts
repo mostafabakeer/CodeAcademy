@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { SUPABASE_URL } from '../config';
 
 const TOKEN_KEY = 'dr_code_token';
 let memoryToken: string | null = null;
@@ -61,37 +61,47 @@ function normalizeBody(body: unknown): InvokeBody {
   return body as InvokeBody;
 }
 
-async function errorMessage(context: unknown, status: number): Promise<string> {
-  if (context && typeof (context as { text?: () => Promise<string> }).text === 'function') {
-    try {
-      const raw = await (context as { text: () => Promise<string> }).text();
-      const parsed = JSON.parse(raw) as { error?: string };
-      if (parsed?.error) return parsed.error;
-    } catch {
-      /* ignore */
-    }
+async function errorMessage(res: Response): Promise<string> {
+  try {
+    const parsed = (await res.json()) as { error?: string };
+    if (parsed?.error) return parsed.error;
+  } catch {
+    /* ignore */
   }
-  return status >= 500 ? 'تعذر الاتصال بالخادم، حاول مجدداً' : `Request failed (${status})`;
+  return res.status >= 500 ? 'تعذر الاتصال بالخادم، حاول مجدداً' : `Request failed (${res.status})`;
 }
 
 export async function api<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, headers } = options;
   const route = path.startsWith('/api') ? path.slice(4) || '/' : path || '/';
 
-  const invokeHeaders: Record<string, string> = { 'x-path': route, ...headers };
+  const requestHeaders: Record<string, string> = { 'x-path': route, ...headers };
   const token = getToken();
-  if (token) invokeHeaders.Authorization = `Bearer ${token}`;
+  if (token) requestHeaders.Authorization = `Bearer ${token}`;
 
-  const { data, error, response } = await supabase.functions.invoke<T>('api', {
+  let payload: BodyInit | undefined;
+  if (body !== undefined) {
+    const normalized = normalizeBody(body);
+    if (typeof normalized === 'string') {
+      payload = normalized;
+    } else if (normalized instanceof Blob || normalized instanceof FormData || normalized instanceof ArrayBuffer) {
+      payload = normalized;
+    } else {
+      requestHeaders['Content-Type'] = 'application/json';
+      payload = JSON.stringify(normalized);
+    }
+  }
+
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/api`, {
     method,
-    headers: invokeHeaders,
-    body: body === undefined ? undefined : normalizeBody(body),
+    headers: requestHeaders,
+    credentials: 'include',
+    body: payload,
   });
 
-  if (error) {
-    const err = error as { context?: Response } & { status?: number };
-    const status = err?.context?.status ?? response?.status ?? 500;
-    throw new ApiError(await errorMessage(err?.context ?? response, status), status);
+  if (!res.ok) {
+    throw new ApiError(await errorMessage(res), res.status);
   }
-  return data as T;
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
 }

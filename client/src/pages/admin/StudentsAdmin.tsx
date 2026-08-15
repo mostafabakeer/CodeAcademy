@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
 import Modal from '../../components/Modal';
 import LevelBadge from '../../components/LevelBadge';
 import ProgressBar from '../../components/ProgressBar';
+
+const PAGE_SIZE = 25;
+const CACHE_KEY = 'dr_admin_students_cache';
+const CACHE_TTL = 5 * 60 * 1000;
 
 interface Student {
   id: number;
@@ -32,11 +36,12 @@ interface Detail {
   codeFiles: { id: number; name: string; language: string; updatedAt: number }[];
 }
 
-type Filter = 'all' | 'subscribed' | 'blocked';
+type Filter = 'all' | 'subscribed' | 'unsubscribed' | 'blocked';
 
 const FILTERS: { key: Filter; tKey: string }[] = [
   { key: 'all', tKey: 'admin.filterAll' },
   { key: 'subscribed', tKey: 'admin.filterSubscribed' },
+  { key: 'unsubscribed', tKey: 'admin.filterUnsubscribed' },
   { key: 'blocked', tKey: 'admin.filterBlocked' },
 ];
 
@@ -46,88 +51,190 @@ const GRADES = [
   { key: 'bac2', tKey: 'auth.bac2' },
 ];
 
+function readCache(): Student[] | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.users) || typeof parsed?.at !== 'number') return null;
+    if (Date.now() - parsed.at > CACHE_TTL) return null;
+    return parsed.users as Student[];
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(users: Student[]): void {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), users }));
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function StudentsAdmin() {
   const { t } = useLang();
-  const [students, setStudents] = useState<Student[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [allUsers, setAllUsers] = useState<Student[]>(() => readCache() ?? []);
+  const [loading, setLoading] = useState(allUsers.length === 0);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [grade, setGrade] = useState('all');
+  const [page, setPage] = useState(1);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
 
-  const load = () => {
-    api<{ users: Student[] }>('/api/admin/users')
-      .then((d) => setStudents(d.users))
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 400);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    const cached = readCache();
+    if (cached) {
+      setAllUsers(cached);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    api<{ users: Student[] }>('/api/admin/users/all')
+      .then((d) => {
+        if (cancelled) return;
+        setAllUsers(d.users);
+        writeCache(d.users);
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const counts = useMemo(() => {
+    const gradeMatch = grade === 'all' ? allUsers : allUsers.filter((s) => s.grade === grade);
+    return {
+      all: gradeMatch.length,
+      subscribed: gradeMatch.filter((s) => s.role === 'student' && s.subscription).length,
+      unsubscribed: gradeMatch.filter((s) => s.role === 'student' && !s.subscription).length,
+      blocked: gradeMatch.filter((s) => s.blocked).length,
+    };
+  }, [allUsers, grade]);
+
+  const filtered = useMemo(() => {
+    const q = debouncedQuery.trim().toLowerCase();
+    return allUsers.filter((s) => {
+      if (grade !== 'all' && s.grade !== grade) return false;
+      if (filter === 'subscribed' && !(s.role === 'student' && s.subscription)) return false;
+      if (filter === 'unsubscribed' && !(s.role === 'student' && !s.subscription)) return false;
+      if (filter === 'blocked' && !s.blocked) return false;
+      if (q) {
+        const name = (s.fullName || '').toLowerCase();
+        const phone = (s.phone || '').toLowerCase();
+        if (!name.includes(q) && !phone.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allUsers, filter, grade, debouncedQuery]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paged = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const refresh = () => {
+    setLoading(true);
+    setError('');
+    api<{ users: Student[] }>('/api/admin/users/all')
+      .then((d) => {
+        setAllUsers(d.users);
+        writeCache(d.users);
+      })
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
-    load();
-  }, []);
+  const patchStudent = (id: number, patch: Partial<Student>) => {
+    setAllUsers((prev) => {
+      const next = prev.map((s) => (s.id === id ? { ...s, ...patch } : s));
+      writeCache(next);
+      return next;
+    });
+  };
 
-  const toggleRole = async (id: number, role: string) => {
+  const run = async (id: number, action: string, fn: () => Promise<unknown>, onOk?: () => void) => {
+    const key = `${id}:${action}`;
+    if (busy[key]) return;
+    setBusy((b) => ({ ...b, [key]: true }));
     try {
-      await api(`/api/admin/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
-      load();
+      await fn();
+      onOk?.();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy((b) => ({ ...b, [key]: false }));
     }
   };
 
-  const toggleBlock = async (id: number, blocked: boolean) => {
-    try {
-      await api(`/api/admin/users/${id}/block`, { method: 'PUT', body: JSON.stringify({ blocked }) });
-      load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
+  const toggleRole = (s: Student) =>
+    run(s.id, 'role', () => api(`/api/admin/users/${s.id}/role`, { method: 'PUT', body: JSON.stringify({ role: s.role === 'admin' ? 'student' : 'admin' }) }), () => {
+      patchStudent(s.id, { role: s.role === 'admin' ? 'student' : 'admin' });
+    });
 
-  const toggleSubscription = async (id: number, subscription: boolean) => {
-    try {
-      await api(`/api/admin/users/${id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription }) });
-      load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
+  const toggleBlock = (s: Student) =>
+    run(s.id, 'block', () => api(`/api/admin/users/${s.id}/block`, { method: 'PUT', body: JSON.stringify({ blocked: !s.blocked }) }), () => {
+      patchStudent(s.id, { blocked: !s.blocked });
+    });
 
-  const deleteStudent = async (s: Student) => {
+  const toggleSubscription = (s: Student) =>
+    run(s.id, 'sub', () => api(`/api/admin/users/${s.id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription: !s.subscription }) }), () => {
+      patchStudent(s.id, { subscription: !s.subscription });
+    });
+
+  const deleteStudent = (s: Student) => {
     if (!window.confirm(t('admin.deleteAccountConfirm'))) return;
-    try {
+    run(s.id, 'delete', async () => {
       await api(`/api/admin/users/${s.id}`, { method: 'DELETE' });
+    }, () => {
+      setAllUsers((prev) => {
+        const next = prev.filter((x) => x.id !== s.id);
+        writeCache(next);
+        return next;
+      });
       if (detail?.user?.id === s.id) setDetail(null);
-      load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    });
   };
 
-  const openDetail = async (id: number) => {
-    try {
+  const openDetail = (id: number) =>
+    run(id, 'detail', async () => {
       const d = await api<Detail>(`/api/admin/users/${id}`);
       setDetail(d);
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    });
+
+  const changeQuery = (v: string) => {
+    setQuery(v);
+    setPage(1);
   };
 
-  const q = query.trim().toLowerCase();
-  const filtered = students.filter((s) => {
-    if (filter === 'subscribed') {
-      if (!(s.subscription && s.role === 'student')) return false;
-    } else if (filter === 'blocked') {
-      if (!s.blocked) return false;
-    }
-    if (grade !== 'all' && s.grade !== grade) return false;
-    if (q) {
-      const hay = `${s.fullName} ${s.phone}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  const changeGrade = (v: string) => {
+    setGrade(v);
+    setPage(1);
+  };
+
+  const changeFilter = (k: Filter) => {
+    setFilter(k);
+    setPage(1);
+  };
+
+  const isBusy = (id: number, action: string) => !!busy[`${id}:${action}`];
 
   const statusBadge = (s: Student) => {
     if (s.blocked)
@@ -142,18 +249,29 @@ export default function StudentsAdmin() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-black">
           👨‍🎓 {t('admin.studentsList')}{' '}
-          <span className="text-base font-bold text-fire-400">({students.length})</span>
+          <span className="text-base font-bold text-fire-400">({filtered.length})</span>
         </h1>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={refresh}
+            disabled={loading}
+            className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loading ? <Spinner /> : '🔄'}
+            {t('admin.refresh')}
+          </button>
           {FILTERS.map((f) => (
             <button
               key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
+              onClick={() => changeFilter(f.key)}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
                 filter === f.key ? 'bg-fire-500/20 text-fire-300 ring-1 ring-fire-500/40' : 'bg-ink-800 text-gray-400 hover:text-white'
               }`}
             >
               {t(f.tKey)}
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${filter === f.key ? 'bg-fire-500/30 text-fire-100' : 'bg-ink-700 text-gray-300'}`}>
+                {counts[f.key]}
+              </span>
             </button>
           ))}
         </div>
@@ -165,14 +283,14 @@ export default function StudentsAdmin() {
           <input
             type="search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => changeQuery(e.target.value)}
             placeholder={t('admin.searchStudents')}
             className="input-fire w-full rounded-xl py-2.5 pe-10 ps-10 text-sm"
           />
         </div>
         <select
           value={grade}
-          onChange={(e) => setGrade(e.target.value)}
+          onChange={(e) => changeGrade(e.target.value)}
           className="input-fire rounded-xl px-3.5 py-2.5 text-sm"
         >
           {GRADES.map((g) => (
@@ -182,15 +300,25 @@ export default function StudentsAdmin() {
           ))}
         </select>
         <span className="rounded-full bg-ink-800 px-3.5 py-1.5 text-xs font-bold text-fire-300">
-          {t('admin.resultsCount', { count: filtered.length, total: students.length })}
+          {t('admin.resultsCount', { count: paged.length, total: filtered.length })}
         </span>
       </div>
 
+      {loading && allUsers.length > 0 && (
+        <div className="flex items-center justify-center gap-2 py-1 text-sm text-gray-400">
+          <Spinner className="h-4 w-4 text-fire-400" />
+          <span>{t('common.loading')}</span>
+        </div>
+      )}
+
       {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
 
-      {loading ? (
-        <p className="text-gray-400">{t('common.loading')}</p>
-      ) : filtered.length === 0 ? (
+      {loading && allUsers.length === 0 ? (
+        <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
+          <Spinner className="h-8 w-8 border-[3px] text-fire-400" />
+          <span>{t('common.loading')}</span>
+        </div>
+      ) : paged.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noStudents')}</p>
       ) : (
         <div className="card-fire overflow-x-auto rounded-2xl">
@@ -208,7 +336,7 @@ export default function StudentsAdmin() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s, i) => (
+              {paged.map((s, i) => (
                 <motion.tr key={s.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }} className="border-b border-ink-800 hover:bg-ink-850">
                   <td className="px-4 py-3 font-bold">{s.fullName}</td>
                   <td className="px-4 py-3" dir="ltr">{s.phone}</td>
@@ -235,29 +363,45 @@ export default function StudentsAdmin() {
                       {s.role === 'student' && (
                         <>
                           <button
-                            onClick={() => toggleSubscription(s.id, !s.subscription)}
-                            className={`rounded-lg px-2.5 py-1 text-xs font-bold ${s.subscription ? 'border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+                            onClick={() => toggleSubscription(s)}
+                            disabled={isBusy(s.id, 'sub')}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60 ${s.subscription ? 'border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
                           >
+                            {isBusy(s.id, 'sub') ? <Spinner /> : null}
                             {s.subscription ? t('admin.disableSub') : t('admin.enableSub')}
                           </button>
                           <button
-                            onClick={() => toggleBlock(s.id, !s.blocked)}
-                            className={`rounded-lg px-2.5 py-1 text-xs font-bold ${s.blocked ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' : 'bg-fire-500/20 text-fire-300 hover:bg-fire-500/30'}`}
+                            onClick={() => toggleBlock(s)}
+                            disabled={isBusy(s.id, 'block')}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60 ${s.blocked ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' : 'bg-fire-500/20 text-fire-300 hover:bg-fire-500/30'}`}
                           >
+                            {isBusy(s.id, 'block') ? <Spinner /> : null}
                             {s.blocked ? t('admin.unblock') : t('admin.block')}
                           </button>
                           <button
                             onClick={() => deleteStudent(s)}
-                            className="rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30"
+                            disabled={isBusy(s.id, 'delete')}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            🗑 {t('admin.deleteAccount')}
+                            {isBusy(s.id, 'delete') ? <Spinner /> : '🗑'}
+                            {t('admin.deleteAccount')}
                           </button>
                         </>
                       )}
-                      <button onClick={() => toggleRole(s.id, s.role === 'admin' ? 'student' : 'admin')} className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/20">
+                      <button
+                        onClick={() => toggleRole(s)}
+                        disabled={isBusy(s.id, 'role')}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isBusy(s.id, 'role') ? <Spinner /> : null}
                         {s.role === 'admin' ? t('admin.makeStudent') : t('admin.makeAdmin')} ⇄
                       </button>
-                      <button onClick={() => openDetail(s.id)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                      <button
+                        onClick={() => openDetail(s.id)}
+                        disabled={isBusy(s.id, 'detail')}
+                        className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isBusy(s.id, 'detail') ? <Spinner /> : null}
                         {t('admin.details')}
                       </button>
                     </div>
@@ -266,6 +410,28 @@ export default function StudentsAdmin() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm text-gray-400">{t('admin.pageInfo', { page, totalPages })}</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('admin.pagePrev')}
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('admin.pageNext')}
+            </button>
+          </div>
         </div>
       )}
 
@@ -313,6 +479,15 @@ export default function StudentsAdmin() {
         )}
       </Modal>
     </div>
+  );
+}
+
+function Spinner({ className = '' }: { className?: string }) {
+  return (
+    <span
+      className={`inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent ${className}`}
+      aria-hidden="true"
+    />
   );
 }
 

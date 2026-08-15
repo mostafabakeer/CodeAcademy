@@ -1,6 +1,6 @@
 import { sb } from './supabase.ts';
 import { tierByPoints, DEFAULT_LEVELS, type LevelTier } from './levels.ts';
-import { gradeAllowed } from './access.ts';
+import { GRADES, gradeAllowed } from './access.ts';
 
 /* =================== عام =================== */
 
@@ -86,6 +86,16 @@ export async function findUserById(id: number): Promise<DbUser | null> {
   return data ? userFromRow(data) : null;
 }
 
+/** جلب سريع لأعمدة المصادقة فقط (يُستخدم في الـ middleware لكل طلب بدلاً من جلب كل الصف). */
+export async function findAuthUserById(id: number): Promise<DbUser | null> {
+  const { data } = await sb
+    .from('users')
+    .select('id, role, full_name, username, phone, grade, blocked, subscription')
+    .eq('id', id)
+    .maybeSingle();
+  return data ? userFromRow(data) : null;
+}
+
 /** صيغ محتملة لنفس الرقم في القاعدة (تُستخدم مع فهرس phone الفريد بدلاً من مسح الجدول). */
 function phoneCandidates(norm: string): string[] {
   const c = new Set<string>();
@@ -142,7 +152,15 @@ export async function updateUser(id: number, patch: Partial<Omit<DbUser, 'id'>>)
   return data ? userFromRow(data) : null;
 }
 
-export async function listUsers(params: { page?: number; limit?: number; search?: string } = {}): Promise<{ users: SafeUser[]; total: number; page: number; limit: number }> {
+export async function listUsers(params: {
+  page?: number;
+  limit?: number;
+  search?: string;
+  role?: string;
+  grade?: string;
+  subscription?: boolean;
+  blocked?: boolean;
+} = {}): Promise<{ users: SafeUser[]; total: number; page: number; limit: number; counts: { all: number; subscribed: number; unsubscribed: number; blocked: number } }> {
   const page = Math.max(1, Number(params.page) || 1);
   const limit = Math.min(200, Math.max(1, Number(params.limit) || 50));
   const search = params.search?.trim() ?? '';
@@ -153,16 +171,44 @@ export async function listUsers(params: { page?: number; limit?: number; search?
     const like = `%${safe}%`;
     query = query.or(`full_name.ilike.${like},phone.ilike.${like},username.ilike.${like}`) as any;
   }
+  if (params.role) query = query.eq('role', params.role);
+  if (params.grade) query = query.eq('grade', params.grade);
+  if (params.subscription !== undefined) query = query.eq('subscription', params.subscription);
+  if (params.blocked !== undefined) query = query.eq('blocked', params.blocked);
   const from = (page - 1) * limit;
   const to = from + limit - 1;
   const { data, count } = await query.order('id', { ascending: true }).range(from, to);
+
+  const [countAll, subscribedCount, unsubscribedCount, blockedCount] = await Promise.all([
+    countUsersFiltered({ search, grade: params.grade }),
+    countUsersFiltered({ search, grade: params.grade, role: 'student', subscription: true }),
+    countUsersFiltered({ search, grade: params.grade, role: 'student', subscription: false }),
+    countUsersFiltered({ search, grade: params.grade, blocked: true }),
+  ]);
 
   return {
     users: (data ?? []).map((r) => safeUser(userFromRow(r))),
     total: count ?? 0,
     page,
     limit,
+    counts: { all: countAll, subscribed: subscribedCount, unsubscribed: unsubscribedCount, blocked: blockedCount },
   };
+}
+
+async function countUsersFiltered(opts: { search?: string; grade?: string; role?: string; subscription?: boolean; blocked?: boolean }): Promise<number> {
+  const search = opts.search?.trim() ?? '';
+  let q = sb.from('users').select('id', { count: 'exact', head: true });
+  if (search) {
+    const safe = search.replace(/[(),*.]/g, '');
+    const like = `%${safe}%`;
+    q = q.or(`full_name.ilike.${like},phone.ilike.${like},username.ilike.${like}`) as any;
+  }
+  if (opts.role) q = q.eq('role', opts.role);
+  if (opts.grade) q = q.eq('grade', opts.grade);
+  if (opts.subscription !== undefined) q = q.eq('subscription', opts.subscription);
+  if (opts.blocked !== undefined) q = q.eq('blocked', opts.blocked);
+  const { count } = await q;
+  return count ?? 0;
 }
 
 export async function listAllUsers(): Promise<DbUser[]> {
@@ -172,12 +218,17 @@ export async function listAllUsers(): Promise<DbUser[]> {
 
 /** حذف حساب طالب نهائياً مع كل بياناته المرتبطة (التقدم، نتائج الامتحانات، ملفات الكود). */
 export async function deleteUser(id: number): Promise<void> {
-  await Promise.all([
+  const results = await Promise.all([
     sb.from('progress').delete().eq('user_id', id),
     sb.from('exam_results').delete().eq('user_id', id),
     sb.from('code_files').delete().eq('user_id', id),
   ]);
-  await sb.from('users').delete().eq('id', id);
+  const firstError = results.find((r) => r.error)?.error;
+  if (firstError) throw new Error(`فشل حذف بيانات الطالب: ${firstError.message}`);
+
+  const { data, error } = await sb.from('users').delete().eq('id', id).select('id');
+  if (error) throw new Error(`فشل حذف حساب الطالب: ${error.message}`);
+  if (!data || data.length === 0) throw new Error('الطالب غير موجود للحذف');
 }
 
 /* =================== الكورسات =================== */
@@ -625,31 +676,6 @@ export async function listProgressByUser(userId: number): Promise<Progress[]> {
   return (data ?? []).map(progressFromRow);
 }
 
-export interface WatchOutcome {
-  progress: Progress;
-  completed: boolean;
-  duration: number;
-}
-
-/**
- * تحديث مدة المشاهدة لدرس: يحسب completed عند 90% من المدة.
- * يعيد null لو الدرس غير موجود.
- */
-export async function upsertWatch(userId: number, lessonId: number, seconds: number): Promise<WatchOutcome | null> {
-  const lesson = await findLessonById(lessonId);
-  if (!lesson) return null;
-
-  const existing = (await getProgress(userId, lessonId)) ?? { userId, lessonId, secondsWatched: 0, completed: false, updatedAt: 0 };
-  const duration = Number(lesson.duration) || 0;
-  const watched = Math.max(existing.secondsWatched || 0, Math.min(Number(seconds), duration));
-  const completed = duration > 0 ? watched >= duration * 0.9 : false;
-
-  const progress: Progress = { ...existing, secondsWatched: watched, completed, updatedAt: now() };
-  await sb.from('progress').upsert(progressToRow(progress), { onConflict: 'user_id,lesson_id' });
-
-  return { progress, completed, duration };
-}
-
 /* =================== نتائج الامتحانات =================== */
 
 export interface ExamResult {
@@ -709,6 +735,22 @@ export async function listResultsByUser(userId: number): Promise<ExamResult[]> {
   return (data ?? []).map(resultFromRow);
 }
 
+/** خلاصة النتائج فقط (بلا الإجابات/السجل) — تكفي لصفحات المستخدم والمستوى. */
+export async function listResultSummariesByUser(userId: number): Promise<{ examId: number; best: number; score: number; correct: number; total: number; attempts: number }[]> {
+  const { data } = await sb
+    .from('exam_results')
+    .select('exam_id, best, score, correct, total, attempts')
+    .eq('user_id', userId);
+  return (data ?? []).map((r: any) => ({
+    examId: Number(r.exam_id),
+    best: Number(r.best) || 0,
+    score: Number(r.score) || 0,
+    correct: Number(r.correct) || 0,
+    total: Number(r.total) || 0,
+    attempts: Number(r.attempts) || 0,
+  }));
+}
+
 /* =================== ملفات الكود =================== */
 
 export interface CodeFile {
@@ -751,7 +793,11 @@ function codeToRow(f: Partial<CodeFile>): Record<string, any> {
 }
 
 export async function listCodeFilesByUser(userId: number): Promise<CodeFile[]> {
-  const { data } = await sb.from('code_files').select('*').eq('user_id', userId).order('updated_at', { ascending: false });
+  const { data } = await sb
+    .from('code_files')
+    .select('id, user_id, name, language, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false });
   return (data ?? []).map(codeFromRow);
 }
 
@@ -819,25 +865,46 @@ export async function deleteCodeFile(userId: number, id: number): Promise<void> 
 const LEVELS_KEY = 'levels';
 const SESSION_EPOCH_KEY = 'session_epoch';
 
+const SESSION_EPOCH_CACHE_TTL = 60_000;
+let sessionEpochCache: { at: number; value: number } | null = null;
+
+/** إبطال كاش الـ epoch فوراً بعد تغييرها من لوحة الأدمن. */
+export function invalidateSessionEpoch(): void {
+  sessionEpochCache = null;
+}
+
 /**
  * اللحظة التي يُعتبر أي توكن صُدِر قبلها باطلاً (مسح كل جلسات تسجيل الدخول).
- * 0 = غير مفعّل.
+ * تُخزَّن مؤقتاً 60 ثانية لتخفيف استعلام لكل طلب مصادقة.
  */
 export async function getSessionEpoch(): Promise<number> {
+  if (sessionEpochCache && Date.now() - sessionEpochCache.at < SESSION_EPOCH_CACHE_TTL) {
+    return sessionEpochCache.value;
+  }
   try {
     const { data } = await sb.from('app_config').select('value').eq('key', SESSION_EPOCH_KEY).maybeSingle();
     const v = (data?.value as any) ?? 0;
-    return typeof v === 'number' ? v : Number(v) || 0;
+    const value = typeof v === 'number' ? v : Number(v) || 0;
+    sessionEpochCache = { at: Date.now(), value };
+    return value;
   } catch (e) {
     console.error('[db] getSessionEpoch:', (e as Error).message);
     return 0;
   }
 }
 
+const LEVELS_CACHE_TTL = 60_000;
+let levelsCache: { at: number; tiers: LevelTier[] } | null = null;
+
 export async function getLevels(): Promise<{ tiers: LevelTier[] }> {
+  if (levelsCache && Date.now() - levelsCache.at < LEVELS_CACHE_TTL) {
+    return { tiers: levelsCache.tiers };
+  }
   const { data } = await sb.from('app_config').select('value').eq('key', LEVELS_KEY).maybeSingle();
   const tiers = (data?.value as any)?.tiers;
-  return { tiers: Array.isArray(tiers) && tiers.length ? tiers : DEFAULT_LEVELS };
+  const clean = Array.isArray(tiers) && tiers.length ? tiers : DEFAULT_LEVELS;
+  levelsCache = { at: Date.now(), tiers: clean };
+  return { tiers: clean };
 }
 
 export async function setLevels(tiers: LevelTier[]): Promise<{ tiers: LevelTier[] }> {
@@ -850,6 +917,7 @@ export async function setLevels(tiers: LevelTier[]): Promise<{ tiers: LevelTier[
     }))
     .sort((a, b) => a.min - b.min);
   await sb.from('app_config').upsert({ key: LEVELS_KEY, value: { tiers: clean } }, { onConflict: 'key' });
+  levelsCache = null;
   return { tiers: clean };
 }
 
@@ -927,6 +995,35 @@ export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<n
     getLevels(),
   ]);
 
+  // مجاميع تُحسب مرة واحدة لكل مرحلة بدلاً من التكرار على كل الدروس/الامتحانات لكل طالب
+  const lessonById = new Map<number, Lesson>();
+  let baseLessonCount = 0;
+  let baseDuration = 0;
+  let baseExams = 0;
+  const gradeLessonCount = new Map<string, number>();
+  const gradeDuration = new Map<string, number>();
+  const gradeExams = new Map<string, number>();
+  for (const g of Object.keys(GRADES)) {
+    gradeLessonCount.set(g, 0);
+    gradeDuration.set(g, 0);
+    gradeExams.set(g, 0);
+  }
+  for (const l of allLessons) {
+    lessonById.set(l.id, l);
+    const d = Number(l.duration) || 0;
+    if (!l.grade || l.grade === 'all') {
+      baseLessonCount++;
+      baseDuration += d;
+    } else if (gradeLessonCount.has(l.grade)) {
+      gradeLessonCount.set(l.grade, (gradeLessonCount.get(l.grade) ?? 0) + 1);
+      gradeDuration.set(l.grade, (gradeDuration.get(l.grade) ?? 0) + d);
+    }
+  }
+  for (const e of allExams) {
+    if (!e.grade || e.grade === 'all') baseExams++;
+    else if (gradeExams.has(e.grade)) gradeExams.set(e.grade, (gradeExams.get(e.grade) ?? 0) + 1);
+  }
+
   const progressByUser = new Map<number, Progress[]>();
   for (const p of (progressRows.data ?? []).map(progressFromRow)) {
     const arr = progressByUser.get(p.userId) ?? [];
@@ -946,17 +1043,18 @@ export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<n
     const studentGrade = String(u.grade ?? '');
     const scores = (resultsByUser.get(id) ?? []).map((r) => Number(r.best ?? r.score ?? 0)).filter((s) => !Number.isNaN(s));
     const examAvg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-    const totalExams = allExams.filter(({ grade }) => gradeAllowed(grade, studentGrade)).length;
-    const lessons = allLessons.filter(({ grade }) => gradeAllowed(grade, studentGrade));
-    const watchByLesson = new Map((progressByUser.get(id) ?? []).map((p) => [p.lessonId, Number(p.secondsWatched) || 0]));
 
-    let totalDuration = 0;
+    const totalLessons = baseLessonCount + (gradeLessonCount.get(studentGrade) ?? 0);
+    const totalDuration = baseDuration + (gradeDuration.get(studentGrade) ?? 0);
+    const totalExams = baseExams + (gradeExams.get(studentGrade) ?? 0);
+
     let totalWatched = 0;
     let completed = 0;
-    for (const lesson of lessons) {
+    for (const p of progressByUser.get(id) ?? []) {
+      const lesson = lessonById.get(p.lessonId);
+      if (!lesson || !gradeAllowed(lesson.grade, studentGrade)) continue;
       const d = Number(lesson.duration) || 0;
-      totalDuration += d;
-      const w = Math.min(watchByLesson.get(lesson.id) ?? 0, d);
+      const w = Math.min(Number(p.secondsWatched) || 0, d);
       totalWatched += w;
       if (d > 0 && w >= d * 0.9) completed++;
     }
@@ -970,7 +1068,7 @@ export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<n
       points,
       level: tierByPoints(points, tiers),
       completedLessons: completed,
-      totalLessons: lessons.length,
+      totalLessons,
       examsTaken: scores.length,
       totalExams,
     });
@@ -1043,6 +1141,7 @@ export async function submitExam(userId: number, exam: Exam, answers: Record<str
 export async function adminStats(): Promise<{
   students: number;
   admins: number;
+  subscribed: number;
   courses: number;
   lessons: number;
   exams: number;
@@ -1060,6 +1159,7 @@ export async function adminStats(): Promise<{
   return {
     students: users.filter((u) => u.role === 'student').length,
     admins: users.filter((u) => u.role === 'admin').length,
+    subscribed: users.filter((u) => u.role === 'student' && u.subscription).length,
     courses: courses.length,
     lessons: lessons.length,
     exams: exams.length,

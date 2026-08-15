@@ -20,6 +20,9 @@ export const CORS_ORIGIN = env('CORS_ORIGIN');
 export const BUCKET_VIDEOS = env('BUCKET_VIDEOS', 'videos');
 export const BUCKET_IMAGES = env('BUCKET_IMAGES', 'images');
 export const BUCKET_BACKUPS = env('BUCKET_BACKUPS', 'backups');
+/** رقم تليفون حساب المدير الرئيسي (يُقارن بعد توحيد الصيغة في التسجيل).
+ *  غيابه يعني ألا يصبح أي مسجّل جديد admin تلقائياً (سلوك آمن افتراضياً). */
+export const ADMIN_PHONE = env('ADMIN_PHONE');
 
 export function supabaseUrl(): string {
   return env('SUPABASE_URL');
