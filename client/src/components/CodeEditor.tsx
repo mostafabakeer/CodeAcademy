@@ -44,7 +44,7 @@ export default function CodeEditor({ value, onChange, language, height = '60vh' 
         </div>
       }
     >
-      <div className="overflow-hidden rounded-xl border border-ink-600 shadow-inner">
+      <div style={{ height }} className="overflow-hidden rounded-xl border border-ink-600 shadow-inner">
         <ReactCodeMirror
           value={value}
           onChange={onChange}

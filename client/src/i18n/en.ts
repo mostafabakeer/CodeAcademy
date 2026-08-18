@@ -163,6 +163,7 @@ export const en: TranslationKeys = {
     outputEmpty: 'Press Run ▶ to see your code result here',
     pythonNotSupported: 'Sorry, Python code cannot be executed in the browser.',
     linkHint: 'Link your files: in an HTML file use e.g. <link rel="stylesheet" href="style.css"> and the CSS styles will apply automatically when running.',
+    fullPreview: 'Full Preview',
   },
   profile: {
     title: 'My Profile',
@@ -223,7 +224,8 @@ export const en: TranslationKeys = {
     youtube: 'YouTube link',
     upload: 'Upload video file',
     videoUrl: 'Video URL',
-    duration: 'Duration (seconds)',
+    duration: 'Duration (minutes)',
+    minutes: 'min',
     lessonDesc: 'Lesson description',
     selectCourse: 'Select course',
     examTitle: 'Exam name (Arabic)',

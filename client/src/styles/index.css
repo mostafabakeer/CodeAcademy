@@ -258,6 +258,12 @@ html[lang='en'] body {
   direction: ltr;
   text-align: left;
 }
+.cm-editor {
+  max-height: 70vh;
+}
+.cm-scroller {
+  overflow: auto;
+}
 
 /* شهادة التقدير */
 .certificate {

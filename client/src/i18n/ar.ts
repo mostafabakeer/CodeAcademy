@@ -161,6 +161,7 @@ export const ar = {
     outputEmpty: 'اضغط زر التشغيل ▶ لترى نتيجة كودك هنا',
     pythonNotSupported: 'عذراً، لا يمكن تنفيذ كود Python في المتصفح.',
     linkHint: 'اربط ملفاتك ببعض: في ملف HTML اكتب مثلاً <link rel="stylesheet" href="style.css"> وستظهر تنسيقات ملف CSS تلقائياً عند التشغيل.',
+    fullPreview: 'عرض كامل',
   },
   profile: {
     title: 'ملفي الشخصي',
@@ -221,7 +222,8 @@ export const ar = {
     youtube: 'رابط يوتيوب',
     upload: 'رفع ملف فيديو',
     videoUrl: 'رابط الفيديو',
-    duration: 'المدة (بالثواني)',
+    duration: 'المدة (بالدقائق)',
+    minutes: 'دقيقة',
     lessonDesc: 'وصف الدرس',
     selectCourse: 'اختر الكورس',
     examTitle: 'اسم الامتحان (عربي)',
