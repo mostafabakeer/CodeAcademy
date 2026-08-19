@@ -277,6 +277,14 @@ export async function listCourses(): Promise<Course[]> {
   return (data ?? []).map(courseFromRow);
 }
 
+export async function listCoursesByGrade(grade: string): Promise<Course[]> {
+  const { data } = await sb.from('courses')
+    .select('*')
+    .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
+    .order('order', { ascending: true });
+  return (data ?? []).map(courseFromRow);
+}
+
 export async function findCourseById(id: number): Promise<Course | null> {
   const { data } = await sb.from('courses').select('*').eq('id', id).maybeSingle();
   return data ? courseFromRow(data) : null;
@@ -353,6 +361,75 @@ export async function listAllLessons(): Promise<Lesson[]> {
   return (data ?? []).map(lessonFromRow);
 }
 
+export async function listLessonsByGrade(grade: string): Promise<Lesson[]> {
+  const { data } = await sb.from('lessons')
+    .select('*')
+    .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
+    .order('order', { ascending: true });
+  return (data ?? []).map(lessonFromRow);
+}
+
+export async function listLessonsByCourse(courseId: number): Promise<Lesson[]> {
+  const { data } = await sb.from('lessons').select('*').eq('course_id', courseId).order('order', { ascending: true });
+  return (data ?? []).map(lessonFromRow);
+}
+
+export async function listLessonsByCourseAndGrade(courseId: number, grade: string): Promise<Lesson[]> {
+  const { data } = await sb.from('lessons')
+    .select('*')
+    .eq('course_id', courseId)
+    .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
+    .order('order', { ascending: true });
+  return (data ?? []).map(lessonFromRow);
+}
+
+export async function listLessonStats(): Promise<{ courseId: number; count: number; duration: number }[]> {
+  const { data } = await sb.from('lessons').select('course_id, duration');
+  const map = new Map<number, { count: number; duration: number }>();
+  for (const r of data ?? []) {
+    const cid = Number(r.course_id);
+    const d = Number(r.duration) || 0;
+    const existing = map.get(cid) ?? { count: 0, duration: 0 };
+    existing.count++;
+    existing.duration += d;
+    map.set(cid, existing);
+  }
+  return [...map.entries()].map(([courseId, v]) => ({ courseId, ...v }));
+}
+
+export async function listLessonStatsForGrade(grade?: string): Promise<{ count: number; duration: number }> {
+  let query = sb.from('lessons').select('duration, grade');
+  if (grade && grade !== 'all') {
+    query = query.or(`grade.eq.all,grade.eq.${grade}`);
+  }
+  const { data } = await query;
+  let count = 0;
+  let duration = 0;
+  for (const r of data ?? []) {
+    count++;
+    duration += Number(r.duration) || 0;
+  }
+  return { count, duration };
+}
+
+export async function countLessonsByGrade(grade?: string): Promise<number> {
+  let query = sb.from('lessons').select('id', { count: 'exact', head: true });
+  if (grade && grade !== 'all') {
+    query = query.or(`grade.eq.all,grade.eq.${grade}`);
+  }
+  const { count } = await query;
+  return count ?? 0;
+}
+
+export async function listLessonIdsAndDurations(grade?: string): Promise<{ id: number; duration: number; grade: string }[]> {
+  let query = sb.from('lessons').select('id, duration, grade');
+  if (grade && grade !== 'all') {
+    query = query.or(`grade.eq.all,grade.eq.${grade}`);
+  }
+  const { data } = await query;
+  return (data ?? []).map((r) => ({ id: Number(r.id), duration: Number(r.duration) || 0, grade: String(r.grade ?? 'all') }));
+}
+
 export async function findLessonById(id: number): Promise<Lesson | null> {
   const { data } = await sb.from('lessons').select('*').eq('id', id).maybeSingle();
   return data ? lessonFromRow(data) : null;
@@ -421,6 +498,50 @@ function examToRow(e: Partial<Exam>): Record<string, any> {
 export async function listExams(): Promise<Exam[]> {
   const { data } = await sb.from('exams').select('*').order('order', { ascending: true });
   return (data ?? []).map(examFromRow);
+}
+
+export async function listExamsByGrade(grade: string): Promise<Exam[]> {
+  const { data } = await sb.from('exams')
+    .select('*')
+    .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
+    .order('order', { ascending: true });
+  return (data ?? []).map(examFromRow);
+}
+
+export async function countExamsByCourse(courseId: number): Promise<number> {
+  const { count } = await sb.from('exams').select('id', { count: 'exact', head: true }).eq('course_id', courseId);
+  return count ?? 0;
+}
+
+export async function countExamsByGrade(grade?: string): Promise<number> {
+  let query = sb.from('exams').select('id', { count: 'exact', head: true });
+  if (grade && grade !== 'all') {
+    query = query.or(`grade.eq.all,grade.eq.${grade}`);
+  }
+  const { count } = await query;
+  return count ?? 0;
+}
+
+export async function listExamsWithQuestionCounts(): Promise<(Exam & { questionsCount: number })[]> {
+  const exams = await listExams();
+  const { data: allQuestions } = await sb.from('questions').select('exam_id');
+  const qByExam = new Map<number, number>();
+  for (const q of allQuestions ?? []) {
+    const ex = Number(q.exam_id);
+    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
+  }
+  return exams.map((e) => ({ ...e, questionsCount: qByExam.get(e.id) ?? 0 }));
+}
+
+export async function listExamsByGradeWithQuestionCounts(grade: string): Promise<(Exam & { questionsCount: number })[]> {
+  const exams = await listExamsByGrade(grade);
+  const { data: allQuestions } = await sb.from('questions').select('exam_id');
+  const qByExam = new Map<number, number>();
+  for (const q of allQuestions ?? []) {
+    const ex = Number(q.exam_id);
+    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
+  }
+  return exams.map((e) => ({ ...e, questionsCount: qByExam.get(e.id) ?? 0 }));
 }
 
 export async function findExamById(id: number): Promise<Exam | null> {
@@ -554,6 +675,14 @@ function noteToRow(n: Partial<Note>): Record<string, any> {
 
 export async function listNotes(): Promise<Note[]> {
   const { data } = await sb.from('notes').select('*').order('order', { ascending: true });
+  return (data ?? []).map(noteFromRow);
+}
+
+export async function listNotesByGrade(grade: string): Promise<Note[]> {
+  const { data } = await sb.from('notes')
+    .select('*')
+    .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
+    .order('order', { ascending: true });
   return (data ?? []).map(noteFromRow);
 }
 
@@ -938,31 +1067,31 @@ export async function computeStudentStats(userId: number): Promise<StudentStats>
   const user = await findUserById(userId);
   const studentGrade = user?.grade;
 
-  const results = await listResultsByUser(userId);
+  const [results, progresses, lessonIds, totalExams, { tiers }] = await Promise.all([
+    listResultsByUser(userId),
+    listProgressByUser(userId),
+    listLessonIdsAndDurations(studentGrade),
+    countExamsByGrade(studentGrade),
+    getLevels(),
+  ]);
+
   const scores = results.map((r) => Number(r.best ?? r.score ?? 0)).filter((s) => !Number.isNaN(s));
   const examAvg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-  const allExams = await listExams();
-  const totalExams = allExams.filter(({ grade }) => gradeAllowed(grade, studentGrade)).length;
 
-  const lessons = (await listAllLessons()).filter(({ grade }) => gradeAllowed(grade, studentGrade));
-  const progresses = await listProgressByUser(userId);
   const watchByLesson = new Map(progresses.map((p) => [p.lessonId, Number(p.secondsWatched) || 0]));
 
   let totalDuration = 0;
   let totalWatched = 0;
   let completed = 0;
-  for (const lesson of lessons) {
-    const d = Number(lesson.duration) || 0;
-    totalDuration += d;
-    const w = Math.min(watchByLesson.get(lesson.id) ?? 0, d);
+  for (const lesson of lessonIds) {
+    totalDuration += lesson.duration;
+    const w = Math.min(watchByLesson.get(lesson.id) ?? 0, lesson.duration);
     totalWatched += w;
-    if (d > 0 && w >= d * 0.9) completed++;
+    if (lesson.duration > 0 && w >= lesson.duration * 0.9) completed++;
   }
 
   const watchRatio = totalDuration > 0 ? totalWatched / totalDuration : 0;
   const points = Math.min(100, Math.max(0, Math.round(examAvg * 0.6 + watchRatio * 100 * 0.4)));
-
-  const { tiers } = await getLevels();
   const level = tierByPoints(points, tiers);
 
   return {
@@ -971,7 +1100,7 @@ export async function computeStudentStats(userId: number): Promise<StudentStats>
     points,
     level,
     completedLessons: completed,
-    totalLessons: lessons.length,
+    totalLessons: lessonIds.length,
     examsTaken: scores.length,
     totalExams,
   };
@@ -1148,23 +1277,25 @@ export async function adminStats(): Promise<{
   notes: number;
   codeFiles: number;
 }> {
-  const [users, courses, lessons, exams, notes] = await Promise.all([
-    listAllUsers(),
-    listCourses(),
-    listAllLessons(),
-    listExams(),
-    listNotes(),
+  const [studentsCount, adminsCount, subscribedCount, coursesCount, lessonsCount, examsCount, notesCount, codeFilesCount] = await Promise.all([
+    sb.from('users').select('id', { count: 'exact', head: true }).eq('role', 'student'),
+    sb.from('users').select('id', { count: 'exact', head: true }).eq('role', 'admin'),
+    sb.from('users').select('id', { count: 'exact', head: true }).eq('role', 'student').eq('subscription', true),
+    sb.from('courses').select('id', { count: 'exact', head: true }),
+    sb.from('lessons').select('id', { count: 'exact', head: true }),
+    sb.from('exams').select('id', { count: 'exact', head: true }),
+    sb.from('notes').select('id', { count: 'exact', head: true }),
+    sb.from('code_files').select('id', { count: 'exact', head: true }),
   ]);
-  const { count } = await sb.from('code_files').select('id', { count: 'exact', head: true });
   return {
-    students: users.filter((u) => u.role === 'student').length,
-    admins: users.filter((u) => u.role === 'admin').length,
-    subscribed: users.filter((u) => u.role === 'student' && u.subscription).length,
-    courses: courses.length,
-    lessons: lessons.length,
-    exams: exams.length,
-    notes: notes.length,
-    codeFiles: count ?? 0,
+    students: studentsCount.count ?? 0,
+    admins: adminsCount.count ?? 0,
+    subscribed: subscribedCount.count ?? 0,
+    courses: coursesCount.count ?? 0,
+    lessons: lessonsCount.count ?? 0,
+    exams: examsCount.count ?? 0,
+    notes: notesCount.count ?? 0,
+    codeFiles: codeFilesCount.count ?? 0,
   };
 }
 
@@ -1187,7 +1318,7 @@ export const BACKUP_TABLES = [
 export async function exportAllToBackup(bucket: string): Promise<{ url: string; size: number; fileName: string }> {
   const { data: existing } = await sb.storage.getBucket(bucket);
   if (!existing) {
-    const { error: bucketError } = await sb.storage.createBucket(bucket, { public: true });
+    const { error: bucketError } = await sb.storage.createBucket(bucket, { public: false });
     if (bucketError) throw new Error(`فشل إنشاء bucket النسخ الاحتياطي: ${bucketError.message}`);
   }
 
@@ -1196,9 +1327,16 @@ export async function exportAllToBackup(bucket: string): Promise<{ url: string; 
     tables: {} as Record<string, any>,
   };
 
-  for (const table of BACKUP_TABLES) {
-    const { data } = await sb.from(table).select('*');
-    snapshot.tables[table] = data ?? [];
+  const tableQueries = BACKUP_TABLES.map((table) => {
+    if (table === 'users') {
+      return sb.from(table).select('id, full_name, phone, grade, role, subscription, blocked, created_at');
+    }
+    return sb.from(table).select('*');
+  });
+
+  const results = await Promise.all(tableQueries);
+  for (let i = 0; i < BACKUP_TABLES.length; i++) {
+    snapshot.tables[BACKUP_TABLES[i]] = results[i].data ?? [];
   }
 
   const json = JSON.stringify(snapshot, null, 2);
@@ -1216,22 +1354,32 @@ export async function cleanupData(): Promise<{ trimmedFiles: number; trimmedResu
   let trimmedFiles = 0;
   let trimmedResults = 0;
 
-  const { data: files } = await sb.from('code_files').select('*');
-  for (const f of files ?? []) {
+  const { data: files } = await sb.from('code_files').select('id, versions').limit(200);
+  const fileUpdates = (files ?? []).filter((f) => {
     const versions = Array.isArray(f.versions) ? f.versions : [];
-    if (versions.length > MAX_VERSIONS) {
-      await sb.from('code_files').update({ versions: versions.slice(-MAX_VERSIONS) }).eq('id', f.id);
-      trimmedFiles++;
-    }
+    return versions.length > MAX_VERSIONS;
+  });
+  if (fileUpdates.length) {
+    await Promise.all(
+      fileUpdates.map((f) =>
+        sb.from('code_files').update({ versions: (Array.isArray(f.versions) ? f.versions : []).slice(-MAX_VERSIONS) }).eq('id', f.id)
+      )
+    );
+    trimmedFiles = fileUpdates.length;
   }
 
-  const { data: results } = await sb.from('exam_results').select('*');
-  for (const r of results ?? []) {
+  const { data: results } = await sb.from('exam_results').select('user_id, exam_id, history').limit(200);
+  const resultUpdates = (results ?? []).filter((r) => {
     const history = Array.isArray(r.history) ? r.history : [];
-    if (history.length > MAX_HISTORY) {
-      await sb.from('exam_results').update({ history: history.slice(-MAX_HISTORY) }).eq('user_id', r.user_id).eq('exam_id', r.exam_id);
-      trimmedResults++;
-    }
+    return history.length > MAX_HISTORY;
+  });
+  if (resultUpdates.length) {
+    await Promise.all(
+      resultUpdates.map((r) =>
+        sb.from('exam_results').update({ history: (Array.isArray(r.history) ? r.history : []).slice(-MAX_HISTORY) }).eq('user_id', r.user_id).eq('exam_id', r.exam_id)
+      )
+    );
+    trimmedResults = resultUpdates.length;
   }
 
   return { trimmedFiles, trimmedResults };

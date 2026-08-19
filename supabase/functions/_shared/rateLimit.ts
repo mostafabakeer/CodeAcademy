@@ -85,3 +85,9 @@ export function registerAllowed(ip: string): boolean {
 export function recordRegister(ip: string): void {
   incr(`register-ip:${ip}`, REGISTER_MAX, REGISTER_WINDOW);
 }
+
+const GENERIC_WINDOW = 60 * 1000;
+
+export function genericRateLimit(key: string, max: number, windowMs: number = GENERIC_WINDOW): boolean {
+  return incr(key, max, windowMs);
+}

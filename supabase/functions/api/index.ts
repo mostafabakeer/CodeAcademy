@@ -2,7 +2,7 @@ import { Hono, type Context } from 'npm:hono@^4.6.3';
 import { cors } from 'npm:hono@^4.6.3/cors';
 import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES, BUCKET_BACKUPS, ADMIN_PHONE } from '../_shared/env.ts';
 import { sb } from '../_shared/supabase.ts';
-import { requireAuth, requireAdmin, requireSubscriber, signToken, authCookieHeader, clearAuthCookieHeader, type AuthUser } from '../_shared/auth.ts';
+import { requireAuth, requireAdmin, requireSubscriber, signToken, authCookieHeader, clearAuthCookieHeader, type AuthUser, invalidateUserCache } from '../_shared/auth.ts';
 import { hashPassword, verifyPassword } from '../_shared/password.ts';
 import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared/access.ts';
 import {
@@ -20,16 +20,25 @@ import {
   listUsers,
   listAllUsers,
   listCourses,
+  listCoursesByGrade,
   findCourseById,
   createCourse,
   updateCourse,
   deleteCourse,
   listAllLessons,
+  listLessonsByCourse,
+  listLessonsByCourseAndGrade,
+  listLessonsByGrade,
+  listLessonStats,
   findLessonById,
   createLesson,
   updateLesson,
   deleteLesson,
   listExams,
+  listExamsByGrade,
+  listExamsWithQuestionCounts,
+  listExamsByGradeWithQuestionCounts,
+  countExamsByCourse,
   findExamById,
   createExam,
   updateExam,
@@ -40,6 +49,7 @@ import {
   updateQuestion,
   deleteQuestion,
   listNotes,
+  listNotesByGrade,
   findNoteById,
   createNote,
   updateNote,
@@ -65,7 +75,7 @@ import {
   submitExam,
   normalizePhone,
 } from '../_shared/db.ts';
-import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister } from '../_shared/rateLimit.ts';
+import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
 
 const CODE_LANGUAGES = ['javascript', 'python', 'html', 'css'];
 const TOP_GRADES = ['bac1', 'bac2'];
@@ -221,27 +231,18 @@ app.post('/auth/logout', async (c) => {
  */
 app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  const [allCourses, allLessons, allExams, allNotes, topItems, levels] = await Promise.all([
-    listCourses(),
-    listAllLessons(),
-    listExams(),
-    listNotes(),
+  if (!genericRateLimit(`bootstrap:${reqUser.id}`, 5, 60_000)) {
+    return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
+  }
+  const isAdmin = reqUser.role === 'admin';
+  const [courses, lessons, exams, notes, topItems, levels] = await Promise.all([
+    isAdmin ? listCourses() : listCoursesByGrade(reqUser.grade),
+    isAdmin ? listAllLessons() : listLessonsByGrade(reqUser.grade),
+    isAdmin ? listExams() : listExamsByGrade(reqUser.grade),
+    isAdmin ? listNotes() : listNotesByGrade(reqUser.grade),
     listTopStudents(),
     getLevels(),
   ]);
-
-  const courses = allCourses
-    .filter((co) => contentVisible(reqUser.role, co.grade, reqUser.grade))
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const lessons = allLessons
-    .filter((l) => contentVisible(reqUser.role, l.grade, reqUser.grade))
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const exams = allExams
-    .filter((e) => contentVisible(reqUser.role, e.grade, reqUser.grade))
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const notes = allNotes
-    .filter((n) => contentVisible(reqUser.role, n.grade, reqUser.grade))
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
   const { data: allQuestions } = await sb.from('questions').select('exam_id');
   const qByExam = new Map<number, number>();
@@ -277,18 +278,20 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
 
 app.get('/courses', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  const allCourses = await listCourses();
-  const courses = allCourses.filter((co) => contentVisible(reqUser.role, co.grade, reqUser.grade));
-  const lessons = await listAllLessons();
+  const isAdmin = reqUser.role === 'admin';
+  const [courses, lessonStats] = await Promise.all([
+    isAdmin ? listCourses() : listCoursesByGrade(reqUser.grade),
+    listLessonStats(),
+  ]);
+  const statsMap = new Map(lessonStats.map((s) => [s.courseId, s]));
 
   const out = courses.map((course) => {
-    const courseLessons = lessons.filter((l) => l.courseId === course.id && contentVisible(reqUser.role, l.grade, reqUser.grade));
-    const duration = courseLessons.reduce((s, l) => s + (Number(l.duration) || 0), 0);
+    const stats = statsMap.get(course.id) ?? { count: 0, duration: 0 };
     return {
       ...course,
-      lessonCount: courseLessons.length,
+      lessonCount: stats.count,
       completedLessons: 0,
-      duration,
+      duration: stats.duration,
       watchedSeconds: 0,
       progress: 0,
     };
@@ -306,19 +309,17 @@ app.get('/courses/:id', requireAuth, requireSubscriber, async (c) => {
     return c.json({ error: 'الكورس غير موجود' }, 404);
   }
 
-  const allLessons = await listAllLessons();
-  const lessons = allLessons.filter((l) => l.courseId === id && contentVisible(reqUser.role, l.grade, reqUser.grade));
+  const isAdmin = reqUser.role === 'admin';
+  const [lessons, examsCount] = await Promise.all([
+    isAdmin ? listLessonsByCourse(id) : listLessonsByCourseAndGrade(id, reqUser.grade),
+    countExamsByCourse(id),
+  ]);
 
   const lessonList = lessons
-    .map((l) => {
-      const d = Number(l.duration) || 0;
-      return { ...l, watchedSeconds: 0, completed: false, progressPct: 0 };
-    })
+    .map((l) => ({ ...l, watchedSeconds: 0, completed: false, progressPct: 0 }))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-  const exams = (await listExams()).filter((e) => e.courseId === id && contentVisible(reqUser.role, e.grade, reqUser.grade)).length;
-
-  return c.json({ course, lessons: lessonList, examsCount: exams });
+  return c.json({ course, lessons: lessonList, examsCount });
 });
 
 app.get('/lesson/:id', requireAuth, requireSubscriber, async (c) => {
@@ -333,12 +334,11 @@ app.get('/lesson/:id', requireAuth, requireSubscriber, async (c) => {
     return c.json({ error: 'الدرس غير موجود' }, 404);
   }
 
-  const allLessons = await listAllLessons();
-  const lessons = allLessons.filter(
-    (l) => l.courseId === lesson.courseId && contentVisible(reqUser.role, l.grade ?? course?.grade, reqUser.grade)
+  const lessons = await listLessonsByCourse(lesson.courseId);
+  const filtered = lessons.filter(
+    (l) => contentVisible(reqUser.role, l.grade ?? course?.grade, reqUser.grade)
   );
 
-  const duration = Number(lesson.duration) || 0;
   const out = {
     ...lesson,
     watchedSeconds: 0,
@@ -348,7 +348,7 @@ app.get('/lesson/:id', requireAuth, requireSubscriber, async (c) => {
 
   return c.json({
     lesson: out,
-    lessons: lessons.map((l) => ({ id: l.id, title: l.title, titleEn: l.titleEn })),
+    lessons: filtered.map((l) => ({ id: l.id, title: l.title, titleEn: l.titleEn })),
   });
 });
 
@@ -441,19 +441,9 @@ app.delete('/lessons/:id', requireAuth, requireAdmin, async (c) => {
 
 app.get('/exams', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  const exams = (await listExams()).filter((e) => contentVisible(reqUser.role, e.grade, reqUser.grade));
-  const { data: allQuestions } = await sb.from('questions').select('exam_id');
-  const qByExam = new Map<number, number>();
-  for (const q of allQuestions ?? []) {
-    const ex = Number(q.exam_id);
-    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
-  }
-
-  const out = exams
-    .map((exam) => ({
-      ...exam,
-      questionsCount: qByExam.get(exam.id) ?? 0,
-    }))
+  const isAdmin = reqUser.role === 'admin';
+  const examsWithCounts = isAdmin ? await listExamsWithQuestionCounts() : await listExamsByGradeWithQuestionCounts(reqUser.grade);
+  const out = examsWithCounts
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   return c.json({ exams: out });
 });
@@ -598,8 +588,8 @@ app.delete('/questions/:id', requireAuth, requireAdmin, async (c) => {
 
 app.get('/notes', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  const notes = (await listNotes())
-    .filter((n) => contentVisible(reqUser.role, n.grade, reqUser.grade))
+  const isAdmin = reqUser.role === 'admin';
+  const notes = (isAdmin ? await listNotes() : await listNotesByGrade(reqUser.grade))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   return c.json({ notes });
 });
@@ -737,6 +727,10 @@ app.get('/top-students', async (c) => {
 /* =================== لوحة الأدمن =================== */
 
 app.get('/admin/stats', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`admin-stats:${me.id}`, 3, 60_000)) {
+    return c.json({ error: 'انتظر دقيقة بين كل طلب' }, 429);
+  }
   return c.json({ stats: await adminStats() });
 });
 
@@ -784,6 +778,10 @@ app.get('/admin/users', requireAuth, requireAdmin, async (c) => {
 /** نسخة كاملة من كل المستخدمين مع إحصائياتهم في طلب واحد (بدون pagination أو استعلامات count) —
  *  تُستخدم في لوحة الطلبة حيث تتم الفلترة والبحث والترقيم في المتصفح لتخفيف الضغط على الباك اند. */
 app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`admin-users-all:${me.id}`, 1, 30_000)) {
+    return c.json({ error: 'انتظر 30 ثانية بين كل طلب' }, 429);
+  }
   const all = await listAllUsers();
   const statsMap = await computeStudentStatsBatch(all.map((u) => u.id));
   const out = all.map((u) => {
@@ -812,6 +810,10 @@ app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
 });
 
 app.get('/admin/lessons', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`admin-lessons:${me.id}`, 3, 60_000)) {
+    return c.json({ error: 'انتظر دقيقة بين كل طلب' }, 429);
+  }
   const lessons = await listAllLessons();
   const courses = await listCourses();
   return c.json({ lessons, courses: courses.map((co) => ({ id: co.id, title: co.title, titleEn: co.titleEn, grade: co.grade })) });
@@ -857,6 +859,7 @@ app.put('/admin/users/:id/role', requireAuth, requireAdmin, async (c) => {
     return c.json({ error: 'لا يمكن تنزيل آخر مدير في النظام' }, 403);
   }
   const updated = await updateUser(id, { role });
+  invalidateUserCache(id);
   return c.json({ user: safeUser(updated!) });
 });
 
@@ -868,6 +871,7 @@ app.put('/admin/users/:id/subscription', requireAuth, requireAdmin, async (c) =>
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
   const { subscription } = await c.req.json().catch(() => ({}));
   const updated = await updateUser(id, { subscription: !!subscription });
+  invalidateUserCache(id);
   return c.json({ user: safeUser(updated!) });
 });
 
@@ -882,6 +886,7 @@ app.put('/admin/users/:id/block', requireAuth, requireAdmin, async (c) => {
   }
   const { blocked } = await c.req.json().catch(() => ({}));
   const updated = await updateUser(id, { blocked: !!blocked });
+  invalidateUserCache(id);
   return c.json({ user: safeUser(updated!) });
 });
 
@@ -893,6 +898,7 @@ app.delete('/admin/users/:id', requireAuth, requireAdmin, async (c) => {
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
   if (user.role === 'admin') return c.json({ error: 'لا يمكن حذف حساب مدير' }, 403);
   await deleteUser(id);
+  invalidateUserCache(id);
   return c.json({ ok: true });
 });
 

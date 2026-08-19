@@ -19,6 +19,25 @@ export interface AuthUser {
 const encoder = new TextEncoder();
 const key = encoder.encode(JWT_SECRET);
 
+const userCache = new Map<number, { user: AuthUser; at: number }>();
+const USER_CACHE_TTL = 30_000;
+
+function getCachedUser(id: number): AuthUser | null {
+  const entry = userCache.get(id);
+  if (entry && Date.now() - entry.at < USER_CACHE_TTL) return entry.user;
+  userCache.delete(id);
+  return null;
+}
+
+function setCachedUser(user: AuthUser): void {
+  if (userCache.size > 500) userCache.clear();
+  userCache.set(user.id, { user, at: Date.now() });
+}
+
+export function invalidateUserCache(userId: number): void {
+  userCache.delete(userId);
+}
+
 /** نفس تنسيق التوكن القديم (jsonwebtoken HS256) حتى تبقى الجلسات سارية بعد الترحيل. */
 export async function signToken(user: Pick<AuthUser, 'id' | 'role' | 'fullName' | 'phone' | 'grade'>): Promise<string> {
   return await new jose.SignJWT({
@@ -106,10 +125,13 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
     const epoch = await getSessionEpoch();
     if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) return null;
 
+    const cached = getCachedUser(decoded.id);
+    if (cached) return cached;
+
     const user: DbUser | null = await findAuthUserById(decoded.id);
     if (!user) return null;
 
-    return {
+    const authUser: AuthUser = {
       id: user.id,
       role: user.role,
       fullName: user.fullName,
@@ -118,6 +140,8 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
       blocked: !!user.blocked,
       subscription: !!user.subscription,
     };
+    setCachedUser(authUser);
+    return authUser;
   } catch (e) {
     console.error('[auth] resolveUser:', (e as Error).message);
     return null;
