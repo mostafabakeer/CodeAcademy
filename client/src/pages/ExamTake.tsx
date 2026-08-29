@@ -50,24 +50,46 @@ interface Result {
   review: ReviewItem[];
 }
 
-// يبني المراجعة من الأسئلة + إجابات محفوظة (يُستخدم لمراجعة النتيجة عند العودة)
-function buildReview(questions: Question[], answers: Record<string, number>): ReviewItem[] {
-  return questions.map((q) => {
+// يبني المراجعة من الأسئلة + إجابات محفوظة (يُستخدم لمراجعة النتيجة عند العودة).
+// إذا كانت الإجابة الصحيحة (correctIndex) غير متوفرة، لا نصنع تصحيحاً مُخمَّناً خاطئاً
+// — فنتوقف ونعيد null ليُخبر الواجهة بأن التصحيح غير متاح بدقة.
+function buildReview(questions: Question[], answers: Record<string, number>): ReviewItem[] | null {
+  const items: ReviewItem[] = [];
+  for (const q of questions) {
+    if (q.correctIndex === undefined || q.correctIndex === null) return null;
     const given = answers[String(q.id)];
-    const correctIndex = q.correctIndex ?? 0;
-    const isCorrect = given === undefined ? false : given === correctIndex;
-    return {
+    const isCorrect = given === undefined ? false : given === q.correctIndex;
+    items.push({
       id: q.id,
       text: q.text,
       textEn: q.textEn,
       options: q.options,
       given,
-      correctIndex,
+      correctIndex: q.correctIndex,
       isCorrect,
       explanation: q.explanation ?? '',
       explanationEn: q.explanationEn ?? '',
-    };
-  });
+    });
+  }
+  return items;
+}
+
+// نحفظ تصحيح المحاولة محلياً (بما فيه الأجوبة الصحيحة + الشرح) حتى نعرض مراجعة صحيحة
+// عند العودة دون الاعتماد على كشف correctIndex من الباك اند. (صفر استعلامات إضافية — معالجة في المتصفح)
+function saveReviewLocally(examId: string, review: ReviewItem[]): void {
+  try {
+    localStorage.setItem(`exam_review_${examId}`, JSON.stringify(review));
+  } catch {
+    /* تجاهل أخطاء التخزين */
+  }
+}
+function loadReviewLocally(examId: string): ReviewItem[] | null {
+  try {
+    const raw = localStorage.getItem(`exam_review_${examId}`);
+    return raw ? (JSON.parse(raw) as ReviewItem[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 // مكوّن مشترك لعرض ملخص النتيجة + مراجعة الأخطاء (يُستخدم في شاشة النتيجة وعند إعادة الدخول)
@@ -187,6 +209,7 @@ export default function ExamTake() {
         body: JSON.stringify({ answers }),
       });
       setResult(res);
+      saveReviewLocally(id, res.review);
       applyExamResult({
         examId: Number(id),
         best: res.best,
@@ -216,20 +239,50 @@ export default function ExamTake() {
   const { exam, questions } = data;
   const canRetake = !!exam.allowRetake;
 
-  // نتيجة/مراجعة مُخزّنة من آخر محاولة (تُبنى في المتصفح من إجابات محفوظة — بدون أي استعلام إضافي)
-  const savedReview = data.lastResult?.answers
-    ? buildReview(questions, data.lastResult.answers)
-    : null;
-  const savedResult: Result | null = data.lastResult
-    ? {
-        score: data.lastResult.score ?? 0,
-        best: data.lastResult.best ?? data.lastResult.score ?? 0,
-        passed: (data.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
-        correct: savedReview?.filter((r) => r.isCorrect).length ?? 0,
-        total: questions.length,
-        review: savedReview ?? [],
-      }
-    : null;
+  // نتيجة/مراجعة مُخزّنة من آخر محاولة.
+  // أولوية: تصحيح المحاولة المحفوظ محلياً عند التسليم (دقيق — يتضمن الأجوبة الصحيحة + الشرح).
+  // fallback: نبنيها في المتصفح من lastResult.answers — لكن فقط إن توفرت الإجابة الصحيحة فعلاً،
+  //           وإلا لا نعرض تصحيحاً مُخمَّناً خاطئاً (نشير إلى عدم توفر المراجعة بدقة).
+  const fallbackReview = data.lastResult?.answers ? buildReview(questions, data.lastResult.answers) : null;
+  const hasLocalReview = data.lastResult ? (loadReviewLocally(String(id))?.length ?? 0) > 0 : false;
+  const savedReview = hasLocalReview
+    ? loadReviewLocally(String(id))
+    : fallbackReview;
+  const savedResult: Result | null =
+    data.lastResult && savedReview
+      ? {
+          score: data.lastResult.score ?? 0,
+          best: data.lastResult.best ?? data.lastResult.score ?? 0,
+          passed: (data.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
+          correct: savedReview.filter((r) => r.isCorrect).length,
+          total: savedReview.length,
+          review: savedReview,
+        }
+      : null;
+
+  // أدّى الامتحان من قبل، لكن لا يمكننا بناء مراجعة دقيقة (لم يُحفظ التصحيح محلياً ولا يتوفر correctIndex)
+  // → نعرض إشعاراً صريحاً بدلاً من تصحيحٍ مُخمَّن خاطئ يعرض "إجابات مختلفة".
+  if (data.lastResult && !savedResult) {
+    return (
+      <div className="mx-auto max-w-lg">
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-ink-700 text-4xl">📄</div>
+          <h1 className="text-2xl font-black">{lang === 'ar' ? exam.title : exam.titleEn}</h1>
+          <p className="mt-3 text-sm text-gray-400">
+            {t('exam.completedNoReview')}
+          </p>
+          {canRetake && (
+            <button onClick={retake} className="btn-fire mt-6 w-full rounded-xl px-6 py-2.5 font-bold text-white">
+              {t('exam.retake')}
+            </button>
+          )}
+          <button onClick={() => navigate('/exams')} className="btn-ghost-fire mt-3 w-full rounded-xl px-6 py-2.5 font-bold">
+            {t('common.back')}
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
 
   // أدّى الامتحان من قبل ولا يسمح الأدمن بإعادته → نعرض النتيجة + مراجعة الأخطاء دائماً (حتى بعد الخروج والعودة)
   if (data.lastResult && !canRetake && savedResult) {

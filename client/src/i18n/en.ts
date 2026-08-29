@@ -123,6 +123,7 @@ export const en: TranslationKeys = {
     explanation: 'Explanation',
     viewLastReview: 'Review last attempt answers',
     retakeBeforeReview: 'You have already taken this exam. You can review your last attempt answers or start again.',
+    completedNoReview: 'You have already taken this exam, but the answer review is not available right now. Open the exam from the same browser after submitting your last attempt to see the corrected answers.',
     noExams: 'No exams yet',
     bestScore: 'Best score',
     attempts: 'Attempts',
