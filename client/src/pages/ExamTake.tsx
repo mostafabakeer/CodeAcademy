@@ -33,6 +33,7 @@ interface ReviewItem {
   id: number;
   text: string;
   textEn: string;
+  options: { text: string; textEn: string }[];
   given: number | undefined;
   correctIndex: number;
   isCorrect: boolean;
@@ -59,6 +60,7 @@ function buildReview(questions: Question[], answers: Record<string, number>): Re
       id: q.id,
       text: q.text,
       textEn: q.textEn,
+      options: q.options,
       given,
       correctIndex,
       isCorrect,
@@ -116,16 +118,17 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack }: { review: 
               <div className="mt-2 space-y-1 text-sm">
                 {q.given !== undefined ? (
                   <p className={q.isCorrect ? 'text-emerald-300' : 'text-fire-300'}>
-                    {t('exam.yourAnswer')}: {String.fromCharCode(65 + q.given)}
+                    <span className="font-bold">{q.isCorrect ? '✔ ' : '✘ '}</span>
+                    {t('exam.yourAnswer')}: {String.fromCharCode(65 + q.given)}. {lang === 'ar' ? q.options[q.given]?.text : q.options[q.given]?.textEn}
                   </p>
                 ) : (
                   <p className="text-gray-500">{t('exam.yourAnswer')}: —</p>
                 )}
                 <p className="text-emerald-300">
-                  {t('exam.correctAnswer')}: {String.fromCharCode(65 + q.correctIndex)}
+                  {t('exam.correctAnswer')}: {String.fromCharCode(65 + q.correctIndex)}. {lang === 'ar' ? q.options[q.correctIndex]?.text : q.options[q.correctIndex]?.textEn}
                 </p>
               </div>
-              {(lang === 'ar' ? q.explanation : q.explanationEn || q.explanation) ? (
+              {!q.isCorrect && (lang === 'ar' ? q.explanation : q.explanationEn || q.explanation) ? (
                 <div className="mt-2 rounded-lg border border-ink-600 bg-ink-900/60 px-3 py-2 text-sm text-gray-300">
                   <span className="font-bold text-fire-300">💡 {t('exam.explanation')}: </span>
                   {lang === 'ar' ? q.explanation : q.explanationEn || q.explanation}
