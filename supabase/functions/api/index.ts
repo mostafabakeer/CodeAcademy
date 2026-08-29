@@ -456,6 +456,7 @@ app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
   if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
     return c.json({ error: 'الامتحان غير موجود' }, 404);
   }
+  const lastResult = await getResult(reqUser.id, id);
   const questions = (await listQuestionsByExam(id)).map((q) => ({
     id: q.id,
     text: q.text,
@@ -463,9 +464,12 @@ app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
     options: q.options,
     hasImage: !!q.image,
     image: q.image,
+    explanation: q.explanation,
+    explanationEn: q.explanationEn,
     order: q.order,
+    // نكشف الإجابة الصحيحة فقط لمن أدّى الامتحان بالفعل (لا يُكشف قبل بدء الامتحان)
+    correctIndex: lastResult ? q.correctIndex : undefined,
   }));
-  const lastResult = await getResult(reqUser.id, id);
   return c.json({ exam, questions, lastResult });
 });
 
@@ -551,6 +555,8 @@ app.post('/exams/:id/questions', requireAuth, requireAdmin, async (c) => {
     options: b.options.map((o: any) => ({ text: bodyText(o.text), textEn: bodyText(o.textEn) })),
     correctIndex: Number(b.correctIndex),
     image: bodyText(b.image),
+    explanation: bodyText(b.explanation),
+    explanationEn: bodyText(b.explanationEn),
     order: Number(b.order) || 0,
   });
   return c.json({ question });
@@ -574,6 +580,8 @@ app.put('/questions/:id', requireAuth, requireAdmin, async (c) => {
     options,
     correctIndex: b.correctIndex !== undefined ? Number(b.correctIndex) : q.correctIndex,
     image: b.image !== undefined ? bodyText(b.image) : q.image,
+    explanation: b.explanation !== undefined ? bodyText(b.explanation) : q.explanation,
+    explanationEn: b.explanationEn !== undefined ? bodyText(b.explanationEn) : q.explanationEn,
     order: b.order !== undefined ? Number(b.order) : q.order,
   });
   return c.json({ question: updated });

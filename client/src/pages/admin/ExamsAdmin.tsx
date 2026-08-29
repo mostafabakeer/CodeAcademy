@@ -29,6 +29,8 @@ interface Question {
   textEn: string;
   options: { text: string; textEn: string }[];
   correctIndex: number;
+  explanation?: string;
+  explanationEn?: string;
 }
 
 const emptyExam = { courseId: 0, title: '', titleEn: '', passingScore: 50, timeLimit: 0, order: 0, grade: 'all', allowRetake: false };
@@ -48,7 +50,7 @@ export default function ExamsAdmin() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [qOpen, setQOpen] = useState(false);
   const [qEditing, setQEditing] = useState<Question | null>(null);
-  const [qForm, setQForm] = useState({ text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0 });
+  const [qForm, setQForm] = useState({ text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0, explanation: '', explanationEn: '' });
   const [qError, setQError] = useState('');
 
   const load = useCallback(async () => {
@@ -122,7 +124,7 @@ export default function ExamsAdmin() {
 
   const openNewQ = () => {
     setQEditing(null);
-    setQForm({ text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0 });
+    setQForm({ text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0, explanation: '', explanationEn: '' });
     setQError('');
     setQOpen(true);
   };
@@ -134,6 +136,8 @@ export default function ExamsAdmin() {
       options: q.options.map((o) => o.text),
       optionsEn: q.options.map((o) => o.textEn || ''),
       correctIndex: q.correctIndex,
+      explanation: q.explanation || '',
+      explanationEn: q.explanationEn || '',
     });
     setQError('');
     setQOpen(true);
@@ -153,6 +157,8 @@ export default function ExamsAdmin() {
         textEn: qForm.textEn,
         options: options.map((text, i) => ({ text, textEn: optionsEn[i] ?? '' })),
         correctIndex: qForm.correctIndex,
+        explanation: qForm.explanation,
+        explanationEn: qForm.explanationEn,
       };
       if (qEditing) await api(`/api/questions/${qEditing.id}`, { method: 'PUT', body: JSON.stringify(body) });
       else await api(`/api/exams/${qmExam.id}/questions`, { method: 'POST', body: JSON.stringify(body) });
@@ -342,6 +348,16 @@ export default function ExamsAdmin() {
               </div>
             </div>
           ))}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.questionExplanation')}</label>
+              <textarea className="input-fire w-full rounded-xl px-4 py-2.5" rows={2} value={qForm.explanation} onChange={(e) => setQForm({ ...qForm, explanation: e.target.value })} placeholder={t('admin.explanationPlaceholder')} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.questionExplanationEn')}</label>
+              <textarea className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" rows={2} value={qForm.explanationEn} onChange={(e) => setQForm({ ...qForm, explanationEn: e.target.value })} placeholder={t('admin.explanationPlaceholderEn')} />
+            </div>
+          </div>
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.correctOption')} *</label>
             <select className="input-fire w-full rounded-xl px-4 py-2.5" value={qForm.correctIndex} onChange={(e) => setQForm({ ...qForm, correctIndex: Number(e.target.value) })}>

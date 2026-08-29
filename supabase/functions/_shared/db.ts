@@ -575,6 +575,8 @@ export interface Question {
   options: { text: string; textEn: string }[];
   correctIndex: number;
   image: string;
+  explanation: string;
+  explanationEn: string;
   order: number;
 }
 
@@ -587,6 +589,8 @@ function questionFromRow(r: any): Question {
     options: Array.isArray(r.options) ? r.options : [],
     correctIndex: r.correct_index ?? 0,
     image: r.image ?? '',
+    explanation: r.explanation ?? '',
+    explanationEn: r.explanation_en ?? '',
     order: r.order ?? 0,
   };
 }
@@ -599,6 +603,8 @@ function questionToRow(q: Partial<Question>): Record<string, any> {
   if (q.options !== undefined) row.options = q.options;
   if (q.correctIndex !== undefined) row.correct_index = q.correctIndex;
   if (q.image !== undefined) row.image = q.image;
+  if (q.explanation !== undefined) row.explanation = q.explanation;
+  if (q.explanationEn !== undefined) row.explanation_en = q.explanationEn;
   if (q.order !== undefined) row.order = q.order;
   return row;
 }
@@ -1214,7 +1220,7 @@ export interface SubmitOutcome {
   correct: number;
   total: number;
   passed: boolean;
-  review: { id: number; text: string; textEn: string; given?: number; correctIndex: number; isCorrect: boolean }[];
+  review: { id: number; text: string; textEn: string; given?: number; correctIndex: number; isCorrect: boolean; explanation: string; explanationEn: string }[];
 }
 
 export async function submitExam(userId: number, exam: Exam, answers: Record<string, number>): Promise<SubmitOutcome> {
@@ -1232,6 +1238,8 @@ export async function submitExam(userId: number, exam: Exam, answers: Record<str
       given,
       correctIndex: q.correctIndex,
       isCorrect,
+      explanation: q.explanation,
+      explanationEn: q.explanationEn,
     };
   });
 
