@@ -119,13 +119,13 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack }: { review: 
                 {q.given !== undefined ? (
                   <p className={q.isCorrect ? 'text-emerald-300' : 'text-fire-300'}>
                     <span className="font-bold">{q.isCorrect ? '✔ ' : '✘ '}</span>
-                    {t('exam.yourAnswer')}: {String.fromCharCode(65 + q.given)}. {lang === 'ar' ? q.options[q.given]?.text : q.options[q.given]?.textEn}
+                    {t('exam.yourAnswer')}: {String.fromCharCode(65 + q.given)}. {lang === 'ar' ? q.options?.[q.given]?.text : q.options?.[q.given]?.textEn}
                   </p>
                 ) : (
                   <p className="text-gray-500">{t('exam.yourAnswer')}: —</p>
                 )}
                 <p className="text-emerald-300">
-                  {t('exam.correctAnswer')}: {String.fromCharCode(65 + q.correctIndex)}. {lang === 'ar' ? q.options[q.correctIndex]?.text : q.options[q.correctIndex]?.textEn}
+                  {t('exam.correctAnswer')}: {String.fromCharCode(65 + q.correctIndex)}. {lang === 'ar' ? q.options?.[q.correctIndex]?.text : q.options?.[q.correctIndex]?.textEn}
                 </p>
               </div>
               {!q.isCorrect && (lang === 'ar' ? q.explanation : q.explanationEn || q.explanation) ? (

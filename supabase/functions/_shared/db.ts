@@ -1220,7 +1220,7 @@ export interface SubmitOutcome {
   correct: number;
   total: number;
   passed: boolean;
-  review: { id: number; text: string; textEn: string; given?: number; correctIndex: number; isCorrect: boolean; explanation: string; explanationEn: string }[];
+  review: { id: number; text: string; textEn: string; options: { text: string; textEn: string }[]; given?: number; correctIndex: number; isCorrect: boolean; explanation: string; explanationEn: string }[];
 }
 
 export async function submitExam(userId: number, exam: Exam, answers: Record<string, number>): Promise<SubmitOutcome> {
@@ -1235,6 +1235,7 @@ export async function submitExam(userId: number, exam: Exam, answers: Record<str
       id: q.id,
       text: q.text,
       textEn: q.textEn,
+      options: q.options,
       given,
       correctIndex: q.correctIndex,
       isCorrect,
