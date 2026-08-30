@@ -457,7 +457,9 @@ app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
     return c.json({ error: 'الامتحان غير موجود' }, 404);
   }
   const lastResult = await getResult(reqUser.id, id);
-  const questions = (await listQuestionsByExam(id)).map((q) => ({
+  const questions = (await listQuestionsByExam(id))
+    .filter((q) => q.correctIndex >= 0)
+    .map((q) => ({
     id: q.id,
     text: q.text,
     textEn: q.textEn,

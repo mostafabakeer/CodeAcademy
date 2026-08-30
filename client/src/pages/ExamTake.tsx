@@ -40,7 +40,6 @@ interface ReviewItem {
   explanation: string;
   explanationEn: string;
 }
-
 interface Result {
   score: number;
   best: number;
@@ -51,27 +50,42 @@ interface Result {
 }
 
 // يبني المراجعة من الأسئلة + إجابات محفوظة (يُستخدم لمراجعة النتيجة عند العودة).
-// إذا كانت الإجابة الصحيحة (correctIndex) غير متوفرة، لا نصنع تصحيحاً مُخمَّناً خاطئاً
-// — فنتوقف ونعيد null ليُخبر الواجهة بأن التصحيح غير متاح بدقة.
-function buildReview(questions: Question[], answers: Record<string, number>): ReviewItem[] | null {
-  const items: ReviewItem[] = [];
-  for (const q of questions) {
-    if (q.correctIndex === undefined || q.correctIndex === null) return null;
-    const given = answers[String(q.id)];
-    const isCorrect = given === undefined ? false : given === q.correctIndex;
-    items.push({
-      id: q.id,
-      text: q.text,
-      textEn: q.textEn,
-      options: q.options,
-      given,
-      correctIndex: q.correctIndex,
-      isCorrect,
-      explanation: q.explanation ?? '',
-      explanationEn: q.explanationEn ?? '',
+// المراجعة تُبنى دائماً من إجابات الطالب (لا تختفي). الإجابة الصحيحة تُحدَّد إن توفرت،
+// وإلا نضع correctIndex = -1 ونشير إلى أن التصحيح الدقيق غير متاح (بدل التخمين الخاطئ).
+function buildReview(questions: Question[], answers: Record<string, number>): ReviewItem[] {
+  return questions
+    .filter((q) => q.correctIndex !== undefined && q.correctIndex !== null && q.correctIndex >= 0)
+    .map((q) => {
+      const given = answers[String(q.id)];
+      const correctIndex = q.correctIndex!;
+      const isCorrect = given !== undefined && given === correctIndex;
+      return {
+        id: q.id,
+        text: q.text,
+        textEn: q.textEn,
+        options: q.options,
+        given,
+        correctIndex,
+        isCorrect,
+        explanation: q.explanation ?? '',
+        explanationEn: q.explanationEn ?? '',
+      };
     });
-  }
-  return items;
+}
+
+// يدمج مراجعة الخادم (تحمل correctIndex/isCorrect/explanation) مع نصوص الأسئلة المحلية
+// (المعروضة للطالب) لضمان ظهور نص السؤال والخيارات دائماً — حتى لو لم يُرجع الخادم options.
+function mergeReviewWithOptions(review: ReviewItem[], questions: Question[]): ReviewItem[] {
+  const byId = new Map(questions.map((q) => [q.id, q]));
+  return review.map((r) => {
+    const q = byId.get(r.id);
+    return {
+      ...r,
+      text: q?.text ?? r.text,
+      textEn: q?.textEn ?? r.textEn,
+      options: (q?.options && q.options.length ? q.options : r.options) ?? [],
+    };
+  });
 }
 
 // نحفظ تصحيح المحاولة محلياً (بما فيه الأجوبة الصحيحة + الشرح) حتى نعرض مراجعة صحيحة
@@ -86,7 +100,19 @@ function saveReviewLocally(examId: string, review: ReviewItem[]): void {
 function loadReviewLocally(examId: string): ReviewItem[] | null {
   try {
     const raw = localStorage.getItem(`exam_review_${examId}`);
-    return raw ? (JSON.parse(raw) as ReviewItem[]) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ReviewItem[];
+    if (!Array.isArray(parsed)) return null;
+    const clean = parsed.filter(
+      (r) =>
+        r &&
+        typeof r.id === 'number' &&
+        Number.isInteger(r.correctIndex) &&
+        r.correctIndex >= 0 &&
+        Array.isArray(r.options) &&
+        r.options.length > 0
+    );
+    return clean.length ? clean : null;
   } catch {
     return null;
   }
@@ -146,9 +172,13 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack }: { review: 
                 ) : (
                   <p className="text-gray-500">{t('exam.yourAnswer')}: —</p>
                 )}
-                <p className="text-emerald-300">
-                  {t('exam.correctAnswer')}: {String.fromCharCode(65 + q.correctIndex)}. {lang === 'ar' ? q.options?.[q.correctIndex]?.text : q.options?.[q.correctIndex]?.textEn}
-                </p>
+                {q.correctIndex >= 0 ? (
+                  <p className="text-emerald-300">
+                    {t('exam.correctAnswer')}: {String.fromCharCode(65 + q.correctIndex)}. {lang === 'ar' ? q.options?.[q.correctIndex]?.text : q.options?.[q.correctIndex]?.textEn}
+                  </p>
+                ) : (
+                  <p className="text-amber-300/80">{t('exam.noCorrectAvailable')}</p>
+                )}
               </div>
               {!q.isCorrect && (lang === 'ar' ? q.explanation : q.explanationEn || q.explanation) ? (
                 <div className="mt-2 rounded-lg border border-ink-600 bg-ink-900/60 px-3 py-2 text-sm text-gray-300">
@@ -209,7 +239,7 @@ export default function ExamTake() {
         body: JSON.stringify({ answers }),
       });
       setResult(res);
-      saveReviewLocally(id, res.review);
+      if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
       applyExamResult({
         examId: Number(id),
         best: res.best,
@@ -241,48 +271,24 @@ export default function ExamTake() {
 
   // نتيجة/مراجعة مُخزّنة من آخر محاولة.
   // أولوية: تصحيح المحاولة المحفوظ محلياً عند التسليم (دقيق — يتضمن الأجوبة الصحيحة + الشرح).
-  // fallback: نبنيها في المتصفح من lastResult.answers — لكن فقط إن توفرت الإجابة الصحيحة فعلاً،
-  //           وإلا لا نعرض تصحيحاً مُخمَّناً خاطئاً (نشير إلى عدم توفر المراجعة بدقة).
-  const fallbackReview = data.lastResult?.answers ? buildReview(questions, data.lastResult.answers) : null;
-  const hasLocalReview = data.lastResult ? (loadReviewLocally(String(id))?.length ?? 0) > 0 : false;
-  const savedReview = hasLocalReview
-    ? loadReviewLocally(String(id))
-    : fallbackReview;
-  const savedResult: Result | null =
-    data.lastResult && savedReview
-      ? {
-          score: data.lastResult.score ?? 0,
-          best: data.lastResult.best ?? data.lastResult.score ?? 0,
-          passed: (data.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
-          correct: savedReview.filter((r) => r.isCorrect).length,
-          total: savedReview.length,
-          review: savedReview,
-        }
+  // fallback: نبنيه في المتصفح من lastResult.answers — يُعرض دائماً (لا يختفي)،
+  //           وتُحدَّد الإجابة الصحيحة ضمن المراجعة إن توفرت، وإلا نشير إلى عدم توفرها.
+  const localReviews = data.lastResult ? loadReviewLocally(String(id)) : null;
+  const savedReview = localReviews && localReviews.length
+    ? localReviews
+    : data.lastResult?.answers
+      ? buildReview(questions, data.lastResult.answers)
       : null;
-
-  // أدّى الامتحان من قبل، لكن لا يمكننا بناء مراجعة دقيقة (لم يُحفظ التصحيح محلياً ولا يتوفر correctIndex)
-  // → نعرض إشعاراً صريحاً بدلاً من تصحيحٍ مُخمَّن خاطئ يعرض "إجابات مختلفة".
-  if (data.lastResult && !savedResult) {
-    return (
-      <div className="mx-auto max-w-lg">
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
-          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-ink-700 text-4xl">📄</div>
-          <h1 className="text-2xl font-black">{lang === 'ar' ? exam.title : exam.titleEn}</h1>
-          <p className="mt-3 text-sm text-gray-400">
-            {t('exam.completedNoReview')}
-          </p>
-          {canRetake && (
-            <button onClick={retake} className="btn-fire mt-6 w-full rounded-xl px-6 py-2.5 font-bold text-white">
-              {t('exam.retake')}
-            </button>
-          )}
-          <button onClick={() => navigate('/exams')} className="btn-ghost-fire mt-3 w-full rounded-xl px-6 py-2.5 font-bold">
-            {t('common.back')}
-          </button>
-        </motion.div>
-      </div>
-    );
-  }
+  const savedResult: Result | null = data.lastResult && savedReview
+    ? {
+        score: data.lastResult.score ?? 0,
+        best: data.lastResult.best ?? data.lastResult.score ?? 0,
+        passed: (data.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
+        correct: savedReview.filter((r) => r.isCorrect).length,
+        total: savedReview.length,
+        review: savedReview,
+      }
+    : null;
 
   // أدّى الامتحان من قبل ولا يسمح الأدمن بإعادته → نعرض النتيجة + مراجعة الأخطاء دائماً (حتى بعد الخروج والعودة)
   if (data.lastResult && !canRetake && savedResult) {
@@ -299,10 +305,11 @@ export default function ExamTake() {
 
   // شاشة النتيجة (بعد التسليم مباشرة في نفس الجلسة)
   if (result) {
+    const viewReview = data ? mergeReviewWithOptions(result.review, data.questions) : result.review;
     return (
       <ReviewPanel
-        review={result.review}
-        result={result}
+        review={viewReview}
+        result={{ ...result, review: viewReview }}
         canRetake={canRetake}
         onRetake={retake}
         onBack={() => navigate('/exams')}

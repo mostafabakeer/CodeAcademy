@@ -302,6 +302,11 @@ export default function ExamsAdmin() {
                   <div className="min-w-0">
                     <p className="font-bold">
                       {i + 1}. {q.text}
+                      {q.correctIndex < 0 && (
+                        <span className="ml-2 inline-block rounded bg-amber-500/15 px-2 py-0.5 text-xs font-bold text-amber-300">
+                          {t('admin.questionNoAnswer')}
+                        </span>
+                      )}
                     </p>
                     <div className="mt-1.5 space-y-0.5 text-sm text-gray-400">
                       {q.options.map((o, oi) => (

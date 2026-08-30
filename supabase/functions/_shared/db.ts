@@ -587,7 +587,7 @@ function questionFromRow(r: any): Question {
     text: r.text ?? '',
     textEn: r.text_en ?? '',
     options: Array.isArray(r.options) ? r.options : [],
-    correctIndex: r.correct_index ?? 0,
+    correctIndex: r.correct_index ?? -1,
     image: r.image ?? '',
     explanation: r.explanation ?? '',
     explanationEn: r.explanation_en ?? '',
@@ -1224,7 +1224,7 @@ export interface SubmitOutcome {
 }
 
 export async function submitExam(userId: number, exam: Exam, answers: Record<string, number>): Promise<SubmitOutcome> {
-  const questions = await listQuestionsByExam(exam.id);
+  const questions = (await listQuestionsByExam(exam.id)).filter((q) => q.correctIndex >= 0);
 
   let correct = 0;
   const review = questions.map((q) => {
