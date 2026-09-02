@@ -12,6 +12,7 @@ export default function AdminLayout() {
     { to: '/admin/notes', label: t('admin.notes'), icon: '📖' },
     { to: '/admin/students', label: t('admin.students'), icon: '👨‍🎓' },
     { to: '/admin/top-students', label: t('admin.topStudents'), icon: '🏆' },
+    { to: '/admin/leaderboard', label: t('admin.examResults'), icon: '📈' },
     { to: '/admin/settings', label: t('admin.settings'), icon: '⚙️' },
   ];
 

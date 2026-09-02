@@ -88,6 +88,11 @@ export default function Login() {
             <button type="submit" disabled={loading} className="btn-fire w-full rounded-xl px-4 py-3 font-bold text-white disabled:opacity-60">
               {loading ? t('common.loading') : t('auth.loginBtn')}
             </button>
+            <div className="text-center">
+              <Link to="/forgot-password" className="text-sm font-bold text-fire-400 hover:text-fire-300">
+                {t('auth.forgotPassword')}
+              </Link>
+            </div>
           </form>
 
           <p className="mt-5 text-center text-sm text-gray-400">

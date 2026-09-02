@@ -1,26 +1,44 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useLang } from '../i18n';
-import { loadTopStudents, type TopStudent } from '../lib/content';
+import { loadTopStudents, loadLatestExamTop, type TopStudent, type LatestExamTop } from '../lib/content';
 import Sparkles from '../components/Sparkles';
 
 const MEDALS: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
+type TabKey = 'all' | 'bac1' | 'bac2';
+
+const TABS: { key: TabKey; tKey: string; icon: string }[] = [
+  { key: 'all', tKey: 'top.tabAll', icon: '🏆' },
+  { key: 'bac1', tKey: 'top.tabBac1', icon: '🔵' },
+  { key: 'bac2', tKey: 'top.tabBac2', icon: '🟠' },
+];
+
 export default function TopStudents() {
   const { t, lang } = useLang();
   const [students, setStudents] = useState<TopStudent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [latestTop, setLatestTop] = useState<Record<string, LatestExamTop>>({});
+  const [loadingBasic, setLoadingBasic] = useState(true);
+  const [loadingLatest, setLoadingLatest] = useState(true);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState<TabKey>('all');
 
   useEffect(() => {
     loadTopStudents()
       .then((s) => setStudents(s))
       .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingBasic(false));
+    loadLatestExamTop()
+      .then((l) => setLatestTop(l))
+      .catch(() => {
+        /* أوائل الامتحان الأخير اختيارية */
+      })
+      .finally(() => setLoadingLatest(false));
   }, []);
 
+  const all = students.slice().sort((a, b) => a.rank - b.rank);
   const bac1 = students.filter((s) => s.grade === 'bac1');
   const bac2 = students.filter((s) => s.grade === 'bac2');
 
@@ -104,24 +122,68 @@ export default function TopStudents() {
 
           {error && <div className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
 
-          {loading ? (
-            <p className="text-center text-gray-300">{t('common.loading')}</p>
-          ) : students.length === 0 ? (
-            <p className="rounded-2xl border border-ink-600 bg-ink-900/80 p-10 text-center text-gray-300">{t('top.empty')}</p>
-          ) : (
-            <div className="space-y-8">
-              <GradeSection key="bac2" title={t('top.bac2Title')} students={bac2} accent="ember" />
-              <GradeSection key="bac1" title={t('top.bac1Title')} students={bac1} accent="sky" />
-            </div>
-          )}
+          <div className="mb-8 flex flex-wrap gap-2">
+            {TABS.map((tb) => (
+              <button
+                key={tb.key}
+                onClick={() => setTab(tb.key)}
+                className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold transition-all ${
+                  tab === tb.key
+                    ? 'border-fire-400/60 bg-gradient-to-r from-fire-600/40 to-ember-500/30 text-white shadow-lg shadow-fire-950/50'
+                    : 'border-white/15 bg-ink-900/60 text-gray-300 hover:border-fire-500/40 hover:text-white'
+                }`}
+              >
+                <span>{tb.icon}</span>
+                {t(tb.tKey)}
+              </button>
+            ))}
+          </div>
+
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={tab}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              {tab === 'all' && (
+                <div className="space-y-8">
+                  <GradeSection title={t('top.allTitle')} students={all} accent="ember" basicBadge={t('top.basicBadge')} loading={loadingBasic} />
+                  <section className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-center gap-2 text-center">
+                      <h2 className="text-xl font-black md:text-2xl">⚡ {t('top.autoTitle')}</h2>
+                      <span className="rounded-full border border-dashed border-white/25 px-3 py-1 text-xs font-bold text-gray-300">{t('top.subsidiaryBadge')}</span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <SubsidiaryCard entry={latestTop['bac1']} loading={loadingLatest} accent="sky" />
+                      <SubsidiaryCard entry={latestTop['bac2']} loading={loadingLatest} accent="ember" />
+                    </div>
+                  </section>
+                </div>
+              )}
+              {tab === 'bac1' && (
+                <div className="space-y-8">
+                  <GradeSection title={t('top.bac1Title')} students={bac1} accent="sky" basicBadge={t('top.basicBadge')} loading={loadingBasic} />
+                  <SubsidiaryCard entry={latestTop['bac1']} loading={loadingLatest} accent="sky" />
+                </div>
+              )}
+              {tab === 'bac2' && (
+                <div className="space-y-8">
+                  <GradeSection title={t('top.bac2Title')} students={bac2} accent="ember" basicBadge={t('top.basicBadge')} loading={loadingBasic} />
+                  <SubsidiaryCard entry={latestTop['bac2']} loading={loadingLatest} accent="ember" />
+                </div>
+              )}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </motion.div>
     </div>
   );
 }
 
-function GradeSection({ title, students, accent }: { title: string; students: TopStudent[]; accent: 'sky' | 'ember' }) {
-  if (students.length === 0) return null;
+function GradeSection({ title, students, accent, basicBadge, loading }: { title: string; students: TopStudent[]; accent: 'sky' | 'ember'; basicBadge: string; loading: boolean }) {
+  const { t } = useLang();
   const sorted = [...students].sort((a, b) => a.rank - b.rank);
   const podium = sorted.slice(0, 3);
   const rest = sorted.slice(3);
@@ -134,8 +196,7 @@ function GradeSection({ title, students, accent }: { title: string; students: To
   return (
     <motion.section
       initial={{ opacity: 0, y: 24 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.15 }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
       className="relative overflow-hidden rounded-3xl border border-white/10 bg-ink-950/60 p-5 backdrop-blur-md sm:p-7"
     >
@@ -146,26 +207,120 @@ function GradeSection({ title, students, accent }: { title: string; students: To
           <h2 className="text-2xl font-black md:text-3xl">
             {header.icon} {title}
           </h2>
-          <span className={`rounded-full border px-3 py-1 text-xs font-bold ${header.badge}`}>{students.length} 🎓</span>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <span className={`rounded-full border px-3 py-1 text-xs font-bold ${header.badge}`}>{basicBadge}</span>
+            {!loading && <span className={`rounded-full border px-3 py-1 text-xs font-bold ${header.badge}`}>{students.length} 🎓</span>}
+          </div>
         </div>
 
-        {podium.length > 0 && (
-          <div className="mx-auto mb-8 flex max-w-xl items-end justify-center gap-3 sm:gap-4">
-            {podium[1] && <PodiumCol student={podium[1]} height="h-28" place="2nd" />}
-            {podium[0] && <PodiumCol student={podium[0]} height="h-36" place="1st" />}
-            {podium[2] && <PodiumCol student={podium[2]} height="h-24" place="3rd" />}
-          </div>
-        )}
+        {loading ? (
+          <SkeletonList />
+        ) : students.length === 0 ? (
+          <p className="rounded-2xl border border-ink-600 bg-ink-900/80 p-8 text-center text-gray-300">{t('top.empty')}</p>
+        ) : (
+          <>
+            {podium.length > 0 && (
+              <div className="mx-auto mb-8 flex max-w-xl items-end justify-center gap-3 sm:gap-4">
+                {podium[1] && <PodiumCol student={podium[1]} height="h-28" place="2nd" />}
+                {podium[0] && <PodiumCol student={podium[0]} height="h-36" place="1st" />}
+                {podium[2] && <PodiumCol student={podium[2]} height="h-24" place="3rd" />}
+              </div>
+            )}
 
-        {rest.length > 0 && (
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {rest.map((s, i) => (
-              <StudentCard key={s.id} s={s} i={i} />
-            ))}
-          </div>
+            {rest.length > 0 && (
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                {rest.map((s, i) => (
+                  <StudentCard key={s.id} s={s} i={i} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </motion.section>
+  );
+}
+
+function SubsidiaryCard({ entry, loading, accent }: { entry: LatestExamTop | undefined; loading: boolean; accent: 'sky' | 'ember' }) {
+  const { t, lang } = useLang();
+  const badge = accent === 'sky' ? 'bg-sky-500/15 text-sky-300 border-sky-500/40' : 'bg-ember-500/15 text-ember-300 border-ember-500/40';
+  const pill = accent === 'sky' ? 'text-sky-300' : 'text-ember-300';
+  const examName = entry && (lang === 'ar' || !entry.examTitleEn) ? entry.examTitle : entry?.examTitleEn || entry?.examTitle;
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="rounded-3xl border border-dashed border-white/15 bg-ink-950/40 p-5 backdrop-blur-md sm:p-6"
+    >
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className={`rounded-full border px-3 py-1 text-xs font-bold ${badge}`}>⚡ {t('top.subsidiaryBadge')}</span>
+        {entry && entry.examId != null && (
+          <span className={`text-xs ${pill}`}>
+            🎯 {t('top.latestExam')}: <span className="font-bold text-gray-200">{examName}</span>
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center justify-between rounded-lg bg-ink-900/70 px-3 py-2.5">
+              <div className="h-4 w-32 animate-pulse rounded bg-ink-700" />
+              <div className="h-4 w-12 animate-pulse rounded bg-ink-700" />
+            </div>
+          ))}
+        </div>
+      ) : entry && entry.examId != null ? (
+        entry.top.length === 0 ? (
+          <p className="rounded-xl border border-ink-600 bg-ink-900/70 px-4 py-6 text-center text-sm text-gray-400">{t('top.latestExamTopEmpty')}</p>
+        ) : (
+          <ol className="space-y-2">
+            {entry.top.map((s, idx) => (
+              <motion.li
+                key={s.userId}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: idx * 0.08 }}
+                className="flex items-center justify-between gap-2 rounded-lg bg-ink-900/70 px-3 py-2.5"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0 text-lg">{MEDALS[idx + 1] ?? `#${idx + 1}`}</span>
+                  <span className="truncate text-sm font-bold text-gray-200">{s.fullName}</span>
+                </span>
+                <span className={`shrink-0 rounded-md border px-2 py-0.5 text-xs font-black ${badge}`}>{s.score}%</span>
+              </motion.li>
+            ))}
+          </ol>
+        )
+      ) : (
+        <p className="rounded-xl border border-ink-600 bg-ink-900/70 px-4 py-6 text-center text-sm text-gray-400">{t('top.noLatestExam')}</p>
+      )}
+    </motion.section>
+  );
+}
+
+function SkeletonList() {
+  return (
+    <div className="space-y-3">
+      <div className="mx-auto flex max-w-xl items-end justify-center gap-3 sm:gap-4">
+        <div className="h-28 flex-1 animate-pulse rounded-t-2xl bg-ink-800" />
+        <div className="h-36 flex-1 animate-pulse rounded-t-2xl bg-ink-800" />
+        <div className="h-24 flex-1 animate-pulse rounded-t-2xl bg-ink-800" />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center gap-4 rounded-2xl bg-ink-900/80 p-4">
+            <div className="h-14 w-14 animate-pulse rounded-full bg-ink-800" />
+            <div className="flex-1 space-y-2">
+              <div className="h-4 w-3/4 animate-pulse rounded bg-ink-800" />
+              <div className="h-3 w-1/2 animate-pulse rounded bg-ink-800" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -181,8 +336,7 @@ function PodiumCol({ student, height, place }: { student: TopStudent; height: st
   return (
     <motion.div
       initial={{ opacity: 0, y: 24 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{ delay: place === '1st' ? 0.1 : 0.2 }}
       className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center"
     >
@@ -212,8 +366,7 @@ function StudentCard({ s, i }: { s: TopStudent; i: number }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.2 }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{ delay: i * 0.05 }}
       className="card-fire card-fire-hover flex items-center gap-4 rounded-2xl p-4"
     >

@@ -9,6 +9,7 @@ import { useAuth } from './contexts/AuthContext';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const Home = lazy(() => import('./pages/Home'));
 const TopStudents = lazy(() => import('./pages/TopStudents'));
 const TopStudentCertificate = lazy(() => import('./pages/TopStudentCertificate'));
@@ -29,6 +30,7 @@ const AdminExams = lazy(() => import('./pages/admin/ExamsAdmin'));
 const AdminNotes = lazy(() => import('./pages/admin/NotesAdmin'));
 const AdminStudents = lazy(() => import('./pages/admin/StudentsAdmin'));
 const AdminTopStudents = lazy(() => import('./pages/admin/TopStudentsAdmin'));
+const AdminLeaderboard = lazy(() => import('./pages/admin/LeaderboardAdmin'));
 const AdminSettings = lazy(() => import('./pages/admin/SettingsAdmin'));
 
 function PageLoader() {
@@ -73,6 +75,7 @@ function AnimatedRoutes() {
         <Routes location={location}>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/top-students" element={<TopStudents />} />
           <Route path="/top-students/:id" element={<TopStudentCertificate />} />
           <Route path="/" element={<ProtectedRoute><SubscriberGate><Home /></SubscriberGate></ProtectedRoute>} />
@@ -93,6 +96,7 @@ function AnimatedRoutes() {
             <Route path="notes" element={<AdminNotes />} />
             <Route path="students" element={<AdminStudents />} />
             <Route path="top-students" element={<AdminTopStudents />} />
+            <Route path="leaderboard" element={<AdminLeaderboard />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
 

@@ -233,3 +233,38 @@ export function loadTopStudents(force = false): Promise<TopStudent[]> {
       throw e;
     });
 }
+
+/* =================== أوائل الامتحان الأخير (فرعي، تلقائي من النتائج) =================== */
+
+export interface LatestExamTopEntry {
+  userId: number;
+  fullName: string;
+  score: number;
+}
+
+export interface LatestExamTop {
+  examId: number | null;
+  examTitle: string;
+  examTitleEn: string;
+  top: LatestExamTopEntry[];
+}
+
+const LATEST_TOP_KEY = 'latestExamTop';
+const LATEST_TOP_TTL = 60_000;
+
+export function loadLatestExamTop(force = false): Promise<Record<string, LatestExamTop>> {
+  if (!force) {
+    const cached = getCached<Record<string, LatestExamTop>>(LATEST_TOP_KEY, LATEST_TOP_TTL);
+    if (cached) return Promise.resolve(cached);
+  }
+  return api<{ leaderboards: Record<string, LatestExamTop> }>('/api/latest-exam-top')
+    .then((d) => {
+      setCached(LATEST_TOP_KEY, d.leaderboards);
+      return d.leaderboards;
+    })
+    .catch((e) => {
+      const cached = getCached<Record<string, LatestExamTop>>(LATEST_TOP_KEY, LATEST_TOP_TTL);
+      if (cached) return cached;
+      throw e;
+    });
+}

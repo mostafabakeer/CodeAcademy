@@ -17,6 +17,7 @@ import {
   updateUser,
   deleteUser,
   safeUser,
+  normalizePhone,
   listUsers,
   listAllUsers,
   listCourses,
@@ -73,7 +74,13 @@ import {
   setLevels,
   adminStats,
   submitExam,
-  normalizePhone,
+  createPasswordReset,
+  findActivePasswordResetByUser,
+  listAllPasswordResets,
+  updatePasswordResetStatus,
+  type ResetStatus,
+  listLatestExamTop,
+  listExamResultsPage,
 } from '../_shared/db.ts';
 import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
 
@@ -220,6 +227,63 @@ app.get('/auth/me', requireAuth, async (c) => {
 
 app.post('/auth/logout', async (c) => {
   return c.json({ ok: true }, 200, { 'Set-Cookie': clearAuthCookieHeader() });
+});
+
+/* =================== طلب تغيير كلمة السر =================== */
+
+/** الطالب يطلب تغيير كلمة السر برقم التليفون. */
+app.post('/auth/forgot-password', async (c) => {
+  const { phone } = await c.req.json().catch(() => ({}));
+  if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
+  const normPhone = normalizePhone(phone);
+  if (!normPhone) return c.json({ error: 'رقم التليفون غير صحيح' }, 400);
+
+  const user = await findUserByPhone(normPhone);
+  if (!user) return c.json({ error: 'رقم التليفون غير مسجل' }, 404);
+  if (user.role === 'admin') return c.json({ error: 'لا يمكن تغيير كلمة سر حساب مدير بهذه الطريقة' }, 400);
+
+  const reset = await createPasswordReset(user.id);
+  return c.json({ ok: true, requestId: reset.id });
+});
+
+/** الطالب يتحقق من حالة طلبه (pending / approved). */
+app.get('/auth/forgot-password/status', async (c) => {
+  const phone = c.req.query('phone');
+  if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
+  const normPhone = normalizePhone(phone);
+  if (!normPhone) return c.json({ status: 'none' });
+
+  const user = await findUserByPhone(normPhone);
+  if (!user) return c.json({ status: 'none' });
+
+  const reset = await findActivePasswordResetByUser(user.id);
+  if (!reset) return c.json({ status: 'none' });
+  return c.json({ status: reset.status });
+});
+
+/** الطالب يضع كلمة السر الجديدة بعد موافقة الإدارة. */
+app.post('/auth/forgot-password/complete', async (c) => {
+  const { phone, password } = await c.req.json().catch(() => ({}));
+  if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
+  if (!password || String(password).length < 6) return c.json({ error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
+  const normPhone = normalizePhone(phone);
+  if (!normPhone) return c.json({ error: 'رقم التليفون غير صحيح' }, 400);
+
+  const user = await findUserByPhone(normPhone);
+  if (!user) return c.json({ error: 'رقم التليفون غير مسجل' }, 404);
+  if (user.role === 'admin') return c.json({ error: 'لا يمكن تغيير كلمة سر حساب مدير بهذه الطريقة' }, 400);
+
+  const reset = await findActivePasswordResetByUser(user.id);
+  if (!reset) return c.json({ error: 'لا يوجد طلب نشط لتغيير كلمة السر' }, 400);
+  if (reset.status === 'pending') return c.json({ error: 'الطلب لم يتم تفعيله من الإدارة بعد' }, 400);
+  if (reset.status === 'completed') return c.json({ error: 'تم استخدام هذا الطلب بالفعل. سجّل الدخول بكلمة السر الجديدة' }, 400);
+
+  const passwordHash = await hashPassword(String(password));
+  await updateUser(user.id, { passwordHash });
+  invalidateUserCache(user.id);
+  await updatePasswordResetStatus(reset.id, 'completed');
+
+  return c.json({ ok: true });
 });
 
 /* =================== المحتوى الكامل (bootstrap) =================== */
@@ -491,6 +555,7 @@ app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
 
   const { answers } = await c.req.json().catch(() => ({}));
   const outcome = await submitExam(reqUser.id, exam, (answers as Record<string, number>) ?? {});
+  clearLatestExamTopCache();
   return c.json({
     score: outcome.score,
     best: outcome.best,
@@ -515,6 +580,7 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
     order: Number(b.order) || 0,
     createdAt: Date.now(),
   });
+  clearLatestExamTopCache();
   return c.json({ exam });
 });
 
@@ -533,11 +599,13 @@ app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
     allowRetake: b.allowRetake !== undefined ? !!b.allowRetake : exam.allowRetake,
     order: b.order !== undefined ? Number(b.order) : exam.order,
   });
+  clearLatestExamTopCache();
   return c.json({ exam: updated });
 });
 
 app.delete('/exams/:id', requireAuth, requireAdmin, async (c) => {
   await deleteExam(Number(c.req.param('id')));
+  clearLatestExamTopCache();
   return c.json({ ok: true });
 });
 
@@ -734,6 +802,27 @@ app.get('/top-students', async (c) => {
   return c.json({ students });
 });
 
+/** أوائل ٣ من "الامتحان الأخير" لكل مرحلة (فرعي) — عام مثل /top-students، بكاش 60 ثانية. */
+let latestExamTopCache: { at: number; data: unknown } | null = null;
+const LATEST_EXAM_TOP_TTL = 60_000;
+
+function clearLatestExamTopCache(): void {
+  latestExamTopCache = null;
+}
+
+app.get('/latest-exam-top', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  if (!genericRateLimit(`latest-exam-top:${clientIp}`, 10, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+  if (latestExamTopCache && Date.now() - latestExamTopCache.at < LATEST_EXAM_TOP_TTL) {
+    return c.json(latestExamTopCache.data);
+  }
+  const data = { leaderboards: await listLatestExamTop() };
+  latestExamTopCache = { at: Date.now(), data };
+  return c.json(data);
+});
+
 /* =================== لوحة الأدمن =================== */
 
 app.get('/admin/stats', requireAuth, requireAdmin, async (c) => {
@@ -814,6 +903,7 @@ app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
       totalLessons: stats?.totalLessons ?? 0,
       examsTaken: stats?.examsTaken ?? 0,
       totalExams: stats?.totalExams ?? 0,
+      examScores: stats?.examScores ?? [],
     };
   }).sort((a, b) => b.points - a.points);
   return c.json({ users: out });
@@ -909,6 +999,7 @@ app.delete('/admin/users/:id', requireAuth, requireAdmin, async (c) => {
   if (user.role === 'admin') return c.json({ error: 'لا يمكن حذف حساب مدير' }, 403);
   await deleteUser(id);
   invalidateUserCache(id);
+  clearLatestExamTopCache();
   return c.json({ ok: true });
 });
 
@@ -924,6 +1015,43 @@ app.put('/admin/config/levels', requireAuth, requireAdmin, async (c) => {
   }
   const clean = await setLevels(tiers);
   return c.json({ config: { levels: clean } });
+});
+
+/* =================== طلبات تغيير كلمة السر (لوحة الأدمن) =================== */
+
+/** قائمة جميع طلبات تغيير كلمة السر مع بيانات الطالب. */
+app.get('/admin/password-resets', requireAuth, requireAdmin, async (c) => {
+  const requests = await listAllPasswordResets();
+  return c.json({ requests });
+});
+
+/** موافقة على طلب تغيير كلمة السر → يُعاد الكود مع بيانات الطالب لتمكين واتساب. */
+app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
+  const requests = await listAllPasswordResets();
+  const req = requests.find((r) => r.id === id);
+  if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
+  if (req.status === 'completed') return c.json({ error: 'تم إتمام هذا الطلب بالفعل' }, 400);
+
+  const updated = await updatePasswordResetStatus(id, 'approved');
+  if (!updated) return c.json({ error: 'فشل تحديث الحالة' }, 500);
+
+  const user = await findUserById(req.userId);
+  return c.json({ ok: true, fullName: user?.fullName ?? req.fullName, phone: user?.phone ?? req.phone });
+});
+
+/** رفض طلب تغيير كلمة السر → يُرفض الطلب. */
+app.post('/admin/password-resets/:id/reject', requireAuth, requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
+  const requests = await listAllPasswordResets();
+  const req = requests.find((r) => r.id === id);
+  if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
+  if (req.status === 'completed') return c.json({ error: 'لا يمكن رفض طلب تم إتمامه' }, 400);
+
+  await updatePasswordResetStatus(id, 'rejected');
+  return c.json({ ok: true });
 });
 
 // رابط رفع مباشر إلى Storage (تجاوز حد الحجم في الدوال) — يوقّع URL ثم يرفع المتصفح مباشرة
@@ -999,6 +1127,35 @@ app.put('/admin/top-students/:id', requireAuth, requireAdmin, async (c) => {
 app.delete('/admin/top-students/:id', requireAuth, requireAdmin, async (c) => {
   await deleteTopStudent(Number(c.req.param('id')));
   return c.json({ ok: true });
+});
+
+/** قائمة امتحانات مصغّرة لعنوان صفحة نتائج الامتحانات (لوحة الأدمن) — رخيصة وبلا أسئلة/إحصائيات. */
+app.get('/admin/exams/select', requireAuth, requireAdmin, async (c) => {
+  const exams = await listExams();
+  return c.json({ exams: exams.map((e) => ({ id: e.id, title: e.title, titleEn: e.titleEn, grade: e.grade, order: e.order ?? 0 })) });
+});
+
+/** نتائج امتحان معين بتنازلي الأعلى درجة — بحث بالاسم/التليفون وترقيم. */
+app.get('/admin/exam-results/:examId', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`admin-exam-results:${me.id}`, 20, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+  const examId = Number(c.req.param('examId'));
+  const exam = await findExamById(examId);
+  if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
+  const url = new URL(c.req.url);
+  const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+  const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+  const search = url.searchParams.get('search') ?? undefined;
+  const row = await listExamResultsPage(examId, { page, limit, search });
+  return c.json({
+    exam: { id: exam.id, title: exam.title, titleEn: exam.titleEn, grade: exam.grade },
+    results: row.results,
+    total: row.total,
+    page: row.page,
+    limit: row.limit,
+  });
 });
 
 /* =================== التوجيه عبر x-path / ?path =================== */

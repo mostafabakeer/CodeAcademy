@@ -152,6 +152,79 @@ export async function updateUser(id: number, patch: Partial<Omit<DbUser, 'id'>>)
   return data ? userFromRow(data) : null;
 }
 
+/* =================== طلبات تغيير كلمة السر =================== */
+
+export type ResetStatus = 'pending' | 'approved' | 'completed' | 'rejected';
+
+export interface PasswordReset {
+  id: number;
+  userId: number;
+  status: ResetStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+function resetFromRow(r: any): PasswordReset {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    status: (['pending', 'approved', 'completed', 'rejected'].includes(r.status) ? r.status : 'pending') as ResetStatus,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+/** سجلّ طلب تغيير كلمة السر الحالي لطالب (الأنشط فقط: pending/approved). */
+export async function findActivePasswordResetByUser(userId: number): Promise<PasswordReset | null> {
+  const { data } = await sb
+    .from('password_resets')
+    .select('*')
+    .eq('user_id', userId)
+    .in('status', ['pending', 'approved'])
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ? resetFromRow(data) : null;
+}
+
+/** إنشاء طلب جديد، أو إعادة تفعيل طلب pending سابق (لا ننشئ مكرراً). */
+export async function createPasswordReset(userId: number): Promise<PasswordReset> {
+  const at = now();
+  const existing = await findActivePasswordResetByUser(userId);
+  if (existing) {
+    const { data } = await sb.from('password_resets').update({ updated_at: at }).eq('id', existing.id).select().single();
+    return resetFromRow(data);
+  }
+  const { data } = await sb
+    .from('password_resets')
+    .insert({ user_id: userId, status: 'pending', created_at: at, updated_at: at })
+    .select()
+    .single();
+  return resetFromRow(data);
+}
+
+/** جميع الطلبات مع بيانات الطلاب، الأحدث أولاً (للوحة الأدمن). */
+export async function listAllPasswordResets(limit = 100): Promise<(PasswordReset & { fullName: string; phone: string })[]> {
+  const { data } = await sb
+    .from('password_resets')
+    .select('*, users(full_name, phone)')
+    .order('id', { ascending: false })
+    .limit(limit);
+  return (data ?? []).map((r: any) => ({
+    ...resetFromRow(r),
+    fullName: r.users?.full_name ?? '',
+    phone: r.users?.phone ?? '',
+  }));
+}
+
+/** تحديث حالة طلب (موافقة/رفض/إكمال) — يضمن انتقالاً صحيحاً ومقيداً. */
+export async function updatePasswordResetStatus(id: number, status: ResetStatus): Promise<PasswordReset | null> {
+  if (!['pending', 'approved', 'completed', 'rejected'].includes(status)) return null;
+  const at = now();
+  const { data } = await sb.from('password_resets').update({ status, updated_at: at }).eq('id', id).select().maybeSingle();
+  return data ? resetFromRow(data) : null;
+}
+
 export async function listUsers(params: {
   page?: number;
   limit?: number;
@@ -886,6 +959,178 @@ export async function listResultSummariesByUser(userId: number): Promise<{ examI
   }));
 }
 
+/* =================== نتائج الامتحانات (لوحة الأدمن) =================== */
+
+export interface ExamResultRow {
+  userId: number;
+  fullName: string;
+  phone: string;
+  grade: string;
+  best: number;
+  score: number;
+  correct: number;
+  total: number;
+  attempts: number;
+  at: number;
+  rank: number;
+}
+
+/**
+ * صفحة نتائج امتحان معين مترتبة تنازليًا حسب أعلى درجة (best) ثم الطالب.
+ * البحث بالاسم/التليفون عبر فهرس trigram للمستخدمين ثم فلترة النتائج بالأعضاء.
+ * getResult يقرأ من نفس الجدول/الفهرس فلا ضغط إضافي.
+ */
+export async function listExamResultsPage(
+  examId: number,
+  params: { page?: number; limit?: number; search?: string } = {}
+): Promise<{ results: ExamResultRow[]; total: number; page: number; limit: number }> {
+  const page = Math.max(1, Number(params.page) || 1);
+  const limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
+  const search = params.search?.trim() ?? '';
+
+  // البحث: نستخرج أولًا معرفات الطلاب المطابقين (فهرس trigram) ثم نفلتر النتائج عليهم
+  let searchIds: number[] | null = null;
+  if (search) {
+    const safe = search.replace(/[(),*.]/g, '');
+    const like = `%${safe}%`;
+    const { data } = await sb
+      .from('users')
+      .select('id')
+      .or(`full_name.ilike.${like},phone.ilike.${like},username.ilike.${like}`) as any;
+    searchIds = (data ?? []).map((r: any) => Number(r.id));
+    if (searchIds.length === 0) return { results: [], total: 0, page, limit };
+  }
+
+  // عدّاد إجمالي دقيق مع حدود ترقيم
+  const run = (from: number, to: number) => {
+    let q = sb.from('exam_results').select('*', { count: 'exact' }).eq('exam_id', examId);
+    if (searchIds) q = q.in('user_id', searchIds);
+    return q.order('best', { ascending: false }).order('user_id', { ascending: true }).range(from, to);
+  };
+
+  let from = (page - 1) * limit;
+  const to = from + limit - 1;
+  let { data, count } = await run(from, to);
+  const total = count ?? 0;
+
+  // تصحيح الصفحة إن تجاوزت نطاق النتائج (بحث/حذف أثناء التنقل)
+  const maxPage = Math.max(1, Math.ceil(total / limit));
+  let effectivePage = page;
+  if (total > 0 && page > maxPage) {
+    effectivePage = maxPage;
+    from = (effectivePage - 1) * limit;
+    const retry = await run(from, from + limit - 1);
+    data = retry.data;
+  }
+
+  const rows = (data ?? []).map(resultFromRow);
+  const userIds = [...new Set(rows.map((r) => r.userId))];
+  const userById = new Map<number, { fullName: string; phone: string; grade: string }>();
+  if (userIds.length > 0) {
+    const { data: users } = await sb.from('users').select('id, full_name, phone, grade').in('id', userIds);
+    for (const u of users ?? []) {
+      userById.set(Number(u.id), {
+        fullName: String(u.full_name ?? ''),
+        phone: String(u.phone ?? ''),
+        grade: String(u.grade ?? ''),
+      });
+    }
+  }
+
+  const results: ExamResultRow[] = rows.map((r, i) => {
+    const u = userById.get(r.userId) ?? { fullName: '', phone: '', grade: '' };
+    return {
+      userId: r.userId,
+      fullName: u.fullName,
+      phone: u.phone,
+      grade: u.grade,
+      best: r.best,
+      score: r.score,
+      correct: r.correct,
+      total: r.total,
+      attempts: r.attempts,
+      at: r.at,
+      rank: from + i + 1,
+    };
+  });
+
+  return { results, total, page: effectivePage, limit };
+}
+
+/* =================== أوائل الامتحان الأخير (فرعي) =================== */
+
+export interface ExamTopEntry {
+  userId: number;
+  fullName: string;
+  score: number;
+}
+
+export interface LatestExamTop {
+  examId: number | null;
+  examTitle: string;
+  examTitleEn: string;
+  top: ExamTopEntry[];
+}
+
+const EXAM_GRADES = ['bac1', 'bac2'] as const;
+
+/**
+ * Top 3 per grade from the "latest exam" (subsidiary):
+ * The latest exam = the most recently created one (created_at desc, id desc) among that
+ * grade's own exams or shared exams (grade='all'). Each grade resolves its own latest exam.
+ * Best attempt counts; students only; highest score first, then lowest user id on ties.
+ */
+export async function listLatestExamTop(): Promise<Record<string, LatestExamTop>> {
+  const out: Record<string, LatestExamTop> = {};
+  for (const grade of EXAM_GRADES) {
+    out[grade] = await latestExamTopForGrade(grade);
+  }
+  return out;
+}
+
+async function latestExamTopForGrade(grade: string): Promise<LatestExamTop> {
+  // The most recently created exam qualifies for this grade: shared (grade='all') or grade-specific.
+  // Sort by created_at (creation time), not the manual display "order", so each grade gets its own latest exam.
+  const { data: examRows } = await sb
+    .from('exams')
+    .select('id, title, title_en, grade')
+    .or(`grade.eq.all,grade.eq.${grade}`)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1);
+  const exam = examRows?.[0];
+  if (!exam) return { examId: null, examTitle: '', examTitleEn: '', top: [] };
+
+  const { data: resultRows } = await sb
+    .from('exam_results')
+    .select('user_id, best, users(full_name, role, grade)')
+    .eq('exam_id', Number(exam.id))
+    .order('best', { ascending: false })
+    .order('user_id', { ascending: true })
+    .limit(50);
+
+  const top: ExamTopEntry[] = [];
+  for (const r of resultRows ?? []) {
+    const u = (r as any).users as { full_name?: string; role?: string; grade?: string } | null;
+    if (!u || u.role === 'admin') continue;
+    // امتحان عام (all) يشمل كل الطلاب؛ وامتحان المرحلة يقتصر على طلابها
+    if (exam.grade !== 'all' && u.grade !== grade) continue;
+    top.push({
+      userId: Number(r.user_id),
+      fullName: String(u.full_name ?? ''),
+      score: Number(r.best) || 0,
+    });
+    if (top.length >= 3) break;
+  }
+
+  return {
+    examId: Number(exam.id),
+    examTitle: String(exam.title ?? ''),
+    examTitleEn: String(exam.title_en ?? ''),
+    top,
+  };
+}
+
 /* =================== ملفات الكود =================== */
 
 export interface CodeFile {
@@ -1067,6 +1312,8 @@ export interface StudentStats {
   totalLessons: number;
   examsTaken: number;
   totalExams: number;
+  /** درجات الطالب المئوية في كل امتحاناته (سجل واحد لكل امتحان) — تُحسب من نفس تجميع النتائج في نسخة الـ batch. */
+  examScores: { examId: number; at: number; score: number }[];
 }
 
 export async function computeStudentStats(userId: number): Promise<StudentStats> {
@@ -1109,6 +1356,11 @@ export async function computeStudentStats(userId: number): Promise<StudentStats>
     totalLessons: lessonIds.length,
     examsTaken: scores.length,
     totalExams,
+    examScores: results.map((r) => ({
+      examId: r.examId,
+      at: r.at ?? 0,
+      score: Number(r.best ?? r.score ?? 0),
+    })),
   };
 }
 
@@ -1206,6 +1458,11 @@ export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<n
       totalLessons,
       examsTaken: scores.length,
       totalExams,
+      examScores: (resultsByUser.get(id) ?? []).map((r) => ({
+        examId: r.examId,
+        at: r.at ?? 0,
+        score: Number(r.best ?? r.score ?? 0),
+      })),
     });
   }
 
