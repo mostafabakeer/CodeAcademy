@@ -117,7 +117,8 @@ app.use(
 
 app.onError((err, c) => {
   console.error(`[api] ${c.req.method} ${c.req.path}:`, err);
-  return c.json({ error: 'خطأ داخلي في الخادم' }, 500);
+  const msg = (err as Error)?.message ?? String(err);
+  return c.json({ error: 'خطأ داخلي في الخادم', detail: msg }, 500);
 });
 
 function bodyText(v: unknown): string {

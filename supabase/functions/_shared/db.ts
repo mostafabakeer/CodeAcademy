@@ -693,14 +693,16 @@ export async function findQuestionById(id: number): Promise<Question | null> {
 }
 
 export async function createQuestion(input: Omit<Question, 'id'>): Promise<Question> {
-  const { data } = await sb.from('questions').insert(questionToRow(input)).select().single();
+  const { data, error } = await sb.from('questions').insert(questionToRow(input)).select().single();
+  if (error) throw new Error(`createQuestion failed: ${error.message}`);
   return questionFromRow(data);
 }
 
 export async function updateQuestion(id: number, patch: Partial<Omit<Question, 'id'>>): Promise<Question | null> {
   const row = questionToRow(patch);
   if (Object.keys(row).length === 0) return findQuestionById(id);
-  const { data } = await sb.from('questions').update(row).eq('id', id).select().maybeSingle();
+  const { data, error } = await sb.from('questions').update(row).eq('id', id).select().maybeSingle();
+  if (error) throw new Error(`updateQuestion failed: ${error.message}`);
   return data ? questionFromRow(data) : null;
 }
 
