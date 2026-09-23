@@ -2,6 +2,7 @@
   "name": "drcode",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "منصة تعليم البرمجة - DR Code",
   "scripts": {
     "dev": "npm run dev --prefix client",
