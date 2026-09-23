@@ -12,7 +12,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: client/package-lock.json
 
@@ -43,9 +43,22 @@ jobs:
           test -n "$CF_ACCOUNT" \
             || { echo "::error::Secret CLOUDFLARE_ACCOUNT_ID is missing or empty — create it in Repo Settings -> Secrets and variables -> Actions (account id lives in Cloudflare Dashboard, right sidebar on Overview)"; exit 1; }
 
+      - name: Sanitize Cloudflare secrets (strip stray whitespace/newlines)
+        shell: bash
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CF_TOKEN" || { echo "::error::CLOUDFLARE_API_TOKEN empty"; exit 1; }
+          test -n "$CF_ACCOUNT" || { echo "::error::CLOUDFLARE_ACCOUNT_ID empty"; exit 1; }
+          printf '%s' "$CF_TOKEN" | tr -d '\r\n\t ' > "$RUNNER_TEMP/cf-token"
+          printf '%s' "$CF_ACCOUNT" | tr -d '\r\n\t ' > "$RUNNER_TEMP/cf-account"
+          test -s "$RUNNER_TEMP/cf-token" || { echo "::error::CLOUDFLARE_API_TOKEN became empty after sanitize"; exit 1; }
+          test -s "$RUNNER_TEMP/cf-account" || { echo "::error::CLOUDFLARE_ACCOUNT_ID became empty after sanitize"; exit 1; }
+
       - name: Deploy to Cloudflare (wrangler deploy)
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+        shell: bash
+        run: |
+          export CLOUDFLARE_API_TOKEN="$(cat "$RUNNER_TEMP/cf-token")"
+          export CLOUDFLARE_ACCOUNT_ID="$(cat "$RUNNER_TEMP/cf-account")"
+          npx --yes wrangler@4.137.0 deploy
