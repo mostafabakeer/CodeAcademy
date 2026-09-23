@@ -9,7 +9,8 @@
     "build": "npm run build --prefix client",
     "preview": "npm run preview --prefix client",
     "test": "node --test smoke.test.mjs",
-    "deploy": "supabase db push && supabase functions deploy api --no-verify-jwt && supabase functions deploy backup --no-verify-jwt && supabase functions deploy cleanup --no-verify-jwt"
+    "deploy": "supabase db push && supabase functions deploy api --no-verify-jwt && supabase functions deploy backup --no-verify-jwt && supabase functions deploy cleanup --no-verify-jwt",
+    "deploy:cf": "npm run build && npx wrangler deploy"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

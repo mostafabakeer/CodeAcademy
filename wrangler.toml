@@ -1,0 +1,9 @@
+name = "drcode"
+compatibility_date = "2025-04-11"
+main = "src/worker.js"
+workers_dev = true
+
+[assets]
+directory = "./client/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
