@@ -9,6 +9,8 @@ import { json, corsHeaders } from '../_shared/responses.ts';
  */
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(req) });
+  // النسخ الاحتياطي عملية كتابة (رفع ملف) — POST فقط لا GET (يمنع التفعيل العابر من رابط/صورة).
+  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405, req);
   // النسخ الاحتياطي يُستدعى فقط من أدوات/سكربتات (لا من المتصفح): نرفض أي طلب يحمل Origin.
   if (req.headers.get('origin')) return json({ error: 'Forbidden: server-side only' }, 403, req);
 

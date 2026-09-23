@@ -4,6 +4,16 @@ import { getLocal, setLocal, removeLocal } from './storage';
 
 const DRAFT_PREFIX = 'draft:';
 const VIDEO_PREFIX = 'video:';
+const INSTALL_DISMISSED_KEY = 'install_dismissed';
+
+/** هل رفض المستخدم تثبيت الموقع نهائياً؟ (لا تظهر رسالة التثبيت بعده أبداً). */
+export function getInstallDismissed(): boolean {
+  return getLocal(INSTALL_DISMISSED_KEY) === '1';
+}
+
+export function setInstallDismissed(): void {
+  setLocal(INSTALL_DISMISSED_KEY, '1');
+}
 
 export interface VideoProgressLocal {
   seconds: number;
@@ -37,10 +47,6 @@ export function getVideoProgressLocal(lessonId: number): VideoProgressLocal | nu
 
 export function setVideoProgressLocal(lessonId: number, seconds: number, duration: number): void {
   setLocal(VIDEO_PREFIX + lessonId, JSON.stringify({ seconds, duration, updatedAt: Date.now() }));
-}
-
-export function clearVideoProgressLocal(lessonId: number): void {
-  removeLocal(VIDEO_PREFIX + lessonId);
 }
 
 /** خريطة كل تقدم المشاهدة المحلي: lessonId → progress (تُستخدم لحساب التقدم والإحصائيات في المتصفح). */

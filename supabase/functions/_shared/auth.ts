@@ -4,7 +4,7 @@ import { JWT_SECRET } from './env.ts';
 import { findAuthUserById, getSessionEpoch, type DbUser } from './db.ts';
 
 export const AUTH_COOKIE = 'dr_code_token';
-export const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 يوم
+export const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 180; // 180 يوم
 
 export interface AuthUser {
   id: number;
@@ -49,7 +49,7 @@ export async function signToken(user: Pick<AuthUser, 'id' | 'role' | 'fullName' 
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('30d')
+    .setExpirationTime('180d')
     .sign(key);
 }
 
@@ -121,39 +121,56 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
   const decoded = await verifyToken(token);
   if (!decoded) return null;
 
-  try {
-    const epoch = await getSessionEpoch();
-    if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) return null;
+  const epoch = await getSessionEpoch();
+  if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) return null;
 
-    const cached = getCachedUser(decoded.id);
-    if (cached) return cached;
+  const cached = getCachedUser(decoded.id);
+  if (cached) return cached;
 
-    const user: DbUser | null = await findAuthUserById(decoded.id);
-    if (!user) return null;
+  // findAuthUserById يرمي خطأً حقيقياً عند فشل قاعدة البيانات (يرتد كـ 500 مؤقت
+  // بدلاً من 401)، ويرجع null فقط عند عدم وجود المستخدم → 401 حقيقي.
+  const user: DbUser | null = await findAuthUserById(decoded.id);
+  if (!user) return null;
 
-    const authUser: AuthUser = {
-      id: user.id,
-      role: user.role,
-      fullName: user.fullName,
-      phone: user.phone,
-      grade: user.grade ?? decoded.grade,
-      blocked: !!user.blocked,
-      subscription: !!user.subscription,
-    };
-    setCachedUser(authUser);
-    return authUser;
-  } catch (e) {
-    console.error('[auth] resolveUser:', (e as Error).message);
-    return null;
-  }
+  const authUser: AuthUser = {
+    id: user.id,
+    role: user.role,
+    fullName: user.fullName,
+    phone: user.phone,
+    grade: user.grade ?? decoded.grade,
+    blocked: !!user.blocked,
+    subscription: !!user.subscription,
+  };
+  setCachedUser(authUser);
+  return authUser;
 }
 
-export function authCookieHeader(token: string): string {
-  return `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${AUTH_COOKIE_MAX_AGE}`;
+/**
+ * يُشتق النطاق الجذري من Host الطلب بحيث يغطي www والجذر معاً (Domain=.example.com).
+ * يُتجاهل بأمان عند localhost أو IP أو أسماء بلا نطاق حقيقي (تبقى كوكي host-only).
+ */
+function domainForHost(host: string): string | null {
+  let name = (host || '').split(':')[0].toLowerCase().trim();
+  if (!name || name === 'localhost') return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(name)) return null;
+  const labels = name.split('.');
+  if (labels.length < 2) return null;
+  if (name.startsWith('www.')) name = name.slice(4);
+  return `.${name}`;
 }
 
-export function clearAuthCookieHeader(): string {
-  return `${AUTH_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`;
+export function authCookieHeader(token: string, host?: string): string {
+  let header = `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${AUTH_COOKIE_MAX_AGE}`;
+  const domain = domainForHost(host ?? '');
+  if (domain) header += `; Domain=${domain}`;
+  return header;
+}
+
+export function clearAuthCookieHeader(host?: string): string {
+  let header = `${AUTH_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`;
+  const domain = domainForHost(host ?? '');
+  if (domain) header += `; Domain=${domain}`;
+  return header;
 }
 
 /* =================== وسائط Hono =================== */

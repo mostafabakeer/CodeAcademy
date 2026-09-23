@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
@@ -46,6 +46,7 @@ interface Result {
   passed: boolean;
   correct: number;
   total: number;
+  attempts: number;
   review: ReviewItem[];
 }
 
@@ -206,9 +207,11 @@ export default function ExamTake() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     let active = true;
+    mountedRef.current = true;
     setLoading(true);
     setError('');
     api<ExamData>(`/api/exams/${id}`)
@@ -223,6 +226,7 @@ export default function ExamTake() {
       });
     return () => {
       active = false;
+      mountedRef.current = false;
     };
   }, [id]);
 
@@ -230,7 +234,7 @@ export default function ExamTake() {
   const remaining = data ? data.questions.length - answeredCount : 0;
 
   const submit = async () => {
-    if (!id) return;
+    if (!id || submitting) return;
     setSubmitting(true);
     setError('');
     try {
@@ -238,6 +242,7 @@ export default function ExamTake() {
         method: 'POST',
         body: JSON.stringify({ answers }),
       });
+      if (!mountedRef.current) return;
       setResult(res);
       if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
       applyExamResult({
@@ -246,12 +251,12 @@ export default function ExamTake() {
         score: res.score,
         correct: res.correct,
         total: res.total,
-        attempts: (data?.lastResult?.attempts ?? 0) + 1,
+        attempts: res.attempts ?? (data?.lastResult?.attempts ?? 0) + 1,
       });
     } catch (e) {
-      setError((e as Error).message);
+      if (mountedRef.current) setError((e as Error).message);
     } finally {
-      setSubmitting(false);
+      if (mountedRef.current) setSubmitting(false);
     }
   };
 
@@ -286,6 +291,7 @@ export default function ExamTake() {
         passed: (data.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
         correct: savedReview.filter((r) => r.isCorrect).length,
         total: savedReview.length,
+        attempts: data.lastResult.attempts ?? 1,
         review: savedReview,
       }
     : null;

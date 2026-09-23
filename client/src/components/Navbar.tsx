@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 export default function Navbar() {
   const { t, lang, setLang } = useLang();
-  const { user, logout } = useAuth();
+  const { user, logout, offline } = useAuth();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -27,7 +27,12 @@ export default function Navbar() {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-fire-900/30 bg-ink-950/85 backdrop-blur-xl print:hidden">
+    <header className="sticky top-0 z-40 border-b border-fire-900/30 bg-ink-950/85 backdrop-blur-xl print:hidden" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+      {offline && user && (
+        <div className="border-b border-fire-900/30 bg-fire-950/50 px-4 py-1.5 text-center text-xs font-semibold text-fire-200">
+          ⚡ {t('app.reconnectBanner')}
+        </div>
+      )}
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
         <Link to="/" className="group flex min-w-0 items-center gap-2">
           <img
@@ -101,6 +106,8 @@ export default function Navbar() {
             onClick={() => setOpen(!open)}
             className="btn-ghost-fire rounded-lg p-2 lg:hidden"
             aria-label="menu"
+            aria-expanded={open}
+            aria-controls="mobile-nav"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
               {open ? <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /> : <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />}
@@ -112,9 +119,11 @@ export default function Navbar() {
       <AnimatePresence>
         {open && (
           <motion.nav
+            id="mobile-nav"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
+            aria-label={t('nav.home') + ' — mobile'}
             className="overflow-hidden border-t border-fire-900/20 bg-ink-900/95 lg:hidden"
           >
             <div className="space-y-1 px-4 py-3">

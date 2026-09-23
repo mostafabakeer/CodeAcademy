@@ -58,7 +58,7 @@ export default function Register() {
           </div>
 
           {error && (
-            <div className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
+            <div role="alert" className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
               {error}
             </div>
           )}

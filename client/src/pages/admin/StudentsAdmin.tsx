@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
@@ -8,6 +8,9 @@ import LevelBadge from '../../components/LevelBadge';
 const PAGE_SIZE = 25;
 const CACHE_KEY = 'dr_admin_students_cache';
 const CACHE_TTL = 5 * 60 * 1000;
+const CACHE_VERSION = 2;
+/** معرفٌ ثابت لعمليات لوحة التحكم التي لا تخص طالباً بعينه (تحديث، قائمة الطلبات). */
+const PANEL_ID = 0;
 
 /** تحويل رقم محلي (01xxxxxxxxx) إلى صيغة واتساب الدولية (201xxxxxxxxx). */
 function toWhatsappNumber(p: string): string {
@@ -55,6 +58,14 @@ interface PasswordRequest {
   phone: string;
 }
 
+interface ResetDiag {
+  total: number;
+  byStatus: Record<string, number>;
+  lastRequestAt: number | null;
+  today: string;
+  todayUnmatched: number;
+}
+
 const RESET_STATUS_KEYS: Record<PasswordRequest['status'], string> = {
   pending: 'admin.resetRequestPending',
   approved: 'admin.resetRequestApproved',
@@ -83,6 +94,7 @@ function readCache(): Student[] | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed?.users) || typeof parsed?.at !== 'number') return null;
+    if (parsed?.v !== CACHE_VERSION) return null;
     if (Date.now() - parsed.at > CACHE_TTL) return null;
     return parsed.users as Student[];
   } catch {
@@ -92,10 +104,20 @@ function readCache(): Student[] | null {
 
 function writeCache(users: Student[]): void {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), users }));
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ v: CACHE_VERSION, at: Date.now(), users }));
   } catch {
     /* ignore */
   }
+}
+
+/** صياغة عربية مبسطة للوقت المنقضي منذ stamp (بالملي ثانية). */
+function ago(ms: number): string {
+  const min = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+  if (min < 1) return 'الآن';
+  if (min < 60) return `منذ ${min} دقيقة`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `منذ ${hrs} ساعة`;
+  return `منذ ${Math.floor(hrs / 24)} يوم`;
 }
 
 export default function StudentsAdmin() {
@@ -113,9 +135,19 @@ export default function StudentsAdmin() {
   const [success, setSuccess] = useState('');
   const [resetRequests, setResetRequests] = useState<PasswordRequest[]>([]);
   const [showResetPanel, setShowResetPanel] = useState(false);
+  const [resetDiag, setResetDiag] = useState<ResetDiag | null>(null);
+  /** يمنع setState بعد إغلاق الصفحة (يمسح busy المتروك ويعرّف العمليات المعلّقة). */
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 400);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 200);
     return () => clearTimeout(timer);
   }, [query]);
 
@@ -129,7 +161,7 @@ export default function StudentsAdmin() {
     let cancelled = false;
     setLoading(true);
     setError('');
-    api<{ users: Student[] }>('/api/admin/users/all')
+api<{ users: Student[] }>('/api/admin/users/all?limit=500')
       .then((d) => {
         if (cancelled) return;
         setAllUsers(d.users);
@@ -145,6 +177,22 @@ export default function StudentsAdmin() {
       cancelled = true;
     };
   }, []);
+
+  // تحميل فوري لطلبات تغيير كلمة السر عند فتح اللوحة — حتى يظهر العداد 🔑 دون انتظار فتح السطل.
+  useEffect(() => {
+    loadResetRequests();
+    loadResetDiag();
+  }, []);
+
+  // تحديث تلقائي كل 20 ثانية طول ما السطل مفتوح — استقبال الطلبات لحظياً.
+  useEffect(() => {
+    if (!showResetPanel) return;
+    const id = setInterval(() => {
+      loadResetRequests();
+      loadResetDiag();
+    }, 20000);
+    return () => clearInterval(id);
+  }, [showResetPanel]);
 
   const counts = useMemo(() => {
     const gradeMatch = grade === 'all' ? allUsers : allUsers.filter((s) => s.grade === grade);
@@ -186,15 +234,10 @@ export default function StudentsAdmin() {
   }, [success]);
 
   const refresh = () => {
-    setLoading(true);
-    setError('');
-    api<{ users: Student[] }>('/api/admin/users/all')
-      .then((d) => {
-        setAllUsers(d.users);
-        writeCache(d.users);
-      })
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false));
+    run(PANEL_ID, 'refresh', () => api<{ users: Student[] }>('/api/admin/users/all?limit=500'), (d) => {
+      setAllUsers(d.users);
+      writeCache(d.users);
+    });
   };
 
   const patchStudent = (id: number, patch: Partial<Student>) => {
@@ -205,18 +248,18 @@ export default function StudentsAdmin() {
     });
   };
 
-  const run = async (id: number, action: string, fn: () => Promise<unknown>, onOk?: () => void | Promise<void>) => {
+  const run = async (id: number, action: string, fn: () => Promise<unknown>, onOk?: (d: any) => void | Promise<void>) => {
     const key = `${id}:${action}`;
     if (busy[key]) return;
     setSuccess('');
     setBusy((b) => ({ ...b, [key]: true }));
     try {
-      await fn();
-      await onOk?.();
+      const d = await fn();
+      if (mountedRef.current) await onOk?.(d);
     } catch (e) {
-      setError((e as Error).message);
+      if (mountedRef.current) setError((e as Error).message);
     } finally {
-      setBusy((b) => ({ ...b, [key]: false }));
+      if (mountedRef.current) setBusy((b) => ({ ...b, [key]: false }));
     }
   };
 
@@ -265,31 +308,51 @@ export default function StudentsAdmin() {
 
   const openWaForMessage = (phone: string, message: string) => {
     const wa = toWhatsappNumber(phone);
+    if (!/^\d{10,15}$/.test(wa)) {
+      setError(t('admin.invalidWhatsapp'));
+      return;
+    }
     window.open(`https://wa.me/${wa}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   const loadResetRequests = () =>
-    run(0, 'resets', async () => {
+    run(PANEL_ID, 'resets', async () => {
       const d = await api<{ requests: PasswordRequest[] }>('/api/admin/password-resets');
-      setResetRequests(d.requests);
+      return d.requests;
+    }, (requests) => {
+      setResetRequests(requests);
     });
+
+  const loadResetDiag = async () => {
+    // التشخيص اختياري: أي فشل (مثل 404 لو الدالة القديمة منشورة لسه) يُتجاهل بصمت ولا يظهر كخطأ.
+    try {
+      const d = await api<ResetDiag>('/api/admin/password-resets/diagnose');
+      if (mountedRef.current) setResetDiag(d);
+    } catch {
+      if (mountedRef.current) setResetDiag(null);
+    }
+  };
 
   const approveReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetApproveConfirm'))) return;
-    run(r.id, 'approve', async () => {
-      const d = await api<{ ok: boolean; fullName: string; phone: string }>(`/api/admin/password-resets/${r.id}/approve`, { method: 'POST' });
-      const msg = t('admin.resetApproveWaMessage', { name: d.fullName || '' });
+    run(r.id, 'reset-approve', async () => {
+      const d = await api<{ ok: boolean; fullName: string; phone: string; code?: string }>(`/api/admin/password-resets/${r.id}/approve`, { method: 'POST' });
+      const msg = t('admin.resetApproveWaMessage', { name: d.fullName || '', code: d.code || '' });
       openWaForMessage(d.phone || r.phone, msg);
-      setSuccess(t('admin.resetApproveSuccess'));
+      if (d.code) setSuccess(`${t('admin.resetApproveSuccess')} — ${t('admin.resetApproveCode', { code: d.code })}`);
+      else setSuccess(t('admin.resetApproveSuccess'));
+      return d;
+    }, async () => {
       await loadResetRequests();
     });
   };
 
   const rejectReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetRejectConfirm'))) return;
-    run(r.id, 'reject', async () => {
+    run(r.id, 'reset-reject', async () => {
       await api(`/api/admin/password-resets/${r.id}/reject`, { method: 'POST' });
       setSuccess(t('admin.resetRequestRejected'));
+    }, async () => {
       await loadResetRequests();
     });
   };
@@ -329,10 +392,10 @@ export default function StudentsAdmin() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={refresh}
-            disabled={loading}
+            disabled={isBusy(PANEL_ID, 'refresh')}
             className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? <Spinner /> : '🔄'}
+            {isBusy(PANEL_ID, 'refresh') ? <Spinner /> : '🔄'}
             {t('admin.refresh')}
           </button>
           <button
@@ -372,13 +435,28 @@ export default function StudentsAdmin() {
             <h2 className="text-base font-black">🔑 {t('admin.resetListTitle')}</h2>
             <button
               onClick={() => loadResetRequests()}
-              disabled={isBusy(0, 'resets')}
+              disabled={isBusy(PANEL_ID, 'resets')}
               className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold disabled:opacity-60"
             >
-              {isBusy(0, 'resets') ? <Spinner /> : '🔄'}
+              {isBusy(PANEL_ID, 'resets') ? <Spinner /> : '🔄'}
               {t('admin.resetRefresh')}
             </button>
           </div>
+          {resetDiag && (
+            <div className="border-b border-ink-800 bg-ink-900/60 px-4 py-2 text-xs text-gray-400">
+              {resetDiag.total > 0 && resetDiag.lastRequestAt ? (
+                <span>🕓 {t('admin.resetDiagLast', { time: ago(resetDiag.lastRequestAt) })}</span>
+              ) : (
+                <span>🕓 {t('admin.resetDiagNone')}</span>
+              )}
+              {resetDiag.todayUnmatched > 0 && (
+                <span className="mx-2 rounded-full bg-amber-500/15 px-2.5 py-0.5 font-bold text-amber-300">
+                  ⚠ {t('admin.resetDiagUnmatched', { n: resetDiag.todayUnmatched })}
+                </span>
+              )}
+              <span className="mx-1 opacity-70">· {t('admin.resetDiagLive')}</span>
+            </div>
+          )}
           <div className="overflow-x-auto">
             {resetRequests.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-gray-400">{t('admin.resetPasswordEmpty')}</p>
@@ -415,20 +493,20 @@ export default function StudentsAdmin() {
                           {(r.status === 'pending' || r.status === 'rejected') && (
                             <button
                               onClick={() => approveReset(r)}
-                              disabled={isBusy(r.id, 'approve')}
+                              disabled={isBusy(r.id, 'reset-approve')}
                               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-60"
                             >
-                              {isBusy(r.id, 'approve') ? <Spinner /> : '✓'}
+                              {isBusy(r.id, 'reset-approve') ? <Spinner /> : '✓'}
                               {t('admin.resetApprove')}
                             </button>
                           )}
                           {r.status === 'pending' && (
                             <button
                               onClick={() => rejectReset(r)}
-                              disabled={isBusy(r.id, 'reject')}
+                              disabled={isBusy(r.id, 'reset-reject')}
                               className="inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30 disabled:opacity-60"
                             >
-                              {isBusy(r.id, 'reject') ? <Spinner /> : '✕'}
+                              {isBusy(r.id, 'reset-reject') ? <Spinner /> : '✕'}
                               {t('admin.resetReject')}
                             </button>
                           )}

@@ -34,18 +34,17 @@ interface Props {
   videoUrl: string;
   onProgress?: (seconds: number) => void;
   onDuration?: (seconds: number) => void;
-  onComplete?: () => void;
   initialTime?: number;
 }
 
-export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuration, onComplete, initialTime = 0 }: Props) {
+export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuration, initialTime = 0 }: Props) {
   const playerRef = useRef<any>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const maxWatched = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reportedDuration = useRef(0);
-  const propsRef = useRef({ onProgress, onDuration, onComplete, videoUrl, videoType, initialTime });
-  propsRef.current = { onProgress, onDuration, onComplete, videoUrl, videoType, initialTime };
+  const propsRef = useRef({ onProgress, onDuration, videoUrl, videoType, initialTime });
+  propsRef.current = { onProgress, onDuration, videoUrl, videoType, initialTime };
 
   // ===== رفع محلي =====
   useEffect(() => {
@@ -68,7 +67,6 @@ export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuratio
     const onEnded = () => {
       maxWatched.current = Math.max(maxWatched.current, el.duration || 0);
       propsRef.current.onProgress?.(Math.floor(maxWatched.current));
-      propsRef.current.onComplete?.();
     };
     el.addEventListener('timeupdate', report);
     el.addEventListener('loadedmetadata', onLoaded);
@@ -93,7 +91,7 @@ export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuratio
       if (!window.YT?.Player) return;
       player = new window.YT.Player('yt-player', {
         videoId: id,
-        playerVars: { rel: 0, modestbranding: 1 },
+        playerVars: { rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
           onReady: (e: any) => {
             const dur = e.target.getDuration?.() || 0;
@@ -124,7 +122,6 @@ export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuratio
               const dur = player.getDuration?.() || reportedDuration.current;
               maxWatched.current = Math.max(maxWatched.current, dur);
               propsRef.current.onProgress?.(Math.floor(maxWatched.current));
-              propsRef.current.onComplete?.();
             }
           },
         },
@@ -170,7 +167,7 @@ export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuratio
 
   return (
     <div className="overflow-hidden rounded-2xl border border-fire-500/30 shadow-2xl shadow-fire-950/40">
-      <video ref={videoElRef} src={videoUrl} controls preload="metadata" className="w-full rounded-2xl bg-black" />
+      <video ref={videoElRef} src={videoUrl} controls preload="metadata" playsInline webkit-playsinline="true" className="w-full rounded-2xl bg-black" />
     </div>
   );
 }

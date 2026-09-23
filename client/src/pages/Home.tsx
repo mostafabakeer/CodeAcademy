@@ -8,6 +8,7 @@ import { getAllVideoProgressLocal } from '../lib/localStore';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
 import ProgressBar from '../components/ProgressBar';
+import DoctorCode from '../components/DoctorCode';
 
 export default function Home() {
   const { t, lang } = useLang();
@@ -30,44 +31,75 @@ export default function Home() {
 
   return (
     <div className="space-y-8">
-      {/* Hero */}
+      {/* Hero مميز: الماسكوت + نافذة كود */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative overflow-hidden rounded-3xl border border-fire-500/20 bg-gradient-to-br from-ink-800 via-ink-850 to-ink-900 p-8"
+        className="pattern-dots relative overflow-hidden rounded-3xl border border-fire-500/25 bg-gradient-to-br from-ink-800 via-ink-850 to-ink-900 p-6 sm:p-8"
       >
-        <div className="pointer-events-none absolute -top-20 -end-20 h-64 w-64 rounded-full bg-fire-600/20 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-24 -start-10 h-64 w-64 rounded-full bg-ember-500/15 blur-3xl" />
-        <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-ember-400">
-              🔥 {stats?.totalLessons ? t('home.welcomeBack') : t('home.startJourney')}،
+        <div className="pointer-events-none absolute -top-24 -end-24 h-72 w-72 rounded-full bg-fire-600/25 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -start-10 h-72 w-72 rounded-full bg-ember-500/20 blur-3xl" />
+
+        <div className="relative flex flex-col items-center gap-6 text-center lg:flex-row lg:items-center lg:justify-between lg:text-start">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold tracking-wide text-ember-400">
+              🔥 {stats?.totalLessons ? t('home.welcomeBack') : t('home.startJourney')},
             </p>
-            <h1 className="mt-1 break-words text-2xl font-black sm:text-3xl md:text-4xl">
+            <h1 className="mt-2 break-words text-2xl font-black sm:text-4xl md:text-5xl">
               {user?.fullName} <span className="text-fire-shine">👋</span>
             </h1>
-            <p className="mt-2 text-gray-400">{t('home.subtitle')}</p>
-          </div>
-          <div className="flex flex-col items-center gap-3 md:items-end">
-            <LevelBadge levelKey={stats?.level.key} name={stats?.level.name} nameEn={stats?.level.nameEn} size="lg" />
-            <div className="text-center md:text-end">
-              <div className="text-sm text-gray-400">{t('home.level')}</div>
-              <div className="text-2xl font-black text-fire-gradient sm:text-3xl">{levelLabel}</div>
-              <div className="text-xs text-gray-500">
-                {t('home.points')}: {stats?.points ?? 0}
+            <p className="mt-3 text-gray-400">{t('home.subtitle')}</p>
+
+            <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
+              <LevelBadge levelKey={stats?.level.key} name={stats?.level.name} nameEn={stats?.level.nameEn} size="lg" />
+              <div className="flex items-center gap-4 rounded-2xl border border-fire-500/20 bg-ink-900/70 px-5 py-3">
+                <div>
+                  <div className="text-xs text-gray-400">{t('home.level')}</div>
+                  <div className="text-xl font-black text-fire-gradient">{levelLabel}</div>
+                </div>
+                <div className="h-8 w-px bg-fire-500/25" />
+                <div>
+                  <div className="text-xs text-gray-400">{t('home.points')}</div>
+                  <div className="text-xl font-black text-fire-gradient">{stats?.points ?? 0}</div>
+                </div>
               </div>
             </div>
           </div>
+
+          <div className="relative shrink-0">
+            <br/>
+            <DoctorCode size="lg" />
+            <div className="pointer-events-none absolute inset-0 m-auto h-40 w-40 rounded-full bg-fire-500/10 blur-2xl" />
+          </div>
+        </div>
+
+        {/* نافذة كود ترحيبية بطابع خاص */}
+        <div className="relative mt-8 grid gap-4 lg:grid-cols-2">
+          <div className="term-win">
+            <div className="term-bar">
+              <span className="dot dot-r" />
+              <span className="dot dot-y" />
+              <span className="dot dot-g" />
+              <span className="term-title">drcode/doctor.k — دكتور كود</span>
+            </div>
+            <div className="term-body">
+              <div className="term-line"><span className="term-var">class</span> <span className="term-fn">DoctorCode</span> <span className="term-var">extends</span> <span className="term-fn">Brain</span> {'{'}</div>
+              <div className="term-line">  <span className="term-key">constructor</span>() {'{'}</div>
+              <div className="term-line">    <span className="term-dim">// شغّلت دماغك 🔥</span></div>
+              <div className="term-line">    <span className="term-var">this</span>.power <span className="term-key">=</span> <span className="term-str">'∞'</span>;</div>
+              <div className="term-line">  {'}'}</div>
+              <div className="term-line"><span className="term-str">'عايز تبرمج؟ خلّينا نبدأ ✨'</span><span className="term-caret" /></div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 self-center">
+            <StatCard icon="📝" label={t('home.stats.examAvg')} value={`${stats?.examAvg ?? 0}%`} delay={0} />
+            <StatCard icon="🎬" label={t('home.stats.watchTime')} value={`${watchHours} ${t('home.stats.watchUnit')}`} delay={0.05} />
+            <StatCard icon="✅" label={t('home.stats.completedLessons')} value={`${stats?.completedLessons ?? 0}/${stats?.totalLessons ?? 0}`} delay={0.1} />
+            <StatCard icon="💻" label={t('home.stats.examsTaken')} value={`${stats?.examsTaken ?? 0}/${stats?.totalExams ?? 0}`} delay={0.15} />
+          </div>
         </div>
       </motion.section>
-
-      {/* إحصائيات */}
-      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard icon="📝" label={t('home.stats.examAvg')} value={`${stats?.examAvg ?? 0}%`} delay={0} />
-        <StatCard icon="🎬" label={t('home.stats.watchTime')} value={`${watchHours} س`} delay={0.05} />
-        <StatCard icon="✅" label={t('home.stats.completedLessons')} value={`${stats?.completedLessons ?? 0}/${stats?.totalLessons ?? 0}`} delay={0.1} />
-        <StatCard icon="💻" label={t('home.stats.examsTaken')} value={`${stats?.examsTaken ?? 0}/${stats?.totalExams ?? 0}`} delay={0.15} />
-      </section>
 
       {/* أكمل التعلم */}
       {nextCourse && (

@@ -4,28 +4,10 @@ node_modules/
 # builds
 dist/
 build/
-server/dist/
 
 # env
 .env
 .env.local
-
-# uploads (المحتوى المرفوع)
-server/uploads/*.mp4
-server/uploads/*.webm
-server/uploads/*.mkv
-server/uploads/*.mov
-server/uploads/*.jpg
-server/uploads/*.jpeg
-server/uploads/*.png
-server/uploads/*.webp
-server/uploads/*.gif
-
-# keep uploads dir
-!server/uploads/.gitkeep
-
-# data cache (قاعدة البيانات المحلية - لا ترفعها)
-server/data/
 
 # supabase CLI (أدوات محلية - لا تُرفع)
 .bin/

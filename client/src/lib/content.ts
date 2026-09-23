@@ -83,7 +83,8 @@ function bootstrapKey(userId: number): string {
   return `bootstrap:${userId}`;
 }
 
-let inFlight: Promise<BootstrapData> | null = null;
+/** في-الطريق لكل مستخدم على حدة، حتى لا يتقاطع مستخدمان سريعان على نفس الكاش. */
+const inFlightByUser = new Map<number, Promise<BootstrapData>>();
 
 /** يعيد المحتوى الكامل للمستخدم (مع كاش 5 دقائق). */
 export function loadBootstrap(userId: number, force = false): Promise<BootstrapData> {
@@ -92,16 +93,18 @@ export function loadBootstrap(userId: number, force = false): Promise<BootstrapD
     const cached = getCached<BootstrapData>(key, BOOTSTRAP_TTL);
     if (cached) return Promise.resolve(cached);
   }
-  if (inFlight) return inFlight;
-  inFlight = api<BootstrapData>('/api/bootstrap')
+  const existing = inFlightByUser.get(userId);
+  if (existing) return existing;
+  const p = api<BootstrapData>('/api/bootstrap')
     .then((data) => {
       setCached(key, data);
       return data;
     })
     .finally(() => {
-      inFlight = null;
+      if (inFlightByUser.get(userId) === p) inFlightByUser.delete(userId);
     });
-  return inFlight;
+  inFlightByUser.set(userId, p);
+  return p;
 }
 
 export function getBootstrapSync(userId: number): BootstrapData | null {
@@ -224,8 +227,9 @@ export function loadTopStudents(force = false): Promise<TopStudent[]> {
   }
   return api<{ students: TopStudent[] }>('/api/top-students')
     .then((d) => {
-      setCached(TOP_KEY, d.students);
-      return d.students;
+      const students = Array.isArray(d?.students) ? d.students : [];
+      setCached(TOP_KEY, students);
+      return students;
     })
     .catch((e) => {
       const cached = getCached<TopStudent[]>(TOP_KEY, TOP_TTL);
@@ -257,10 +261,19 @@ export function loadLatestExamTop(force = false): Promise<Record<string, LatestE
     const cached = getCached<Record<string, LatestExamTop>>(LATEST_TOP_KEY, LATEST_TOP_TTL);
     if (cached) return Promise.resolve(cached);
   }
-  return api<{ leaderboards: Record<string, LatestExamTop> }>('/api/latest-exam-top')
+  return api<{ leaderboards?: Record<string, LatestExamTop> } & Record<string, unknown>>('/api/latest-exam-top')
     .then((d) => {
-      setCached(LATEST_TOP_KEY, d.leaderboards);
-      return d.leaderboards;
+      // تأمين ضد أي شكل قديم من الخادم: نفضّل leaderboards، وإلا نستخدم الجسم مباشرة
+      // لو بدا أنه خريطة المراحل نفسها، وإلا نرجع خريطة فارغة (لا undefined أبدًا).
+      const lb = d?.leaderboards;
+      const leaderboards =
+        lb && typeof lb === 'object' && !Array.isArray(lb)
+          ? (lb as Record<string, LatestExamTop>)
+          : d && typeof d === 'object' && !Array.isArray(d) && ('bac1' in d || 'bac2' in d || 'all' in d)
+            ? (d as unknown as Record<string, LatestExamTop>)
+            : {};
+      setCached(LATEST_TOP_KEY, leaderboards);
+      return leaderboards;
     })
     .catch((e) => {
       const cached = getCached<Record<string, LatestExamTop>>(LATEST_TOP_KEY, LATEST_TOP_TTL);

@@ -39,8 +39,12 @@ function clearKey(key: string): void {
   buckets.delete(key);
 }
 
-const LOGIN_WINDOW = 15 * 60 * 1000; // 15 دقيقة
-const LOGIN_FAIL_MAX = 5;
+// نافذة IP أطول للحد من الهجمات الموزعة، ونافذة identifier قصيرة حتى لا يُجمَّد
+// حساب ضحية بمحاولات خاطئة من طرف مهاجم (كانت 15 دقيقة → 5 دقائق).
+const LOGIN_IP_WINDOW = 15 * 60 * 1000; // 15 دقيقة
+const LOGIN_IP_MAX = 10;
+const LOGIN_ID_WINDOW = 5 * 60 * 1000; // 5 دقائق
+const LOGIN_ID_MAX = 5;
 const REGISTER_WINDOW = 60 * 60 * 1000; // ساعة
 const REGISTER_MAX = 8;
 
@@ -64,18 +68,18 @@ export function ipOf(req: Request): string {
 
 export function loginBlocked(ip: string, identifier: string): boolean {
   return (
-    count(`login-fail:${identifier}`, LOGIN_WINDOW) >= LOGIN_FAIL_MAX ||
-    count(`login-fail-ip:${ip}`, LOGIN_WINDOW) >= LOGIN_FAIL_MAX * 2
+    count(`login-fail-id:${identifier}`, LOGIN_ID_WINDOW) >= LOGIN_ID_MAX ||
+    count(`login-fail-ip:${ip}`, LOGIN_IP_WINDOW) >= LOGIN_IP_MAX
   );
 }
 
 export function recordLoginFailure(ip: string, identifier: string): void {
-  incr(`login-fail:${identifier}`, LOGIN_FAIL_MAX, LOGIN_WINDOW);
-  incr(`login-fail-ip:${ip}`, LOGIN_FAIL_MAX * 2, LOGIN_WINDOW);
+  incr(`login-fail-id:${identifier}`, LOGIN_ID_MAX, LOGIN_ID_WINDOW);
+  incr(`login-fail-ip:${ip}`, LOGIN_IP_MAX, LOGIN_IP_WINDOW);
 }
 
 export function clearLoginFailures(identifier: string): void {
-  clearKey(`login-fail:${identifier}`);
+  clearKey(`login-fail-id:${identifier}`);
 }
 
 export function registerAllowed(ip: string): boolean {

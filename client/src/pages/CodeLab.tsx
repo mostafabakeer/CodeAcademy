@@ -534,7 +534,8 @@ export default function CodeLab() {
                       e.stopPropagation();
                       deleteFile(f.id);
                     }}
-                    className="ml-2 rounded-md p-1 text-gray-500 opacity-0 transition-opacity hover:text-fire-400 group-hover:opacity-100"
+                    aria-label={t("code.deleteFile")}
+                    className="ml-2 rounded-md bg-ink-800/80 p-1.5 text-gray-400 transition-colors hover:text-fire-400 sm:bg-transparent sm:opacity-0 sm:group-hover:opacity-100"
                   >
                     🗑
                   </button>

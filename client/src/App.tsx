@@ -4,8 +4,10 @@ import { AnimatePresence, motion } from 'motion/react';
 import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
 import SubscriberGate from './components/SubscriberGate';
+import PageErrorBoundary from './components/PageErrorBoundary';
+import FloatingMascot from './components/FloatingMascot';
+import InstallPrompt from './components/InstallPrompt';
 import { useLang } from './i18n';
-import { useAuth } from './contexts/AuthContext';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
@@ -46,7 +48,6 @@ function PageLoader() {
 }
 
 function Shell() {
-  const { user } = useAuth();
   const { t } = useLang();
   return (
     <div className="flex min-h-screen flex-col">
@@ -76,8 +77,8 @@ function AnimatedRoutes() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/top-students" element={<TopStudents />} />
-          <Route path="/top-students/:id" element={<TopStudentCertificate />} />
+          <Route path="/top-students" element={<PageErrorBoundary><TopStudents /></PageErrorBoundary>} />
+          <Route path="/top-students/:id" element={<PageErrorBoundary><TopStudentCertificate /></PageErrorBoundary>} />
           <Route path="/" element={<ProtectedRoute><SubscriberGate><Home /></SubscriberGate></ProtectedRoute>} />
           <Route path="/courses" element={<ProtectedRoute><SubscriberGate><Courses /></SubscriberGate></ProtectedRoute>} />
           <Route path="/courses/:id" element={<ProtectedRoute><SubscriberGate><CourseDetail /></SubscriberGate></ProtectedRoute>} />
@@ -111,6 +112,8 @@ export default function App() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Shell />
+      <FloatingMascot />
+      <InstallPrompt />
     </Suspense>
   );
 }

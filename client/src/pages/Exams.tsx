@@ -3,31 +3,96 @@ import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { loadBootstrap, buildExamList, type ExamListItem } from '../lib/content';
+import { api } from '../api/client';
+import { loadBootstrap, type ExamListItem, type Exam } from '../lib/content';
+import DoctorCode from '../components/DoctorCode';
 
 export default function Exams() {
   const { t, lang } = useLang();
   const { user, examResults } = useAuth();
   const [exams, setExams] = useState<ExamListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
   const userId = user?.id;
 
   useEffect(() => {
     if (!userId) return;
-    loadBootstrap(userId)
-      .then((b) => setExams(buildExamList(b, examResults)))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [userId, examResults]);
+    let active = true;
+    setLoading(true);
+    setError('');
+
+    const merge = (list: Exam[]) => {
+      const map = new Map(examResults.map((r) => [r.examId, r]));
+      const items: ExamListItem[] = list.map((e) => ({
+        ...e,
+        taken: !!map.get(e.id),
+        bestScore: map.get(e.id)?.best ?? null,
+        attempts: map.get(e.id)?.attempts ?? 0,
+      }));
+      if (active) setExams(items);
+    };
+
+    api<{ exams: Exam[] }>('/api/exams')
+      .then((d) => merge(d.exams ?? []))
+      .catch(() =>
+        // آخر حل: نرجع للنسخة المخزنة من bootstrap حتى لا تفرغ الصفحة فجأة
+        loadBootstrap(userId)
+          .then((b) => merge(b.exams))
+          .catch(() => {
+            if (!active) return;
+            setExams([]);
+            setError(t('exam.loadError'));
+          })
+      )
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userId, examResults, t, reload]);
 
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-black sm:text-3xl">📝 {t('exam.title')}</h1>
-        <p className="mt-1 text-gray-400">{t('home.subtitle')}</p>
+        {/* <h1 className="text-2xl font-black sm:text-3xl">📝 {t('exam.title')}</h1> */}
+        {/* <p className="mt-1 text-gray-400">{t('home.subtitle')}</p> */}
       </motion.div>
 
-      {loading ? (
+      {/* تحفيز دكتور كود */}
+      {!loading && exams.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="pattern-dots relative flex flex-wrap items-center justify-between gap-4 overflow-hidden rounded-3xl border border-fire-500/25 bg-gradient-to-br from-ink-800 via-ink-850 to-ink-900 p-5 sm:p-6"
+        >
+          <div className="pointer-events-none absolute -top-14 -end-14 h-44 w-44 rounded-full bg-fire-600/25 blur-3xl" />
+          <div className="relative flex min-w-0 flex-1 flex-col items-center gap-3 text-center sm:flex-row sm:text-start">
+            <div className="shrink-0">
+              <DoctorCode size="sm" />
+            </div>
+            <div>
+              <h2 className="text-lg font-black text-fire-gradient sm:text-xl " > {t('exam.cheerTitle')}</h2>
+              {/* <p className="mt-1 text-sm text-gray-400">{t('exam.cheerMsg')}</p> */}
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {error ? (
+        <div role="alert" className="flex flex-col items-center gap-3 rounded-2xl border border-fire-500/30 bg-fire-950/30 p-8 text-center">
+          <span className="text-3xl">⚠️</span>
+          <p className="text-gray-300">{error}</p>
+          <button
+            onClick={() => setReload((x) => x + 1)}
+            className="btn-fire rounded-xl px-5 py-2.5 text-sm font-bold text-white"
+          >
+            ⟳ {t('exam.retry')}
+          </button>
+        </div>
+      ) : loading ? (
         <p className="text-gray-400">{t('common.loading')}</p>
       ) : exams.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('exam.noExams')}</p>

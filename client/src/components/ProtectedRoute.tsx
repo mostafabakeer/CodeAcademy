@@ -1,9 +1,10 @@
 import { Navigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import ReconnectScreen from './ReconnectScreen';
 
 export default function ProtectedRoute({ children, admin = false }: { children: ReactNode; admin?: boolean }) {
-  const { user, loading } = useAuth();
+  const { user, loading, offline } = useAuth();
   if (loading) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
@@ -15,6 +16,8 @@ export default function ProtectedRoute({ children, admin = false }: { children: 
       </div>
     );
   }
+  // فشل مؤقت (شبكة/خادم) — لا نُظهر "تسجيل خروج" بل شاشة إعادة محاولة نقية.
+  if (!user && offline) return <ReconnectScreen />;
   if (!user) return <Navigate to="/login" replace />;
   if (admin && user.role !== 'admin') return <Navigate to="/" replace />;
   return <>{children}</>;

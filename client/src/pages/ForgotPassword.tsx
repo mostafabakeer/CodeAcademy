@@ -17,6 +17,7 @@ export default function ForgotPassword() {
   const [error, setError] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [code, setCode] = useState('');
   const [done, setDone] = useState(false);
 
   const submitRequest = async (e: FormEvent) => {
@@ -52,11 +53,12 @@ export default function ForgotPassword() {
   const savePassword = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!code || code.trim().length !== 6 || !/^\d{6}$/.test(code.trim())) return setError(t('auth.forgotCodeWrong'));
     if (!newPassword || newPassword.length < 6) return setError(t('auth.forgotPasswordShort'));
     if (newPassword !== confirmPassword) return setError(t('auth.forgotPasswordMismatch'));
     setLoading(true);
     try {
-      await api('/api/auth/forgot-password/complete', { method: 'POST', body: { phone, password: newPassword } });
+      await api('/api/auth/forgot-password/complete', { method: 'POST', body: { phone, password: newPassword, code: code.trim() } });
       setDone(true);
     } catch (err) {
       setError((err as Error).message);
@@ -82,6 +84,21 @@ export default function ForgotPassword() {
 
   const renderApprovedForm = (
     <form onSubmit={savePassword} className="space-y-4">
+      <div>
+        <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.forgotCodeLabel')}</label>
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          dir="ltr"
+          maxLength={6}
+          className="input-fire w-full rounded-xl px-4 py-3 text-center text-lg font-bold tracking-[0.5em]"
+          placeholder={t('auth.forgotCodePlaceholder')}
+          value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+        />
+        <p className="mt-1.5 text-xs leading-relaxed text-gray-400">{t('auth.forgotCodeHint')}</p>
+      </div>
       <div>
         <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.forgotNewPassword')}</label>
         <input
@@ -113,6 +130,7 @@ export default function ForgotPassword() {
       <div className="rounded-xl bg-ink-800/60 px-4 py-3 text-emerald-300">{t('auth.forgotStepPending')}</div>
       <p className="text-gray-300">{t('auth.forgotStepPendingMsg')}</p>
       <p className="text-gray-400">{t('auth.forgotStepContact')}</p>
+      <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-300/90">{t('auth.forgotPhoneCheck')}</p>
       <a
         href={waLink(t('auth.forgotWaMessage'))}
         target="_blank"
@@ -202,7 +220,7 @@ export default function ForgotPassword() {
           </div>
 
           {error && (
-            <div className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
+            <div role="alert" className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
               {error}
             </div>
           )}

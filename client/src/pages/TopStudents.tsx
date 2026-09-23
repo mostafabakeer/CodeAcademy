@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLang } from '../i18n';
@@ -22,25 +22,33 @@ export default function TopStudents() {
   const [loadingBasic, setLoadingBasic] = useState(true);
   const [loadingLatest, setLoadingLatest] = useState(true);
   const [error, setError] = useState('');
+  const [latestError, setLatestError] = useState('');
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<TabKey>('all');
 
-  useEffect(() => {
+  const loadAll = useCallback(() => {
+    setLoadingBasic(true);
+    setError('');
+    setLoadingLatest(true);
+    setLatestError('');
     loadTopStudents()
       .then((s) => setStudents(s))
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoadingBasic(false));
     loadLatestExamTop()
       .then((l) => setLatestTop(l))
-      .catch(() => {
-        /* أوائل الامتحان الأخير اختيارية */
-      })
+      .catch((e) => setLatestError((e as Error).message))
       .finally(() => setLoadingLatest(false));
   }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   const all = students.slice().sort((a, b) => a.rank - b.rank);
   const bac1 = students.filter((s) => s.grade === 'bac1');
   const bac2 = students.filter((s) => s.grade === 'bac2');
+  const top = latestTop ?? {};
 
   const share = async () => {
     const url = window.location.href;
@@ -120,7 +128,17 @@ export default function TopStudents() {
             {t('top.subtitle')} — {lang === 'ar' ? 'اضغط على اسم أي طالب لعرض شهادته وقِسمها' : 'Click any student name to view and share their certificate'}
           </motion.p>
 
-          {error && <div className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
+          {error && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
+              <span>⚠️ {error}</span>
+              <button
+                onClick={loadAll}
+                className="rounded-lg border border-fire-400/50 bg-fire-600/20 px-3 py-1.5 text-xs font-black text-fire-200 transition-colors hover:bg-fire-600/40"
+              >
+                ⟳ {t('top.retry')}
+              </button>
+            </div>
+          )}
 
           <div className="mb-8 flex flex-wrap gap-2">
             {TABS.map((tb) => (
@@ -156,8 +174,8 @@ export default function TopStudents() {
                       <span className="rounded-full border border-dashed border-white/25 px-3 py-1 text-xs font-bold text-gray-300">{t('top.subsidiaryBadge')}</span>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
-                      <SubsidiaryCard entry={latestTop['bac1']} loading={loadingLatest} accent="sky" />
-                      <SubsidiaryCard entry={latestTop['bac2']} loading={loadingLatest} accent="ember" />
+                      <SubsidiaryCard entry={top['bac1']} loading={loadingLatest} accent="sky" error={latestError} onRetry={loadAll} />
+                      <SubsidiaryCard entry={top['bac2']} loading={loadingLatest} accent="ember" error={latestError} onRetry={loadAll} />
                     </div>
                   </section>
                 </div>
@@ -165,13 +183,13 @@ export default function TopStudents() {
               {tab === 'bac1' && (
                 <div className="space-y-8">
                   <GradeSection title={t('top.bac1Title')} students={bac1} accent="sky" basicBadge={t('top.basicBadge')} loading={loadingBasic} />
-                  <SubsidiaryCard entry={latestTop['bac1']} loading={loadingLatest} accent="sky" />
+                  <SubsidiaryCard entry={top['bac1']} loading={loadingLatest} accent="sky" error={latestError} onRetry={loadAll} />
                 </div>
               )}
               {tab === 'bac2' && (
                 <div className="space-y-8">
                   <GradeSection title={t('top.bac2Title')} students={bac2} accent="ember" basicBadge={t('top.basicBadge')} loading={loadingBasic} />
-                  <SubsidiaryCard entry={latestTop['bac2']} loading={loadingLatest} accent="ember" />
+                  <SubsidiaryCard entry={top['bac2']} loading={loadingLatest} accent="ember" error={latestError} onRetry={loadAll} />
                 </div>
               )}
             </motion.div>
@@ -241,7 +259,19 @@ function GradeSection({ title, students, accent, basicBadge, loading }: { title:
   );
 }
 
-function SubsidiaryCard({ entry, loading, accent }: { entry: LatestExamTop | undefined; loading: boolean; accent: 'sky' | 'ember' }) {
+function SubsidiaryCard({
+  entry,
+  loading,
+  accent,
+  error,
+  onRetry,
+}: {
+  entry: LatestExamTop | undefined;
+  loading: boolean;
+  accent: 'sky' | 'ember';
+  error: string;
+  onRetry: () => void;
+}) {
   const { t, lang } = useLang();
   const badge = accent === 'sky' ? 'bg-sky-500/15 text-sky-300 border-sky-500/40' : 'bg-ember-500/15 text-ember-300 border-ember-500/40';
   const pill = accent === 'sky' ? 'text-sky-300' : 'text-ember-300';
@@ -271,6 +301,16 @@ function SubsidiaryCard({ entry, loading, accent }: { entry: LatestExamTop | und
               <div className="h-4 w-12 animate-pulse rounded bg-ink-700" />
             </div>
           ))}
+        </div>
+      ) : error ? (
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-fire-500/30 bg-fire-950/30 px-4 py-6 text-center text-sm text-fire-300">
+          <span>⚠️ {t('top.latestError')}</span>
+          <button
+            onClick={onRetry}
+            className="rounded-lg border border-fire-400/50 bg-fire-600/20 px-3 py-1.5 text-xs font-black text-fire-200 transition-colors hover:bg-fire-600/40"
+          >
+            ⟳ {t('top.retry')}
+          </button>
         </div>
       ) : entry && entry.examId != null ? (
         entry.top.length === 0 ? (
@@ -378,7 +418,7 @@ function StudentCard({ s, i }: { s: TopStudent; i: number }) {
           {s.name}
         </Link>
         <div className="text-xs text-gray-400">
-          {s.gradeName} — #{s.rank}
+          {(s.gradeName || s.grade || '')} — #{s.rank}
         </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1.5">

@@ -71,28 +71,25 @@ export function safeUser(u: DbUser): SafeUser {
   return safe;
 }
 
-export async function countUsers(): Promise<number> {
-  const { count } = await sb.from('users').select('id', { count: 'exact', head: true });
-  return count ?? 0;
-}
-
 export async function countAdmins(): Promise<number> {
   const { count } = await sb.from('users').select('id', { count: 'exact', head: true }).eq('role', 'admin');
   return count ?? 0;
 }
 
 export async function findUserById(id: number): Promise<DbUser | null> {
-  const { data } = await sb.from('users').select('*').eq('id', id).maybeSingle();
+  const { data, error } = await sb.from('users').select('*').eq('id', id).maybeSingle();
+  if (error) throw new Error(`[db] findUserById: ${error.message}`);
   return data ? userFromRow(data) : null;
 }
 
 /** جلب سريع لأعمدة المصادقة فقط (يُستخدم في الـ middleware لكل طلب بدلاً من جلب كل الصف). */
 export async function findAuthUserById(id: number): Promise<DbUser | null> {
-  const { data } = await sb
+  const { data, error } = await sb
     .from('users')
     .select('id, role, full_name, username, phone, grade, blocked, subscription')
     .eq('id', id)
     .maybeSingle();
+  if (error) throw new Error(`[db] findAuthUserById: ${error.message}`);
   return data ? userFromRow(data) : null;
 }
 
@@ -119,7 +116,8 @@ export async function findUserByPhone(normPhone: string): Promise<DbUser | null>
   const candidates = phoneCandidates(target);
   let query = sb.from('users').select('*');
   query = candidates.length === 1 ? query.eq('phone', candidates[0]) : query.in('phone', candidates);
-  const { data } = await query.limit(20);
+  const { data, error } = await query.limit(20);
+  if (error) throw new Error(`[db] findUserByPhone: ${error.message}`);
   const rows = data ?? [];
   const found = rows.find((r) => normalizePhone(String(r.phone ?? '')) === target);
   return found ? userFromRow(found) : null;
@@ -134,7 +132,8 @@ export async function findUserByIdentifier(identifier: string): Promise<DbUser |
     if (byPhone) return byPhone;
   }
   if (raw) {
-    const { data } = await sb.from('users').select('*').eq('username', raw).maybeSingle();
+    const { data, error } = await sb.from('users').select('*').eq('username', raw).maybeSingle();
+    if (error) throw new Error(`[db] findUserByIdentifier: ${error.message}`);
     if (data) return userFromRow(data);
   }
   return null;
@@ -162,6 +161,10 @@ export interface PasswordReset {
   status: ResetStatus;
   createdAt: number;
   updatedAt: number;
+  /** كود التفعيل المكوّن من 6 أرقام (يولَّد عند موافقة الإدارة ويُرسل واتساب) — يُصفَّر بعد الاستخدام. */
+  resetCode?: string | null;
+  /** لحظة انتهاء صلاحية الكود (عدد ميلي ثانية). */
+  codeExpiresAt?: number | null;
 }
 
 function resetFromRow(r: any): PasswordReset {
@@ -171,11 +174,14 @@ function resetFromRow(r: any): PasswordReset {
     status: (['pending', 'approved', 'completed', 'rejected'].includes(r.status) ? r.status : 'pending') as ResetStatus,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    resetCode: r.reset_code ?? null,
+    codeExpiresAt: r.code_expires_at ?? null,
   };
 }
 
-/** سجلّ طلب تغيير كلمة السر الحالي لطالب (الأنشط فقط: pending/approved). */
+/** سجلّ طلب تغيير كلمة السر الحالي لطالب (الأنشط فقط: pending/approved قبل انتهاء صلاحية الكود). */
 export async function findActivePasswordResetByUser(userId: number): Promise<PasswordReset | null> {
+  const nowMs = now();
   const { data } = await sb
     .from('password_resets')
     .select('*')
@@ -184,7 +190,11 @@ export async function findActivePasswordResetByUser(userId: number): Promise<Pas
     .order('id', { ascending: false })
     .limit(1)
     .maybeSingle();
-  return data ? resetFromRow(data) : null;
+  if (!data) return null;
+  const reset = resetFromRow(data);
+  // طلب موافق انتهت صلاحية كوده → لم يعد نشطاً (يجب على الطالب إرسال طلب جديد).
+  if (reset.status === 'approved' && reset.codeExpiresAt && reset.codeExpiresAt < nowMs) return null;
+  return reset;
 }
 
 /** إنشاء طلب جديد، أو إعادة تفعيل طلب pending سابق (لا ننشئ مكرراً). */
@@ -217,12 +227,106 @@ export async function listAllPasswordResets(limit = 100): Promise<(PasswordReset
   }));
 }
 
-/** تحديث حالة طلب (موافقة/رفض/إكمال) — يضمن انتقالاً صحيحاً ومقيداً. */
+/** تحديث حالة طلب (رفض/إكمال) — يضمن انتقالاً صحيحاً ومقيداً. */
 export async function updatePasswordResetStatus(id: number, status: ResetStatus): Promise<PasswordReset | null> {
   if (!['pending', 'approved', 'completed', 'rejected'].includes(status)) return null;
   const at = now();
   const { data } = await sb.from('password_resets').update({ status, updated_at: at }).eq('id', id).select().maybeSingle();
   return data ? resetFromRow(data) : null;
+}
+
+/** موافقة على طلب → توليد كود تفعيل من 6 أرقام مع صلاحية (TTL). تعود بالطلب المحدَّث. */
+export async function approvePasswordReset(id: number, code: string, ttlMs: number): Promise<PasswordReset | null> {
+  const at = now();
+  const { data } = await sb
+    .from('password_resets')
+    .update({ status: 'approved', reset_code: code, code_expires_at: at + ttlMs, updated_at: at })
+    .eq('id', id)
+    .select()
+    .maybeSingle();
+  return data ? resetFromRow(data) : null;
+}
+
+/** إكمال طلب → تصفير الكود (استخدام واحد فقط). */
+export async function completePasswordReset(id: number): Promise<PasswordReset | null> {
+  const at = now();
+  const { data } = await sb
+    .from('password_resets')
+    .update({ status: 'completed', reset_code: null, code_expires_at: null, updated_at: at })
+    .eq('id', id)
+    .select()
+    .maybeSingle();
+  return data ? resetFromRow(data) : null;
+}
+
+/* =================== تشخيص طلبات كلمة السر =================== */
+
+const PRC_UNMATCHED_PREFIX = 'prc:unmatched:';
+
+/** قراءة عداد يومي (مبهم، بلا بيانات شخصية) لمحاولات تغيير كلمة سر رقم غير مسجل. */
+async function readUnmatchedPasswordReset(key: string): Promise<number> {
+  try {
+    const { data } = await sb.from('app_config').select('value').eq('key', key).maybeSingle();
+    return typeof (data?.value as any) === 'number' ? ((data?.value as any) as number) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** زيادة عداد اليوم لمحاولات الطلبات التي لم تطابق رقماً مسجلاً — لتشخيص الطلبات "الفاتة" للوحة الإدارة. */
+export async function incrementUnmatchedPasswordReset(): Promise<number> {
+  const key = PRC_UNMATCHED_PREFIX + new Date().toISOString().slice(0, 10);
+  const next = (await readUnmatchedPasswordReset(key)) + 1;
+  try {
+    await sb.from('app_config').upsert({ key, value: next }, { onConflict: 'key' });
+  } catch (e) {
+    console.error('[db] incrementUnmatchedPasswordReset:', (e as Error).message);
+  }
+  return next;
+}
+
+/** إحصاءات تشخيصية كاملة لطلبات كلمة السر — عدادت وتوقيتات فقط، بلا بيانات الطلاب. */
+export async function getPasswordResetDiagnostics(): Promise<{
+  total: number;
+  byStatus: Record<string, number>;
+  lastRequestAt: number | null;
+  today: string;
+  todayUnmatched: number;
+}> {
+  try {
+    const { count } = await sb.from('password_resets').select('id', { count: 'exact', head: true });
+    const { data: statusRows } = await sb.from('password_resets').select('status');
+    const { data: lastRow } = await sb
+      .from('password_resets')
+      .select('created_at')
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const byStatus: Record<string, number> = {};
+    for (const r of statusRows ?? []) {
+      const s = String((r as any).status ?? 'pending');
+      byStatus[s] = (byStatus[s] ?? 0) + 1;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const todayUnmatched = await readUnmatchedPasswordReset(PRC_UNMATCHED_PREFIX + today);
+    return {
+      total: count ?? 0,
+      byStatus,
+      lastRequestAt: (lastRow as any)?.created_at ?? null,
+      today,
+      todayUnmatched,
+    };
+  } catch (e) {
+    console.error('[db] getPasswordResetDiagnostics:', (e as Error).message);
+    return { total: 0, byStatus: {}, lastRequestAt: null, today: new Date().toISOString().slice(0, 10), todayUnmatched: 0 };
+  }
+}
+
+/** يطبّع نص البحث ليكون آمنًا مع ilike: يزيل كل رموز PostgREST الخطرة وحدود الطول. */
+function sanitizeSearch(raw?: string): string {
+  if (!raw) return '';
+  // هروب/حذف أحرف البدل وكل ما قد يخلّ بتركيب المرشح، والحفاظ على العربية والأرقام.
+  return raw.trim().replace(/[%_,()*.\\]/g, '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80);
 }
 
 export async function listUsers(params: {
@@ -236,14 +340,7 @@ export async function listUsers(params: {
 } = {}): Promise<{ users: SafeUser[]; total: number; page: number; limit: number; counts: { all: number; subscribed: number; unsubscribed: number; blocked: number } }> {
   const page = Math.max(1, Number(params.page) || 1);
   const limit = Math.min(200, Math.max(1, Number(params.limit) || 50));
-  const search = params.search?.trim() ?? '';
-
-  let query = sb.from('users').select('*', { count: 'exact' });
-  if (search) {
-    const safe = search.replace(/[(),*.]/g, '');
-    const like = `%${safe}%`;
-    query = query.or(`full_name.ilike.${like},phone.ilike.${like},username.ilike.${like}`) as any;
-  }
+  const search = sanitizeSearch(params.search);
   if (params.role) query = query.eq('role', params.role);
   if (params.grade) query = query.eq('grade', params.grade);
   if (params.subscription !== undefined) query = query.eq('subscription', params.subscription);
@@ -269,11 +366,10 @@ export async function listUsers(params: {
 }
 
 async function countUsersFiltered(opts: { search?: string; grade?: string; role?: string; subscription?: boolean; blocked?: boolean }): Promise<number> {
-  const search = opts.search?.trim() ?? '';
+  const search = sanitizeSearch(opts.search);
   let q = sb.from('users').select('id', { count: 'exact', head: true });
   if (search) {
-    const safe = search.replace(/[(),*.]/g, '');
-    const like = `%${safe}%`;
+    const like = `%${search}%`;
     q = q.or(`full_name.ilike.${like},phone.ilike.${like},username.ilike.${like}`) as any;
   }
   if (opts.role) q = q.eq('role', opts.role);
@@ -284,8 +380,10 @@ async function countUsersFiltered(opts: { search?: string; grade?: string; role?
   return count ?? 0;
 }
 
-export async function listAllUsers(): Promise<DbUser[]> {
-  const { data } = await sb.from('users').select('*').order('id', { ascending: true });
+export async function listAllUsers(opts?: { limit?: number; offset?: number }): Promise<DbUser[]> {
+  let q = sb.from('users').select('*').order('id', { ascending: true });
+  if (opts?.limit) q = q.range(opts.offset ?? 0, (opts.offset ?? 0) + opts.limit - 1);
+  const { data } = await q;
   return (data ?? []).map(userFromRow);
 }
 
@@ -468,21 +566,6 @@ export async function listLessonStats(): Promise<{ courseId: number; count: numb
     map.set(cid, existing);
   }
   return [...map.entries()].map(([courseId, v]) => ({ courseId, ...v }));
-}
-
-export async function listLessonStatsForGrade(grade?: string): Promise<{ count: number; duration: number }> {
-  let query = sb.from('lessons').select('duration, grade');
-  if (grade && grade !== 'all') {
-    query = query.or(`grade.eq.all,grade.eq.${grade}`);
-  }
-  const { data } = await query;
-  let count = 0;
-  let duration = 0;
-  for (const r of data ?? []) {
-    count++;
-    duration += Number(r.duration) || 0;
-  }
-  return { count, duration };
 }
 
 export async function countLessonsByGrade(grade?: string): Promise<number> {
@@ -1580,6 +1663,7 @@ export const BACKUP_TABLES = [
   'progress',
   'exam_results',
   'code_files',
+  'password_resets',
   'app_config',
 ] as const;
 

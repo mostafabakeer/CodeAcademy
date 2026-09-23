@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'npm:hono@^4.6.3';
 import { cors } from 'npm:hono@^4.6.3/cors';
-import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES, BUCKET_BACKUPS, ADMIN_PHONE } from '../_shared/env.ts';
+import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES } from '../_shared/env.ts';
 import { sb } from '../_shared/supabase.ts';
 import { requireAuth, requireAdmin, requireSubscriber, signToken, authCookieHeader, clearAuthCookieHeader, type AuthUser, invalidateUserCache } from '../_shared/auth.ts';
 import { hashPassword, verifyPassword } from '../_shared/password.ts';
@@ -78,6 +78,11 @@ import {
   findActivePasswordResetByUser,
   listAllPasswordResets,
   updatePasswordResetStatus,
+  approvePasswordReset,
+  completePasswordReset,
+  incrementUnmatchedPasswordReset,
+  getPasswordResetDiagnostics,
+  invalidateSessionEpoch,
   type ResetStatus,
   listLatestExamTop,
   listExamResultsPage,
@@ -86,6 +91,13 @@ import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAll
 
 const CODE_LANGUAGES = ['javascript', 'python', 'html', 'css'];
 const TOP_GRADES = ['bac1', 'bac2'];
+
+/** bcrypt hash كاذب يُتحقق منه عند غياب المستخدم (تسوية زمن الدخول — ضد timing). */
+let dummyHashPromise: Promise<string> | null = null;
+function dummyPasswordHash(): Promise<string> {
+  if (!dummyHashPromise) dummyHashPromise = hashPassword('__dr_code_dummy_password__');
+  return dummyHashPromise;
+}
 
 const origins = CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -117,8 +129,7 @@ app.use(
 
 app.onError((err, c) => {
   console.error(`[api] ${c.req.method} ${c.req.path}:`, err);
-  const msg = (err as Error)?.message ?? String(err);
-  return c.json({ error: 'خطأ داخلي في الخادم', detail: msg }, 500);
+  return c.json({ error: 'خطأ داخلي في الخادم' }, 500);
 });
 
 function bodyText(v: unknown): string {
@@ -168,15 +179,14 @@ app.post('/auth/register', async (c) => {
     return c.json({ error: 'رقم التليفون مسجل بالفعل' }, 400);
   }
 
-  const isAdminByPhone = !!ADMIN_PHONE && normalizePhone(ADMIN_PHONE) === normPhone;
   const passwordHash = await hashPassword(String(password));
-  const role = isAdminByPhone ? ('admin' as const) : ('student' as const);
+  // لا رفع تلقائي إلى admin من التسجيل — حتى رقم "أدمن" المسجل لا يصبح محذوفاً. يُرفع الحساب يدوياً من القاعدة.
   const user = await createUser({
     fullName: fullName.trim(),
     phone: normPhone,
     grade,
-    role,
-    subscription: role === 'admin',
+    role: 'student',
+    subscription: false,
     blocked: false,
     passwordHash,
     createdAt: Date.now(),
@@ -184,7 +194,7 @@ app.post('/auth/register', async (c) => {
 
   recordRegister(clientIp);
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
-  return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token) });
+  return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
 
 app.post('/auth/login', async (c) => {
@@ -194,11 +204,18 @@ app.post('/auth/login', async (c) => {
   const loginKey = String(identifier);
 
   if (loginBlocked(clientIp, loginKey)) {
-    return c.json({ error: 'محاولات تسجيل دخول كثيرة، حاول بعد 15 دقيقة' }, 429);
+    return c.json({ error: 'محاولات تسجيل دخول كثيرة، حاول لاحقاً' }, 429);
   }
 
   const user = await findUserByIdentifier(loginKey);
-  if (!user || !(await verifyPassword(String(password), user.passwordHash))) {
+  if (!user) {
+    // تحقق وهمي بنفس كلفة bcrypt للحفاظ على زمن استجابة متساوٍ (ضد هجمات timing).
+    await verifyPassword(String(password), await dummyPasswordHash());
+    return c.json({ error: 'بيانات الدخول غير صحيحة' }, 401);
+  }
+  if (!(await verifyPassword(String(password), user.passwordHash))) {
+    // نسجّل الفشل على المعرّف فقط إذا كان لحساب حقيقي — حتى لا يتمكن مهاجم من
+    // تجميد أرقام عشوائية أو إخفاء محاولات؛ IP يحسب دائماً.
     recordLoginFailure(clientIp, loginKey);
     return c.json({ error: 'بيانات الدخول غير صحيحة' }, 401);
   }
@@ -208,7 +225,7 @@ app.post('/auth/login', async (c) => {
 
   clearLoginFailures(loginKey);
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
-  return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token) });
+  return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
 
 app.get('/auth/me', requireAuth, async (c) => {
@@ -223,32 +240,57 @@ app.get('/auth/me', requireAuth, async (c) => {
     total: r.total,
     attempts: r.attempts,
   }));
+  // إذا تمت المصادقة عبر الكوكي فقط (لأن localStorage فاضي في المتصفح) — نُصدر توكين جديداً
+  // ليعيد العميل تخزينه وتستمرّ الجلسة بعد أي مسح للتخزين المحلي.
+  const authz = c.req.header('authorization') ?? '';
+  if (!authz.startsWith('Bearer ')) {
+    const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
+    return c.json({ user: safeUser(user), levels: levels.tiers, examResults, token }, 200, {
+      'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? ''),
+    });
+  }
   return c.json({ user: safeUser(user), levels: levels.tiers, examResults });
 });
 
 app.post('/auth/logout', async (c) => {
-  return c.json({ ok: true }, 200, { 'Set-Cookie': clearAuthCookieHeader() });
+  return c.json({ ok: true }, 200, { 'Set-Cookie': clearAuthCookieHeader(c.req.header('host') ?? '') });
 });
 
 /* =================== طلب تغيير كلمة السر =================== */
 
 /** الطالب يطلب تغيير كلمة السر برقم التليفون. */
 app.post('/auth/forgot-password', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  if (!genericRateLimit(`forgot-ip:${clientIp}`, 5, 60_000)) {
+    return c.json({ error: 'طلبته كتير، انتظر دقيقة قبل المحاولة تاني' }, 429);
+  }
   const { phone } = await c.req.json().catch(() => ({}));
   if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
   const normPhone = normalizePhone(phone);
   if (!normPhone) return c.json({ error: 'رقم التليفون غير صحيح' }, 400);
 
+  // استجابة موحّدة سواء كان الرقم مسجلاً أو لا — حتى لا نكشف وجود حسابات للأرقام العشوائية.
   const user = await findUserByPhone(normPhone);
-  if (!user) return c.json({ error: 'رقم التليفون غير مسجل' }, 404);
-  if (user.role === 'admin') return c.json({ error: 'لا يمكن تغيير كلمة سر حساب مدير بهذه الطريقة' }, 400);
-
-  const reset = await createPasswordReset(user.id);
-  return c.json({ ok: true, requestId: reset.id });
+  if (!user || user.role === 'admin') {
+    // إحصائية يومية مبهمة (بدون بيانات شخصية) لمحاولات الأرقام غير المسجلة — تظهر للإدارة لتشخيص الطلبات "الفاتة".
+    await incrementUnmatchedPasswordReset().catch(() => {});
+    return c.json({ ok: true });
+  }
+  try {
+    const reset = await createPasswordReset(user.id);
+    return c.json({ ok: true, requestId: reset.id });
+  } catch (e) {
+    console.error('[api] forgot-password createPasswordReset:', (e as Error).message);
+    return c.json({ error: 'تعذّر تسجيل طلبك، حاول مرة أخرى أو تواصل مع الإدارة على واتساب' }, 500);
+  }
 });
 
-/** الطالب يتحقق من حالة طلبه (pending / approved). */
+/** الطالب يتحقق من حالة طلبه (pending / approved) — محدود التكرار من IP معين. */
 app.get('/auth/forgot-password/status', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  if (!genericRateLimit(`pr-status-ip:${clientIp}`, 15, 60_000)) {
+    return c.json({ error: 'طلبات فحص كثيرة، انتظر قليلاً' }, 429);
+  }
   const phone = c.req.query('phone');
   if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
   const normPhone = normalizePhone(phone);
@@ -259,30 +301,68 @@ app.get('/auth/forgot-password/status', async (c) => {
 
   const reset = await findActivePasswordResetByUser(user.id);
   if (!reset) return c.json({ status: 'none' });
-  return c.json({ status: reset.status });
+  return c.json({
+    status: reset.status,
+    codeRequired: reset.status === 'approved',
+    codeExpiresAt: reset.codeExpiresAt ?? null,
+  });
 });
 
-/** الطالب يضع كلمة السر الجديدة بعد موافقة الإدارة. */
+const PASSWORD_RESET_CODE_TTL_MS = 60 * 60 * 1000; // صلاحية الكود: ساعة
+
+/** كود تفعيل عشوائي من 6 أرقام. */
+function randomResetCode(): string {
+  const buf = new Uint8Array(4);
+  crypto.getRandomValues(buf);
+  const n = (buf[0] << 16) | (buf[1] << 8) | buf[2];
+  return String(100000 + (n % 900000));
+}
+
+/** مقارنة نصية ثابتة الزمن لمقاومة قياس التوقيت. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** الطالب يضع كلمة السر الجديدة بعد موافقة الإدارة — يتطلب كود التفعيل المرسل عبر واتساب. */
 app.post('/auth/forgot-password/complete', async (c) => {
-  const { phone, password } = await c.req.json().catch(() => ({}));
+  const clientIp = ipOf(c.req.raw);
+  if (!genericRateLimit(`pr-complete-ip:${clientIp}`, 5, 60_000)) {
+    return c.json({ error: 'محاولات كثيرة، انتظر دقيقة' }, 429);
+  }
+  const { phone, password, code } = await c.req.json().catch(() => ({}));
   if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
   if (!password || String(password).length < 6) return c.json({ error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
+  if (!code || !/^\d{6}$/.test(String(code))) return c.json({ error: 'الكود من الإدارة غير صحيح (6 أرقام)' }, 400);
   const normPhone = normalizePhone(phone);
   if (!normPhone) return c.json({ error: 'رقم التليفون غير صحيح' }, 400);
 
   const user = await findUserByPhone(normPhone);
-  if (!user) return c.json({ error: 'رقم التليفون غير مسجل' }, 404);
+  // رسالة موحّدة حتى لا نكشف ما إذا كان الرقم مسجلاً أصلاً.
+  if (!user) return c.json({ error: 'لا توجد طلبات نشطة لتغيير كلمة السر لهذا الرقم' }, 400);
   if (user.role === 'admin') return c.json({ error: 'لا يمكن تغيير كلمة سر حساب مدير بهذه الطريقة' }, 400);
+  if (!genericRateLimit(`pr-complete-phone:${normPhone}`, 8, 60_000)) {
+    return c.json({ error: 'محاولات كثيرة لهذا الرقم، انتظر دقيقة' }, 429);
+  }
 
   const reset = await findActivePasswordResetByUser(user.id);
   if (!reset) return c.json({ error: 'لا يوجد طلب نشط لتغيير كلمة السر' }, 400);
   if (reset.status === 'pending') return c.json({ error: 'الطلب لم يتم تفعيله من الإدارة بعد' }, 400);
   if (reset.status === 'completed') return c.json({ error: 'تم استخدام هذا الطلب بالفعل. سجّل الدخول بكلمة السر الجديدة' }, 400);
+  if (!reset.resetCode) return c.json({ error: 'لم يُولَّد كود لهذا الطلب، تواصل مع الإدارة' }, 500);
+  if (reset.codeExpiresAt && reset.codeExpiresAt < Date.now()) {
+    return c.json({ error: 'انتهت صلاحية الكود، أرسل طلباً جديداً لتغيير كلمة السر' }, 400);
+  }
+  if (!safeEqual(reset.resetCode, String(code))) {
+    return c.json({ error: 'الكود غير صحيح، تحقق منه مع الإدارة' }, 400);
+  }
 
   const passwordHash = await hashPassword(String(password));
   await updateUser(user.id, { passwordHash });
   invalidateUserCache(user.id);
-  await updatePasswordResetStatus(reset.id, 'completed');
+  await completePasswordReset(reset.id);
 
   return c.json({ ok: true });
 });
@@ -531,10 +611,10 @@ app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
     options: q.options,
     hasImage: !!q.image,
     image: q.image,
-    explanation: q.explanation,
-    explanationEn: q.explanationEn,
+    explanation: lastResult ? q.explanation : undefined,
+    explanationEn: lastResult ? q.explanationEn : undefined,
     order: q.order,
-    // نكشف الإجابة الصحيحة فقط لمن أدّى الامتحان بالفعل (لا يُكشف قبل بدء الامتحان)
+    // نكشف الإجابة الصحيحة والشرح فقط لمن أدّى الامتحان بالفعل (لا يُكشف قبل بدء الامتحان)
     correctIndex: lastResult ? q.correctIndex : undefined,
   }));
   return c.json({ exam, questions, lastResult });
@@ -563,6 +643,7 @@ app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
     correct: outcome.correct,
     total: outcome.total,
     passed: outcome.passed,
+    attempts: (existing?.attempts ?? 0) + 1,
     review: outcome.review,
   });
 });
@@ -800,6 +881,7 @@ app.get('/top-students', async (c) => {
       grade: s.grade,
       gradeName: GRADES[s.grade]?.name ?? s.grade,
     }));
+  c.header('Cache-Control', 'public, max-age=120');
   return c.json({ students });
 });
 
@@ -813,14 +895,16 @@ function clearLatestExamTopCache(): void {
 
 app.get('/latest-exam-top', async (c) => {
   const clientIp = ipOf(c.req.raw);
-  if (!genericRateLimit(`latest-exam-top:${clientIp}`, 10, 60_000)) {
+  if (!genericRateLimit(`latest-exam-top:${clientIp}`, 30, 60_000)) {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
   if (latestExamTopCache && Date.now() - latestExamTopCache.at < LATEST_EXAM_TOP_TTL) {
+    c.header('Cache-Control', 'public, max-age=60');
     return c.json(latestExamTopCache.data);
   }
   const data = { leaderboards: await listLatestExamTop() };
   latestExamTopCache = { at: Date.now(), data };
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json(data);
 });
 
@@ -875,14 +959,38 @@ app.get('/admin/users', requireAuth, requireAdmin, async (c) => {
   return c.json({ users: out.sort((a, b) => b.points - a.points), total, page, limit, counts });
 });
 
+/** إبطال كل جلسات تسجيل الدخول (سحب الصلاحيات من كل الأجهزة) — يرفع epoch الجلسات فوراً. */
+app.post('/admin/session/epoch', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`admin-epoch:${me.id}`, 2, 60_000)) {
+    return c.json({ error: 'انتظر دقيقة بين كل استدعاء' }, 429);
+  }
+  const epoch = Date.now();
+  const { error } = await sb.from('app_config').upsert({ key: 'session_epoch', value: epoch }, { onConflict: 'key' });
+  if (error) {
+    console.error('[api] session epoch upsert:', error.message);
+    return c.json({ error: 'فشل إبطال الجلسات، حاول مرة أخرى' }, 500);
+  }
+  invalidateSessionEpoch();
+  return c.json({ ok: true, epoch });
+});
+
 /** نسخة كاملة من كل المستخدمين مع إحصائياتهم في طلب واحد (بدون pagination أو استعلامات count) —
- *  تُستخدم في لوحة الطلبة حيث تتم الفلترة والبحث والترقيم في المتصفح لتخفيف الضغط على الباك اند. */
+ *  تُستخدم في لوحة الطلبة حيث تتم الفلترة والبحث والترقيم في المتصفح لتخفيف الضغط على الباك اند.
+ *  limit إلزامي (1–500) حتى لا يُفرَّغ كل الجداول بأمر واحد. */
 app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
   const me = getUser(c);
   if (!genericRateLimit(`admin-users-all:${me.id}`, 1, 30_000)) {
     return c.json({ error: 'انتظر 30 ثانية بين كل طلب' }, 429);
   }
-  const all = await listAllUsers();
+  const url = new URL(c.req.url);
+  const rawLimit = url.searchParams.get('limit');
+  const limit = Number(rawLimit);
+  if (!Number.isInteger(limit) || limit <= 0 || limit > 500) {
+    return c.json({ error: 'حقل limit مطلوب (رقم صحيح بين 1 و 500)' }, 400);
+  }
+  const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
+  const all = await listAllUsers({ limit, offset });
   const statsMap = await computeStudentStatsBatch(all.map((u) => u.id));
   const out = all.map((u) => {
     const stats = statsMap.get(u.id);
@@ -907,7 +1015,8 @@ app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
       examScores: stats?.examScores ?? [],
     };
   }).sort((a, b) => b.points - a.points);
-  return c.json({ users: out });
+  const { count } = await sb.from('users').select('id', { count: 'exact', head: true });
+  return c.json({ users: out, total: count ?? 0, page: Math.floor(offset / limit) + 1, limit, offset });
 });
 
 app.get('/admin/lessons', requireAuth, requireAdmin, async (c) => {
@@ -1026,7 +1135,13 @@ app.get('/admin/password-resets', requireAuth, requireAdmin, async (c) => {
   return c.json({ requests });
 });
 
-/** موافقة على طلب تغيير كلمة السر → يُعاد الكود مع بيانات الطالب لتمكين واتساب. */
+/** إحصاءات تشخيصية لطلبات كلمة السر — عدادت وتوقيتات فقط (بدون بيانات الطلاب) لتمييز "لا توجد طلبات" عن مشكلة تسجيل. */
+app.get('/admin/password-resets/diagnose', requireAuth, requireAdmin, async (c) => {
+  const diag = await getPasswordResetDiagnostics();
+  return c.json(diag);
+});
+
+/** موافقة على طلب تغيير كلمة السر → يولَّد كود من 6 أرقام (صلاحية ساعة) يُعاد مع بيانات الطالب لتمكين واتساب. */
 app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
@@ -1035,11 +1150,18 @@ app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async 
   if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
   if (req.status === 'completed') return c.json({ error: 'تم إتمام هذا الطلب بالفعل' }, 400);
 
-  const updated = await updatePasswordResetStatus(id, 'approved');
+  const code = randomResetCode();
+  const updated = await approvePasswordReset(id, code, PASSWORD_RESET_CODE_TTL_MS);
   if (!updated) return c.json({ error: 'فشل تحديث الحالة' }, 500);
 
   const user = await findUserById(req.userId);
-  return c.json({ ok: true, fullName: user?.fullName ?? req.fullName, phone: user?.phone ?? req.phone });
+  return c.json({
+    ok: true,
+    fullName: user?.fullName ?? req.fullName,
+    phone: user?.phone ?? req.phone,
+    code,
+    codeExpiresAt: updated.codeExpiresAt,
+  });
 });
 
 /** رفض طلب تغيير كلمة السر → يُرفض الطلب. */

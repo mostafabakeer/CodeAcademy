@@ -3,7 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
+import { getLastAuthFail } from '../api/client';
 import Sparkles from '../components/Sparkles';
+import DoctorCode from '../components/DoctorCode';
 
 export default function Login() {
   const { t } = useLang();
@@ -13,6 +15,22 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const lastFail = getLastAuthFail();
+  const lastFailMsg =
+    lastFail?.reason === 'expired'
+      ? t('auth.diagExpired')
+      : lastFail?.reason === 'invalid'
+        ? t('auth.diagInvalid')
+        : lastFail?.reason === 'blocked'
+          ? t('auth.diagBlocked')
+          : lastFail?.reason === 'missing-user'
+            ? t('auth.diagMissingUser')
+            : lastFail?.reason === 'server'
+              ? t('auth.diagServer')
+              : lastFail?.status === 0
+                ? t('auth.diagNetwork')
+                : null;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -49,13 +67,16 @@ export default function Login() {
 
         <div className="relative z-10 p-8">
           <div className="mb-6 text-center">
-            <img src="/logo.png" alt="DR Code" className="mx-auto mb-4 h-20 w-20 rounded-2xl object-contain drop-shadow-lg" />
+            {/* <DoctorCode size="sm" className="mx-auto -top-2" /> */}
+            <img src="/logo.png" alt="DR Code" className="mx-auto -mt-4 mb-2 h-16 w-16 rounded-2xl object-contain drop-shadow-lg" />
             <h1 className="text-2xl font-black">{t('auth.loginTitle')}</h1>
-            <p className="mt-1 text-sm text-gray-400">{t('auth.loginWithPhone')}</p>
+            <p className="mt-1 flex items-center justify-center gap-1 text-sm text-gray-400">
+              {t('auth.loginWithPhone')}
+            </p>
           </div>
 
           {error && (
-            <div className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
+            <div role="alert" className="mb-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
               {error}
             </div>
           )}
@@ -103,6 +124,10 @@ export default function Login() {
           </p>
         </div>
       </motion.div>
+
+      {lastFailMsg && (
+        <p className="mt-3 max-w-sm text-center text-xs leading-relaxed text-gray-500">⚠️ {lastFailMsg}</p>
+      )}
     </div>
   );
 }

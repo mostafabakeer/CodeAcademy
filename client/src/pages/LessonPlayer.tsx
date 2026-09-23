@@ -4,7 +4,7 @@ import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { loadBootstrap, buildLessonDetail, type LessonDetailData } from '../lib/content';
-import { getVideoProgressLocal, setVideoProgressLocal, clearVideoProgressLocal } from '../lib/localStore';
+import { getVideoProgressLocal, setVideoProgressLocal } from '../lib/localStore';
 import VideoPlayer from '../components/VideoPlayer';
 import ProgressBar from '../components/ProgressBar';
 
@@ -60,12 +60,12 @@ export default function LessonPlayer() {
   }, [id, userId]);
 
   const reportProgress = (seconds: number) => {
+    // نحتفظ دائمًا بأقصى تقدم لاستمرار الإحصائيات (لا نمسح عند 90% — فقط نعلن الإكمال).
     if (!lessonId || seconds <= 0) return;
     setLocalSeconds((s) => Math.max(s, seconds));
     setVideoProgressLocal(lessonId, seconds, duration);
     if (duration > 0 && seconds >= duration * 0.9) {
       setCompleted(true);
-      clearVideoProgressLocal(lessonId);
     }
   };
 

@@ -27,6 +27,7 @@
   --color-ink-500: #3c3c4e;
 
   --font-sans: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-cairo: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Consolas", "SFMono-Regular", Menlo, monospace;
 
   --animate-float: float 6s ease-in-out infinite;
@@ -168,6 +169,21 @@ html[lang='en'] body {
   background: linear-gradient(160deg, rgba(24, 24, 36, 0.9), rgba(14, 14, 22, 0.95));
   border: 1px solid rgba(244, 63, 79, 0.14);
   backdrop-filter: blur(8px);
+}
+
+/* أرقام خطوات إرشادات تثبيت الموقع */
+.install-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 9999px;
+  background: rgba(244, 63, 79, 0.14);
+  border: 1px solid rgba(244, 63, 79, 0.4);
+  color: #fb7185;
+  font-weight: 800;
+  font-size: 0.72rem;
 }
 
 .card-fire-hover {
@@ -357,6 +373,421 @@ h1, h2, h3 {
   textarea {
     font-size: 16px;
   }
+}
+
+/* ============ 🧑⚕️ ماسكوت دكتور كود (CSS 3D خالص بدون مكتبات) ============ */
+.dc3d {
+  position: relative;
+  width: 220px;
+  height: 240px;
+  perspective: 900px;
+  pointer-events: none;
+}
+.dc3d-stage {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  animation: dcFloat 6s ease-in-out infinite;
+}
+.dc3d-robot {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  width: 150px;
+  height: 170px;
+  transform: translate(-50%, -50%) rotateX(0deg) rotateY(0deg);
+  transform-style: preserve-3d;
+}
+@keyframes dcFloat {
+  0%, 100% { transform: translateY(0) rotateX(6deg) rotateY(-8deg); }
+  25% { transform: translateY(-10px) rotateX(2deg) rotateY(-2deg); }
+  50% { transform: translateY(4px) rotateX(-4deg) rotateY(6deg); }
+  75% { transform: translateY(-6px) rotateX(0deg) rotateY(-4deg); }
+}
+.dc3d-head {
+  position: absolute;
+  inset-inline: 12px;
+  top: 0;
+  height: 92px;
+  border-radius: 30px 30px 26px 26px;
+  background: linear-gradient(165deg, #2b2b3c, #16161f);
+  border: 2px solid rgba(244, 63, 79, 0.5);
+  box-shadow: 0 14px 30px -12px rgba(0, 0, 0, 0.7), inset 0 -6px 14px rgba(0, 0, 0, 0.4);
+  transform-style: preserve-3d;
+}
+.dc3d-head::before {
+  content: '';
+  position: absolute;
+  inset-inline: 14px;
+  top: 12px;
+  height: 46px;
+  border-radius: 16px;
+  background: linear-gradient(120deg, #0b0b12, #13131d 60%, #0b0b12);
+  border: 1px solid rgba(244, 63, 79, 0.35);
+  box-shadow: inset 0 0 14px rgba(244, 63, 79, 0.12);
+}
+/* شاشة الوجه بعلامة كود */
+.dc3d-head::after {
+  content: '</>';
+  position: absolute;
+  inset-inline: 0;
+  top: 18px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  background: linear-gradient(100deg, #f43f4e, #f97316);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 8px rgba(244, 63, 79, 0.35));
+  animation: dcBlink 3.6s ease-in-out infinite;
+}
+@keyframes dcBlink {
+  0%, 92%, 100% { opacity: 1; }
+  94% { opacity: 0.35; }
+}
+/* العينان */
+.dc3d-eye {
+  position: absolute;
+  top: 56px;
+  width: 22px;
+  height: 26px;
+  border-radius: 11px;
+  background: radial-gradient(circle at 40% 35%, #ffffff, #fb7185 45%, #f43f4e 80%);
+  box-shadow: 0 0 10px rgba(244, 63, 79, 0.6);
+  animation: dcEyePulse 4s ease-in-out infinite;
+}
+.dc3d-eye-l { left: 26px; }
+.dc3d-eye-r { right: 26px; }
+@keyframes dcEyePulse {
+  0%, 100% { transform: scaleY(1); }
+  3% { transform: scaleY(0.15); }
+  6% { transform: scaleY(1); }
+}
+/* الابتسامة */
+.dc3d-smile {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 8px;
+  border: 2px solid rgba(251, 146, 60, 0.9);
+  border-top: none;
+  border-radius: 0 0 18px 18px;
+}
+/* هوائي */
+.dc3d-antenna {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 16px;
+  background: linear-gradient(180deg, #f43f4e, transparent);
+}
+.dc3d-antenna::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #fff, #f97316 50%, #e11d31);
+  box-shadow: 0 0 10px 2px rgba(249, 115, 22, 0.7);
+  animation: dcFlamePulse 2.4s ease-in-out infinite;
+}
+@keyframes dcFlamePulse {
+  0%, 100% { box-shadow: 0 0 8px 2px rgba(249, 115, 22, 0.6); }
+  50% { box-shadow: 0 0 16px 4px rgba(244, 63, 79, 0.85); }
+}
+/* الجسم */
+.dc3d-body {
+  position: absolute;
+  inset-inline: 18px;
+  top: 96px;
+  bottom: 6px;
+  border-radius: 20px 20px 34px 34px;
+  background: linear-gradient(170deg, #22222f, #10101a);
+  border: 2px solid rgba(244, 63, 79, 0.4);
+  box-shadow: inset 0 8px 18px rgba(0, 0, 0, 0.5);
+}
+.dc3d-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 104px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #0b0b14, #14141f 60%, #0b0b14);
+  border: 1px solid rgba(244, 63, 79, 0.45);
+  box-shadow: inset 0 0 16px rgba(244, 63, 79, 0.18), 0 0 16px rgba(244, 63, 79, 0.25);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 900;
+}
+.dc3d-core::before {
+  content: '⚡';
+  position: absolute;
+  inset-inline-start: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+}
+.dc3d-core-text {
+  font-family: var(--font-cairo);
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  background: linear-gradient(100deg, #fecaca, #fb7185 40%, #fbbf24 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 6px rgba(244, 63, 79, 0.35));
+  animation: dcNameGlow 3s ease-in-out infinite;
+}
+@keyframes dcNameGlow {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(244, 63, 79, 0.3)); }
+  50% { filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.6)); }
+}
+/* لافتة اسم صغيرة بجانب الروبوت */
+.dc3d-tag {
+  position: absolute;
+  right: -6px;
+  top: 18px;
+  font-family: var(--font-cairo);
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(120deg, #f43f4e, #f97316);
+  border-radius: 9999px;
+  padding: 3px 10px;
+  box-shadow: 0 6px 14px -4px rgba(244, 63, 79, 0.6);
+  transform: rotate(4deg);
+}
+/* السماعة الطبية */
+.dc3d-steth {
+  position: absolute;
+  top: 90px;
+  left: 22px;
+  width: 16px;
+  height: 40px;
+  border: 2px solid #f97316;
+  border-radius: 8px;
+}
+.dc3d-steth::before {
+  content: '';
+  position: absolute;
+  right: -10px;
+  top: 34px;
+  width: 34px;
+  height: 30px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #fdba74, #f97316 60%, #c2410c);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+/* شرائح أكواد عائمة (عمق 3D) */
+.dc3d-chip {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 12px;
+  color: #fb7185;
+  background: rgba(24, 24, 36, 0.9);
+  border: 1px solid rgba(244, 63, 79, 0.35);
+  border-radius: 8px;
+  padding: 3px 7px;
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.6);
+  animation: dcChip 5s ease-in-out infinite;
+}
+.dc3d-chip-1 { top: 6%; left: 2%; animation-delay: 0.2s; }
+.dc3d-chip-2 { top: 34%; right: 0; animation-delay: 0.9s; color: #fdba74; }
+.dc3d-chip-3 { bottom: 10%; left: 4%; animation-delay: 1.5s; color: #fca5a5; }
+.dc3d-chip-4 { bottom: 30%; right: 3%; animation-delay: 2.1s; color: #fb923c; }
+@keyframes dcChip {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-10px) rotate(3deg); }
+}
+
+/* ============ الماسكوت الطائف — يلف في الموقع وهو بيتكلم ============ */
+.fm {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+  overflow: hidden;
+}
+.fm-roamer {
+  position: absolute;
+  left: 82%;
+  top: 76%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: fmRoamRest 56s ease-in-out infinite;
+  will-change: left, top, transform;
+}
+.fm-bubble {
+  position: relative;
+  margin-bottom: 7px;
+  max-width: 170px;
+  padding: 7px 12px 8px;
+  border-radius: 13px;
+  border: 1px solid rgba(244, 63, 79, 0.45);
+  background: linear-gradient(160deg, #2b2b3c, #16161f);
+  box-shadow: 0 12px 28px -10px rgba(0, 0, 0, 0.65);
+  font-family: var(--font-cairo);
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+  text-align: center;
+  line-height: 1.5;
+}
+.fm-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  inset-inline-start: 28%;
+  width: 12px;
+  height: 12px;
+  background: #16161f;
+  border-inline-end: 1px solid rgba(244, 63, 79, 0.45);
+  border-bottom: 1px solid rgba(244, 63, 79, 0.45);
+  transform: rotate(45deg);
+}
+.fm-msg {
+  display: block;
+  animation: fmMsg 0.6s ease-out both;
+}
+.fm-mascot {
+  pointer-events: none;
+}
+@keyframes fmMsg {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fmRoamRest {
+  0%   { left: 82%; top: 76%; }
+  10%  { left: 70%; top: 38%; }
+  18%  { left: 30%; top: 10%; }
+  26%  { left: 6%;  top: 42%; }
+  34%  { left: 44%; top: 78%; }
+  42%  { left: 86%; top: 60%; }
+  52%  { left: 82%; top: 76%; }
+  100% { left: 82%; top: 76%; }
+}
+@media (max-width: 640px) {
+  .fm-roamer {
+    animation-duration: 48s;
+  }
+  .fm-bubble {
+    max-width: 140px;
+    font-size: 11px;
+    padding: 6px 9px 7px;
+  }
+}
+@media print {
+  .fm {
+    display: none !important;
+  }
+}
+
+/* ============ نوافذ الأكواد (terminal) ============ */
+.term-win {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(244, 63, 79, 0.3);
+  background: #0a0a12;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.8);
+  direction: ltr;
+  text-align: left;
+  font-family: var(--font-mono);
+}
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #1b1b28, #12121c);
+  border-bottom: 1px solid rgba(244, 63, 79, 0.22);
+}
+.term-bar .dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+}
+.term-bar .dot-r { background: #f43f4e; }
+.term-bar .dot-y { background: #fbbf24; }
+.term-bar .dot-g { background: #34d399; }
+.term-title {
+  margin-inline-start: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term-body {
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.term-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.term-var { color: #fbbf24; }
+.term-fn { color: #fb7185; }
+.term-str { color: #34d399; }
+.term-key { color: #f97316; }
+.term-dim { color: #6b7280; }
+.term-caret {
+  display: inline-block;
+  width: 9px;
+  height: 15px;
+  margin-inline-start: 2px;
+  vertical-align: text-bottom;
+  background: #f43f4e;
+  animation: dcCaret 1s steps(1) infinite;
+}
+@keyframes dcCaret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+/* نقشة شبكة نقاط مخصصة بدل التصميم المألوف */
+.pattern-dots {
+  background-image: radial-gradient(rgba(244, 63, 79, 0.16) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* ============ لوحة تحكم منظمة ============ */
+.grid-brand {
+  border-radius: 18px;
+  border: 1px solid rgba(244, 63, 79, 0.16);
+  background: linear-gradient(160deg, rgba(24, 24, 36, 0.85), rgba(14, 14, 22, 0.95));
+  backdrop-filter: blur(8px);
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.grid-brand-hover:hover {
+  transform: translateY(-4px);
+  border-color: rgba(244, 63, 79, 0.5);
+  box-shadow: 0 14px 40px -14px rgba(244, 63, 79, 0.35);
+}
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fb7185;
 }
 
 @media (prefers-reduced-motion: reduce) {
