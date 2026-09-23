@@ -1,1 +1,2 @@
-/* /index.html 200
+# SPA handled by not_found_handling = "single-page-application" in the Worker config (wrangler.toml).
+# Do not add "/* /index.html 200" here: Cloudflare rejects it as an infinite loop on Workers assets.
