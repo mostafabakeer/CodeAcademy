@@ -2,12 +2,12 @@ import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuthStore } from '../store/authStore';
 import Sparkles from '../components/Sparkles';
 
 export default function Register() {
   const { t } = useLang();
-  const { register } = useAuth();
+  const register = useAuthStore((s) => s.register);
   const navigate = useNavigate();
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');

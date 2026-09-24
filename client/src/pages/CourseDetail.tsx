@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useUser } from '../store/authStore';
 import { buildCourseDetail, type CourseDetailData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
@@ -17,7 +17,7 @@ function fmt(sec: number): string {
 export default function CourseDetail() {
   const { id } = useParams();
   const { t, lang } = useLang();
-  const { user } = useAuth();
+  const user = useUser();
   const { data: boot, error, retry } = useBootstrapData(user?.id);
   const courseId = id ? Number(id) : null;
   const detail = useMemo<CourseDetailData | null>(

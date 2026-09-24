@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useUser } from '../store/authStore';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 
@@ -9,7 +9,7 @@ const Markdown = lazy(() => import('react-markdown'));
 
 export default function Notes() {
   const { t, lang } = useLang();
-  const { user } = useAuth();
+  const user = useUser();
   const { data, error, retry } = useBootstrapData(user?.id);
   const notes = data?.notes ?? [];
   const [open, setOpen] = useState<number | null>(null);

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuthStore } from '../store/authStore';
 import { useLang } from '../i18n';
 import { getLastAuthFail } from '../api/client';
 
 export default function ReconnectScreen() {
-  const { reconnect } = useAuth();
+  const reconnect = useAuthStore((s) => s.reconnect);
   const { t } = useLang();
   const [retrying, setRetrying] = useState(false);
   const autoTried = useRef(false);

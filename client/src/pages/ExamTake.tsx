@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { api } from '../api/client';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuthStore } from '../store/authStore';
 import ProgressBar from '../components/ProgressBar';
+import { useExamTimer, formatExamClock, clearExamTimer } from '../lib/useExamTimer';
 
 interface Question {
   id: number;
@@ -232,13 +233,14 @@ export default function ExamTake() {
   const { id } = useParams();
   const { t, lang } = useLang();
   const navigate = useNavigate();
-  const { applyExamResult } = useAuth();
+  const applyExamResult = useAuthStore((s) => s.applyExamResult);
   const [data, setData] = useState<ExamData | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>(() => loadDraft(id));
   const [result, setResult] = useState<Result | null>(null);
   const [showSavedReview, setShowSavedReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [attemptInProgress, setAttemptInProgress] = useState(false);
   const [error, setError] = useState('');
   const mountedRef = useRef(true);
 
@@ -250,7 +252,10 @@ export default function ExamTake() {
     setAnswers(loadDraft(id));
     api<ExamData>(`/api/exams/${id}`)
       .then((d) => {
-        if (active) setData(d);
+        if (active) {
+          setData(d);
+          setAttemptInProgress(!d.lastResult);
+        }
       })
       .catch((e) => {
         if (active) setError((e as Error).message);
@@ -288,7 +293,10 @@ export default function ExamTake() {
       });
       if (!mountedRef.current) return;
       setResult(res);
-      if (id) clearDraft(id);
+      if (id) {
+        clearDraft(id);
+        clearExamTimer(id);
+      }
       if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
       applyExamResult({
         examId: Number(id),
@@ -306,13 +314,29 @@ export default function ExamTake() {
   };
 
   const retake = () => {
-    if (id) clearDraft(id);
+    if (id) {
+      clearDraft(id);
+      clearExamTimer(id);
+    }
     setResult(null);
     setAnswers({});
     setError('');
     setSubmitting(false);
     setShowSavedReview(false);
+    setAttemptInProgress(true);
   };
+
+  // عدّاد الامتحان المرن: مهلة من timeLimit (دقائق)، تُستأنف من موعدها المحفوظ
+  // بعد أي إعادة تحميل، وتُسلّم الإجابات تلقائيًا عند بلوغ الصفر.
+  const { remainingMs } = useExamTimer({
+    examId: id,
+    durationMinutes: data?.exam.timeLimit ?? null,
+    active: attemptInProgress && !!data && !result && !showSavedReview,
+    enabled: !!data && !submitting && !loading,
+    onExpire: () => {
+      void submit();
+    },
+  });
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
   if (!data) return <p className="text-gray-400">{error || t('errors.generic')}</p>;
@@ -417,7 +441,11 @@ export default function ExamTake() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-black">📋 {lang === 'ar' ? exam.title : exam.titleEn}</h1>
           <div className="flex items-center gap-3 text-sm text-gray-400">
-            {exam.timeLimit ? <span>⏱️ {exam.timeLimit} {t('exam.timeLimit')}</span> : null}
+            {remainingMs !== null ? (
+              <span className={`font-bold tabular-nums ${remainingMs <= 60_000 ? 'animate-pulse text-fire-400' : 'text-gray-200'}`}>
+                ⏱️ {formatExamClock(remainingMs)}
+              </span>
+            ) : exam.timeLimit ? <span>⏱️ {exam.timeLimit} {t('exam.timeLimit')}</span> : null}
             <span>
               {answeredCount}/{questions.length} {t('exam.questionsCount')}
             </span>

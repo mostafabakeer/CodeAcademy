@@ -1,80 +1,38 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
-import { api } from '../api/client';
+import { useUser, useProgress } from '../store/authStore';
 import { type ExamListItem, type Exam } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
-import { StaleNotice } from '../components/PageStatus';
+import { StaleNotice, LoadError } from '../components/PageStatus';
 import DoctorCode from '../components/DoctorCode';
 
 export default function Exams() {
   const { t, lang } = useLang();
-  const { user, examResults } = useAuth();
+  const user = useUser();
+  const { examResults } = useProgress();
   const { data: boot, error: bootError, retry } = useBootstrapData(user?.id);
-  const [exams, setExams] = useState<ExamListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
-  const userId = user?.id;
 
-  const mergeAll = useCallback(
-    (list: Exam[]) => {
-      const map = new Map(examResults.map((r) => [r.examId, r]));
-      return list.map((e) => ({
-        ...e,
-        taken: !!map.get(e.id),
-        bestScore: map.get(e.id)?.best ?? null,
-        attempts: map.get(e.id)?.attempts ?? 0,
-      }));
-    },
-    [examResults]
-  );
+  // قائمة الامتحانات تُبنى محليًا من الكاش (bootstrap) + نتائج المستخدم —
+  // لا طلب شبكة إضافي: تُقدم فورًا بعد إعادة التحميل وتحتمل انقطاع الخادم.
+  const exams = useMemo<ExamListItem[]>(() => {
+    const map = new Map(examResults.map((r) => [r.examId, r]));
+    return (boot?.exams ?? []).map((e: Exam) => ({
+      ...e,
+      taken: !!map.get(e.id),
+      bestScore: map.get(e.id)?.best ?? null,
+      attempts: map.get(e.id)?.attempts ?? 0,
+    }));
+  }, [boot, examResults]);
 
-  useEffect(() => {
-    if (!userId) return;
-    let active = true;
-    setLoading(true);
-    setError('');
-    // عرض فوري من آخر نسخة محفوظة (بوتستراب) حتى لا تفرغ الصفحة عند إعادة التحميل.
-    if (boot) setExams(mergeAll(boot.exams));
-    api<{ exams: Exam[] }>('/api/exams')
-      .then((d) => {
-        if (active) setExams(mergeAll(d.exams ?? []));
-      })
-      .catch(() => {
-        // سقط الجلب الطازج: نبقي النسخة المحفوظة (إن وُجدت) — وإلا فشل واضح بدل صفحة فاضية.
-        if (active && !boot) {
-          setExams([]);
-          setError(t('exam.loadError'));
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [userId, reload, examResults, t, boot, mergeAll]);
+  const loading = !boot && !bootError;
 
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-        {/* <h1 className="text-2xl font-black sm:text-3xl">📝 {t('exam.title')}</h1> */}
-        {/* <p className="mt-1 text-gray-400">{t('home.subtitle')}</p> */}
-      </motion.div>
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} />
 
-      {bootError && exams.length > 0 && (
-        <StaleNotice
-          message={bootError}
-          onRetry={() => {
-            retry();
-            setReload((x) => x + 1);
-          }}
-        />
-      )}
+      {bootError && exams.length > 0 && <StaleNotice message={bootError} onRetry={retry} />}
 
       {/* تحفيز دكتور كود */}
       {!loading && exams.length > 0 && (
@@ -89,24 +47,14 @@ export default function Exams() {
               <DoctorCode size="sm" />
             </div>
             <div>
-              <h2 className="text-lg font-black text-fire-gradient sm:text-xl " > {t('exam.cheerTitle')}</h2>
-              {/* <p className="mt-1 text-sm text-gray-400">{t('exam.cheerMsg')}</p> */}
+              <h2 className="text-lg font-black text-fire-gradient sm:text-xl">{t('exam.cheerTitle')}</h2>
             </div>
           </div>
         </motion.div>
       )}
 
-      {error ? (
-        <div role="alert" className="flex flex-col items-center gap-3 rounded-2xl border border-fire-500/30 bg-fire-950/30 p-8 text-center">
-          <span className="text-3xl">⚠️</span>
-          <p className="text-gray-300">{error}</p>
-          <button
-            onClick={() => setReload((x) => x + 1)}
-            className="btn-fire rounded-xl px-5 py-2.5 text-sm font-bold text-white"
-          >
-            ⟳ {t('exam.retry')}
-          </button>
-        </div>
+      {bootError && exams.length === 0 ? (
+        <LoadError message={bootError} onRetry={retry} />
       ) : loading ? (
         <p className="text-gray-400">{t('common.loading')}</p>
       ) : exams.length === 0 ? (

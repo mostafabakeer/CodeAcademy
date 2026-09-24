@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useUser } from '../store/authStore';
 import { useLang } from '../i18n';
 import { ADMIN_WHATSAPP_DISPLAY, waLink } from '../config';
 
@@ -34,7 +34,7 @@ function Paywall() {
 }
 
 export default function SubscriberGate({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const user = useUser();
   if (user?.role === 'admin') return <>{children}</>;
   if (!user?.subscription) return <Paywall />;
   return <>{children}</>;

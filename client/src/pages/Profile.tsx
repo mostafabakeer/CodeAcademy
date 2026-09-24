@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useUser, useProgress } from '../store/authStore';
 import { api } from '../api/client';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
@@ -10,7 +10,8 @@ import ProgressBar from '../components/ProgressBar';
 
 export default function Profile() {
   const { t, lang } = useLang();
-  const { user, stats } = useAuth();
+  const user = useUser();
+  const { stats } = useProgress();
   const [codeFiles, setCodeFiles] = useState<{ id: number; name: string; language: string; updatedAt: number }[]>([]);
 
   useEffect(() => {

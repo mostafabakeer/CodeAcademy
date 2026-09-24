@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
 import Modal from '../../components/Modal';
+import FormField from '../../components/FormField';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
 
@@ -125,24 +126,24 @@ export default function CoursesAdmin() {
 
       <Modal open={open} onClose={() => setOpen(false)} title={editing ? t('admin.editCourse') : t('admin.addCourse')}>
         <form onSubmit={submit} className="space-y-4">
-          <Field label={t('admin.courseTitle')} required>
+          <FormField label={t('admin.courseTitle')} required>
             <input className="input-fire w-full rounded-xl px-4 py-2.5" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          </Field>
-          <Field label={t('admin.courseTitleEn')}>
+          </FormField>
+          <FormField label={t('admin.courseTitleEn')}>
             <input className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" value={form.titleEn} onChange={(e) => setForm({ ...form, titleEn: e.target.value })} />
-          </Field>
-          <Field label={t('admin.courseDesc')}>
+          </FormField>
+          <FormField label={t('admin.courseDesc')}>
             <textarea className="input-fire w-full rounded-xl px-4 py-2.5" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-          </Field>
-          <Field label={t('admin.courseDescEn')}>
+          </FormField>
+          <FormField label={t('admin.courseDescEn')}>
             <textarea className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" rows={3} value={form.descriptionEn} onChange={(e) => setForm({ ...form, descriptionEn: e.target.value })} />
-          </Field>
-          <Field label={t('admin.grade')}>
+          </FormField>
+          <FormField label={t('admin.grade')}>
             <GradeSelect value={form.grade} onChange={(v) => setForm({ ...form, grade: v })} />
-          </Field>
-          <Field label={`${t('admin.order')} (${t('common.optional')})`}>
+          </FormField>
+          <FormField label={`${t('admin.order')} (${t('common.optional')})`}>
             <input type="number" className="input-fire w-full rounded-xl px-4 py-2.5" value={form.order} onChange={(e) => setForm({ ...form, order: Number(e.target.value) })} />
-          </Field>
+          </FormField>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
           <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
             {t('common.save')}
@@ -153,13 +154,4 @@ export default function CoursesAdmin() {
   );
 }
 
-function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-sm font-semibold text-gray-300">
-        {label} {required && <span className="text-fire-400">*</span>}
-      </label>
-      {children}
-    </div>
-  );
-}
+

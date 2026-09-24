@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useUser } from '../store/authStore';
 import { buildCourseList, type CourseWithProgress } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal } from '../lib/localStore';
@@ -17,7 +17,7 @@ function fmtDuration(sec: number): string {
 
 export default function Courses() {
   const { t, lang } = useLang();
-  const { user } = useAuth();
+  const user = useUser();
   const { data, error, retry } = useBootstrapData(user?.id);
   const courses = useMemo<CourseWithProgress[]>(
     () => (data ? buildCourseList(data, getAllVideoProgressLocal()) : []),

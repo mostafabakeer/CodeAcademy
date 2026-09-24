@@ -72,5 +72,23 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        // فصل المكتبات إلى كتل vendor مستقلة: تحديث/تحميل مكتبة لا يعيد تنزيل الآخرين،
+        // ويُحسّن الكاش (assets CacheFirst مدتها 30 يومًا) والتحميل المتوازي.
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-motion': ['motion'],
+          'vendor-codemirror': [
+            '@uiw/react-codemirror',
+            '@codemirror/lang-css',
+            '@codemirror/lang-html',
+            '@codemirror/lang-javascript',
+            '@codemirror/lang-python',
+          ],
+          'vendor-markdown': ['react-markdown'],
+        },
+      },
+    },
   },
 });

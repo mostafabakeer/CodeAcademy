@@ -215,14 +215,6 @@ export interface ExamListItem extends Exam {
   attempts: number;
 }
 
-export function buildExamList(b: BootstrapData, examResults: { examId: number; best: number; attempts: number }[]): ExamListItem[] {
-  const map = new Map(examResults.map((r) => [r.examId, r]));
-  return b.exams.map((e) => {
-    const r = map.get(e.id);
-    return { ...e, taken: !!r, bestScore: r?.best ?? null, attempts: r?.attempts ?? 0 };
-  });
-}
-
 /* =================== أوائل الطلبة (عام / متاح بدون اشتراك) =================== */
 
 const TOP_KEY = 'topStudents';

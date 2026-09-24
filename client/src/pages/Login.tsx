@@ -2,14 +2,14 @@ import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuthStore } from '../store/authStore';
 import { getLastAuthFail } from '../api/client';
 import Sparkles from '../components/Sparkles';
 import DoctorCode from '../components/DoctorCode';
 
 export default function Login() {
   const { t } = useLang();
-  const { login } = useAuth();
+  const login = useAuthStore((s) => s.login);
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');

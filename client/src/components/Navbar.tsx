@@ -2,11 +2,11 @@ import { useState } from 'react';
 import { NavLink, Link, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../store/authStore';
 
 export default function Navbar() {
   const { t, lang, setLang } = useLang();
-  const { user, logout, offline } = useAuth();
+  const { user, logout, offline } = useSession();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 

@@ -1,4 +1,6 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
+import { useEffect, useRef } from 'react';
 import { api, clearToken, setToken, ApiError, getToken, recordAuthFailure, clearAuthFail, markLoggedOut, clearLoggedOutFlag, getLoggedOutFlag } from '../api/client';
 import { getBootstrapSync, loadBootstrap } from '../lib/content';
 import { getAllVideoProgressLocal, getSessionSnapshot, saveSessionSnapshot, clearSessionSnapshot, type SessionSnapshot } from '../lib/localStore';
@@ -23,24 +25,6 @@ export interface ExamResultSummary {
   total: number;
   attempts: number;
 }
-
-interface AuthContextValue {
-  user: User | null;
-  stats: StudentStats | null;
-  examResults: ExamResultSummary[];
-  loading: boolean;
-  /** خطأ شبكة/خادم مؤقت — نقف على شاشة إعادة اتصال بدل صفحة الدخول ولا نمسح التوكن. */
-  offline: boolean;
-  /** إعادة محاولة الاتصال بعد انقطاع مؤقت. */
-  reconnect: () => Promise<void>;
-  login: (identifier: string, password: string) => Promise<void>;
-  register: (fullName: string, phone: string, grade: string, password: string) => Promise<{ user: User }>;
-  logout: () => Promise<void>;
-  /** يُحدِّث نتيجة امتحان محلياً (بعد التسليم) ويعيد حساب الإحصائيات فوراً. */
-  applyExamResult: (r: ExamResultSummary) => void;
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null);
 
 interface MeResponse {
   user: User;
@@ -78,36 +62,43 @@ function cleanupExamReviews(): void {
   }
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [levels, setLevels] = useState<LevelTier[]>([]);
-  const [examResults, setExamResults] = useState<ExamResultSummary[]>([]);
-  const [stats, setStats] = useState<StudentStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [offline, setOffline] = useState(false);
+interface AuthState {
+  user: User | null;
+  levels: LevelTier[];
+  examResults: ExamResultSummary[];
+  stats: StudentStats | null;
+  loading: boolean;
+  /** خطأ شبكة/خادم مؤقت — نقف على شاشة إعادة اتصال بدل صفحة الدخول ولا نمسح التوكن. */
+  offline: boolean;
+  applyUser: (u: User | null, s: StudentStats | null) => void;
+  applyMe: (me: MeResponse) => Promise<void>;
+  restoreSession: (snap: SessionSnapshot) => void;
+  runBoot: () => Promise<void>;
+  /** إعادة محاولة الاتصال بعد انقطاع مؤقت. */
+  reconnect: () => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
+  register: (fullName: string, phone: string, grade: string, password: string) => Promise<{ user: User }>;
+  logout: () => Promise<void>;
+  /** يُحدِّث نتيجة امتحان محلياً (بعد التسليم) ويعيد حساب الإحصائيات فوراً. */
+  applyExamResult: (r: ExamResultSummary) => void;
+}
 
-  // مراجع متزامنة مع الحالة لتجنّب الإغلاق على قيم قديمة (وخاصة في applyExamResult).
-  const userRef = useRef<User | null>(null);
-  const levelsRef = useRef<LevelTier[]>([]);
-  const examResultsRef = useRef<ExamResultSummary[]>([]);
-  userRef.current = user;
-  levelsRef.current = levels;
-  examResultsRef.current = examResults;
+export const useAuthStore = create<AuthState>()((set, get) => ({
+  user: null,
+  levels: [],
+  examResults: [],
+  stats: null,
+  loading: true,
+  offline: false,
 
-  const applyUser = (u: User | null, s: StudentStats | null) => {
-    setUser(u);
-    setStats(s);
-  };
+  applyUser: (u, s) => set({ user: u, stats: s }),
 
   /** تطبيق جلسة صحيحة: تخزين التوكن (للإنعاش عبر الكوكي) + تفريغ التشخيص + ملء الحالة والإحصائيات. */
-  const applyMe = async (me: MeResponse) => {
+  applyMe: async (me) => {
     if (me.token) setToken(me.token);
     clearLoggedOutFlag();
     clearAuthFail();
-    setOffline(false);
-    setUser(me.user);
-    setLevels(me.levels);
-    setExamResults(me.examResults);
+    set({ offline: false, user: me.user, levels: me.levels, examResults: me.examResults });
     saveSessionSnapshot(me.user, me.levels, me.examResults);
     // جلب المحتوى مسبقًا لكل المستخدمين (وليس المشترك/الأدمن فقط) حتى يصل الكاش
     // قبل تركيب أي صفحة — فإعادة التحميل تعرض المحتوى فورًا من النسخة المحفوظة.
@@ -119,35 +110,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* content يبقى فاضي/قديم — الجلسة سليمة */
     }
     if (me.user.role === 'admin' || me.user.subscription) {
-      setStats(statsFor(me.user, me.levels, me.examResults));
+      set({ stats: statsFor(me.user, me.levels, me.examResults) });
     } else {
-      setStats(emptyStats(me.levels));
+      set({ stats: emptyStats(me.levels) });
     }
-  };
+  },
 
   /** استرجاع هوية مؤكدة مسبقًا (لقطة محفوظة) كي لا يُطرد المستخدم عند فشل /me بعد إعادة التحميل. */
-  const restoreSession = (snap: SessionSnapshot) => {
+  restoreSession: (snap) => {
     const u = snap.user as User;
     const lv = snap.levels as LevelTier[];
     const er = snap.examResults as ExamResultSummary[];
-    setOffline(false);
-    setUser(u);
-    setLevels(lv);
-    setExamResults(er);
-    setStats(statsFor(u, lv, er));
-  };
+    set({ offline: false, user: u, levels: lv, examResults: er, stats: statsFor(u, lv, er) });
+  },
 
-  const runBoot = async () => {
+  runBoot: async () => {
     // بعد تسجيل خروج، لا نُحيي جلسة من الكوكي (HttpOnly لا يُمسح بالجافاسكربت).
     if (getLoggedOutFlag() && !getToken()) {
-      setOffline(false);
-      applyUser(null, null);
-      setLoading(false);
+      set({ offline: false, user: null, stats: null, loading: false });
       return;
     }
     try {
       const me = await api<MeResponse>('/api/auth/me');
-      await applyMe(me);
+      await get().applyMe(me);
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
       if (status === 401) {
@@ -155,7 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // فشل قاعدة البيانات إلى 401). نعيد المحاولة مرة واحدة قبل الحكم.
         try {
           const retry = await api<MeResponse>('/api/auth/me');
-          await applyMe(retry);
+          await get().applyMe(retry);
           return;
         } catch (err2) {
           const s2 = err2 instanceof ApiError ? err2.status : 0;
@@ -167,16 +152,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             recordAuthFailure(s2, getToken());
             const snap = getSessionSnapshot();
             if (snap && Date.now() - snap.at < SESSION_SNAPSHOT_TTL) {
-              restoreSession(snap);
+              get().restoreSession(snap);
             } else {
               clearToken();
-              setOffline(false);
-              applyUser(null, null);
+              set({ offline: false, user: null, stats: null });
             }
           } else {
             // 0/5xx أثناء إعادة المحاولة → انقطاع مؤقت، نحافظ على التوكن.
             recordAuthFailure(s2, getToken());
-            setOffline(true);
+            set({ offline: true });
           }
           return;
         }
@@ -190,47 +174,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (status === 403 || status === 404) {
         const snap = getSessionSnapshot();
         if (snap && Date.now() - snap.at < SESSION_SNAPSHOT_TTL) {
-          restoreSession(snap);
+          get().restoreSession(snap);
         } else {
           clearToken();
-          setOffline(false);
-          applyUser(null, null);
+          set({ offline: false, user: null, stats: null });
         }
       } else if (status >= 500) {
-        setOffline(true);
+        set({ offline: true });
       } else {
-        setOffline(false);
+        set({ offline: false });
       }
     } finally {
-      setLoading(false);
+      set({ loading: false });
     }
-  };
+  },
 
-  const bootStartedRef = useRef(false);
-  useEffect(() => {
-    if (bootStartedRef.current) return;
-    bootStartedRef.current = true;
-    runBoot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  reconnect: async () => {
+    set({ loading: true, offline: false });
+    await get().runBoot();
+  },
 
-  // مزامنة بين التبويبات: تغيّر dr_code_token في تبويب آخر → إعادة تشغيل البوت.
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === 'dr_code_token') runBoot();
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const reconnect = async () => {
-    setLoading(true);
-    setOffline(false);
-    await runBoot();
-  };
-
-  const login = async (identifier: string, password: string) => {
+  login: async (identifier, password) => {
     const data = await api<{ token: string; user: User }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ identifier, password }),
@@ -240,7 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearAuthFail();
     try {
       const me = await api<MeResponse>('/api/auth/me');
-      await applyMe(me);
+      await get().applyMe(me);
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
       if (status === 401 || status === 403 || status === 404) {
@@ -252,12 +216,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // انقطاع مؤقت بعد نجاح الدخول: لا نطرد المستخدم، نُنهي الجلسة بالبيانات
       // التي عادت من /login (بدون مستويات/نتائج — تُجلب عند أول /me ناجح).
       recordAuthFailure(status, getToken());
-      setOffline(status >= 500 || status === 0);
-      await applyMe({ user: data.user, levels: [], examResults: [] } as MeResponse);
+      set({ offline: status >= 500 || status === 0 });
+      await get().applyMe({ user: data.user, levels: [], examResults: [] } as MeResponse);
     }
-  };
+  },
 
-  const register = async (fullName: string, phone: string, grade: string, password: string) => {
+  register: async (fullName, phone, grade, password) => {
     const data = await api<{ token: string; user: User }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify({ fullName, phone, grade, password }),
@@ -266,11 +230,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(data.token);
     clearAuthFail();
     saveSessionSnapshot(data.user, [], []);
-    applyUser(data.user, null);
+    set({ user: data.user, stats: null });
     return { user: data.user };
-  };
+  },
 
-  const logout = async () => {
+  logout: async () => {
     // العلم يمنع بعث الجلسة عبر الكوكي بعد إعادة التحميل حتى لو فشل POST.
     markLoggedOut();
     try {
@@ -282,29 +246,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearAuthFail();
     clearSessionSnapshot();
     cleanupExamReviews();
-    setUser(null);
-    setStats(null);
-    setExamResults([]);
-    setLevels([]);
-  };
+    set({ user: null, stats: null, examResults: [], levels: [] });
+  },
 
-  const applyExamResult = (r: ExamResultSummary) => {
-    const next = [...examResultsRef.current.filter((x) => x.examId !== r.examId), r].sort((a, b) => a.examId - b.examId);
-    setExamResults(next);
-    if (userRef.current) setStats(statsFor(userRef.current, levelsRef.current, next));
-  };
+  applyExamResult: (r) => {
+    const prev = get().examResults;
+    const next = [...prev.filter((x) => x.examId !== r.examId), r].sort((a, b) => a.examId - b.examId);
+    set({ examResults: next });
+    const u = get().user;
+    if (u) set({ stats: statsFor(u, get().levels, next) });
+  },
+}));
 
-  return (
-    <AuthContext.Provider
-      value={{ user, stats, examResults, loading, offline, reconnect, login, register, logout, applyExamResult }}
-    >
-      {children}
-    </AuthContext.Provider>
+/** هوية المستخدم فقط — لا تُعيد التصيير عند تغير النتائج/الإحصائيات. */
+export function useUser(): User | null {
+  return useAuthStore((s) => s.user);
+}
+
+/** شريحة الجلسة (الهوية + أفعال المصادقة) معزولة عن شريحة البيانات. */
+export function useSession(): {
+  user: User | null;
+  loading: boolean;
+  offline: boolean;
+  reconnect: () => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
+  register: (fullName: string, phone: string, grade: string, password: string) => Promise<{ user: User }>;
+  logout: () => Promise<void>;
+} {
+  return useAuthStore(
+    useShallow((s) => ({
+      user: s.user,
+      loading: s.loading,
+      offline: s.offline,
+      reconnect: s.reconnect,
+      login: s.login,
+      register: s.register,
+      logout: s.logout,
+    }))
   );
 }
 
-export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
+/** شريحة البيانات المتقلّبة (إحصائيات + نتائج امتحانات) — معزولة عن الهوية. */
+export function useProgress(): {
+  stats: StudentStats | null;
+  examResults: ExamResultSummary[];
+  applyExamResult: (r: ExamResultSummary) => void;
+} {
+  return useAuthStore(
+    useShallow((s) => ({
+      stats: s.stats,
+      examResults: s.examResults,
+      applyExamResult: s.applyExamResult,
+    }))
+  );
+}
+
+/** تشغيل البوت مرة واحدة + مزامنة تغيّر التوكن بين التبويبات. */
+function useAuthBoot(): void {
+  const bootStartedRef = useRef(false);
+  useEffect(() => {
+    if (bootStartedRef.current) return;
+    bootStartedRef.current = true;
+    void useAuthStore.getState().runBoot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'dr_code_token') void useAuthStore.getState().runBoot();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
+/** واجهة هامدة تُركّب عند الإقلاع لبدء الجلسة (يحل محل AuthProvider). */
+export function AuthBootstrap() {
+  useAuthBoot();
+  return null;
 }

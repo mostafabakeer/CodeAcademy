@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useAuth } from '../contexts/AuthContext';
+import { useUser } from '../store/authStore';
 import { buildLessonDetail, type LessonDetailData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getVideoProgressLocal, setVideoProgressLocal } from '../lib/localStore';
@@ -14,7 +14,7 @@ export default function LessonPlayer() {
   const { id } = useParams();
   const { t, lang } = useLang();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const user = useUser();
   const [data, setData] = useState<LessonDetailData | null>(null);
   const [duration, setDuration] = useState(0);
   const [completed, setCompleted] = useState(false);
