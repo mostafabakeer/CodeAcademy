@@ -41,9 +41,31 @@ export default function TopStudents() {
       .finally(() => setLoadingLatest(false));
   }, []);
 
+  /** تحديث خلفي لقسم «أوائل آخر امتحان» دون إظهار الهيكل ليظل المحتوى ظاهرًا. */
+  const refreshLatest = useCallback(() => {
+    loadLatestExamTop(true)
+      .then((l) => {
+        setLatestTop(l);
+        setLatestError('');
+      })
+      .catch((e) => setLatestError((e as Error).message));
+  }, []);
+
   useEffect(() => {
     loadAll();
-  }, [loadAll]);
+    const timer = window.setInterval(refreshLatest, 60_000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshLatest();
+    };
+    const onFocus = () => refreshLatest();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [loadAll, refreshLatest]);
 
   const all = students.slice().sort((a, b) => a.rank - b.rank);
   const bac1 = students.filter((s) => s.grade === 'bac1');

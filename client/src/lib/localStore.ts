@@ -1,5 +1,25 @@
 import { getLocal, setLocal, removeLocal } from './storage';
 
+/** لقطة الهوية المؤكدة محليًا تُسترجَع عند فشل /me بعد إعادة التحميل كي لا يُطرد المستخدم من حسابه. */
+export interface SessionSnapshot {
+  v: 1;
+  user: {
+    id: number;
+    fullName: string;
+    phone: string;
+    grade: string;
+    role: 'student' | 'admin';
+    subscription?: boolean;
+    blocked?: boolean;
+    createdAt?: number;
+  };
+  levels: unknown[];
+  examResults: unknown[];
+  at: number;
+}
+
+const SESSION_KEY = 'dr_code_session';
+
 // ===== الطبقة الأولى (localStorage): بيانات هشّة خاصة بالمتصفح فقط =====
 
 const DRAFT_PREFIX = 'draft:';
@@ -71,4 +91,28 @@ export function getAllVideoProgressLocal(): Record<number, VideoProgressLocal> {
     /* ignore */
   }
   return out;
+}
+
+export function getSessionSnapshot(): SessionSnapshot | null {
+  const raw = getLocal(SESSION_KEY);
+  if (!raw) return null;
+  try {
+    const s = JSON.parse(raw) as SessionSnapshot;
+    if (s?.v === 1 && s?.at && s?.user?.id) return s;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function saveSessionSnapshot(
+  user: SessionSnapshot['user'],
+  levels: unknown[],
+  examResults: unknown[],
+): void {
+  setLocal(SESSION_KEY, JSON.stringify({ v: 1, user, levels, examResults, at: Date.now() }));
+}
+
+export function clearSessionSnapshot(): void {
+  removeLocal(SESSION_KEY);
 }

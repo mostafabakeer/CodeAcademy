@@ -895,7 +895,9 @@ function clearLatestExamTopCache(): void {
 
 app.get('/latest-exam-top', async (c) => {
   const clientIp = ipOf(c.req.raw);
-  if (!genericRateLimit(`latest-exam-top:${clientIp}`, 30, 60_000)) {
+  // 120/دقيقة: يدعم تحديثًا تلقائيًا كل 60 ثانية من صفحة top-students حتى على
+  // الشبكات المشتركة (مدرسة/بيت) دون إصدار 429.
+  if (!genericRateLimit(`latest-exam-top:${clientIp}`, 120, 60_000)) {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
   if (latestExamTopCache && Date.now() - latestExamTopCache.at < LATEST_EXAM_TOP_TTL) {

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, clearToken, setToken, ApiError, getToken, recordAuthFailure, clearAuthFail, markLoggedOut, clearLoggedOutFlag, getLoggedOutFlag } from '../api/client';
 import { getBootstrapSync, loadBootstrap } from '../lib/content';
-import { getAllVideoProgressLocal } from '../lib/localStore';
+import { getAllVideoProgressLocal, getSessionSnapshot, saveSessionSnapshot, clearSessionSnapshot, type SessionSnapshot } from '../lib/localStore';
 import { computeStats, emptyStats, type LevelTier, type StudentStats } from '../lib/stats';
 
 export interface User {
@@ -63,6 +63,9 @@ function statsFor(user: User, levels: LevelTier[], examResults: ExamResultSummar
   });
 }
 
+/** مدة بقاء لقطة الهوية المحفوظة صالحة — مطابقة لصلاحية التوكن (180 يومًا في الخادم). */
+const SESSION_SNAPSHOT_TTL = 180 * 24 * 60 * 60 * 1000;
+
 /** يُنظّف مراجعات الامتحانات المخزنة محليًا (لا تتسرب لآخر يستخدم نفس الجهاز). */
 function cleanupExamReviews(): void {
   try {
@@ -105,6 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me.user);
     setLevels(me.levels);
     setExamResults(me.examResults);
+    saveSessionSnapshot(me.user, me.levels, me.examResults);
     if (me.user.role === 'admin' || me.user.subscription) {
       // فشل جلب المحتوى لا يعني موت الجلسة — نحتفظ بالتوكن ونكمل حتى لا يخرج
       // المستخدم من حسابه بسبب انقطاع مؤقت أو تجاوز حد الطلبات أثناء جلب المحتوى.
@@ -117,6 +121,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       setStats(emptyStats(me.levels));
     }
+  };
+
+  /** استرجاع هوية مؤكدة مسبقًا (لقطة محفوظة) كي لا يُطرد المستخدم عند فشل /me بعد إعادة التحميل. */
+  const restoreSession = (snap: SessionSnapshot) => {
+    const u = snap.user as User;
+    const lv = snap.levels as LevelTier[];
+    const er = snap.examResults as ExamResultSummary[];
+    setOffline(false);
+    setUser(u);
+    setLevels(lv);
+    setExamResults(er);
+    setStats(statsFor(u, lv, er));
   };
 
   const runBoot = async () => {
@@ -142,11 +158,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (err2) {
           const s2 = err2 instanceof ApiError ? err2.status : 0;
           if (s2 === 401 || s2 === 403 || s2 === 404) {
-            // تأكد: الجلسة ميتة فعلًا → مسح والذهاب لصفحة الدخول.
+            // الجلسة مرفوضة على الخادم، لكن إن كانت هوية مؤكدة مسبقًا (لقطة
+            // محفوظة حديثة) فلا نُطرد المستخدم — نستعيد اللقطة ونبقي التوكن.
+            // الخادم يبقى هو السلطة: أي طلب قادم سيتقبل الرفض إن كانت الجلسة
+            // ميتة فعلًا، والواجهة فقط لا ترسل المستخدم لصفحة الدخول.
             recordAuthFailure(s2, getToken());
-            clearToken();
-            setOffline(false);
-            applyUser(null, null);
+            const snap = getSessionSnapshot();
+            if (snap && Date.now() - snap.at < SESSION_SNAPSHOT_TTL) {
+              restoreSession(snap);
+            } else {
+              clearToken();
+              setOffline(false);
+              applyUser(null, null);
+            }
           } else {
             // 0/5xx أثناء إعادة المحاولة → انقطاع مؤقت، نحافظ على التوكن.
             recordAuthFailure(s2, getToken());
@@ -156,13 +180,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
       // لا نمسح الجلسة إلا عند جلسة ميتة نهائيًا (403 محظور / 404 مستخدم
-      // محذوف). أي خطأ شبكة/خادم مؤقت (0 أو 5xx) لا يُسقط التوكن ولا يمسحه،
-      // بل يُظهر آليات "إعادة الاتصال" على الصفحات المحمية فقط.
+      // محذوف) ولا توجد هوية مؤكدة مسبقًا. أي خطأ شبكة/خادم مؤقت (0 أو 5xx)
+      // لا يُسقط التوكن ولا يمسحه، بل يُظهر آليات "إعادة الاتصال" على الصفحات
+      // المحمية فقط. وعند فشل مؤكد مع وجود لقطة حديثة، تُستعاد الهوية ولا
+      // يُطرد المستخدم (تلبيةً لطلب "بمجرد ما أكد الهوية خلاص").
       recordAuthFailure(status, getToken());
       if (status === 403 || status === 404) {
-        clearToken();
-        setOffline(false);
-        applyUser(null, null);
+        const snap = getSessionSnapshot();
+        if (snap && Date.now() - snap.at < SESSION_SNAPSHOT_TTL) {
+          restoreSession(snap);
+        } else {
+          clearToken();
+          setOffline(false);
+          applyUser(null, null);
+        }
       } else if (status >= 500) {
         setOffline(true);
       } else {
@@ -232,6 +263,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearLoggedOutFlag();
     setToken(data.token);
     clearAuthFail();
+    saveSessionSnapshot(data.user, [], []);
     applyUser(data.user, null);
     return { user: data.user };
   };
@@ -246,6 +278,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearToken();
     clearAuthFail();
+    clearSessionSnapshot();
     cleanupExamReviews();
     setUser(null);
     setStats(null);
