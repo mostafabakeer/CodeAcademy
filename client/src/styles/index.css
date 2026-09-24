@@ -635,6 +635,11 @@ h1, h2, h3 {
   animation: fmRoamRest 56s ease-in-out infinite;
   will-change: left, top, transform;
 }
+/* الجلسة الواحدة: الافتار يكمل دورة واحدة فقط ثم يقف (إخفاء في النهاية). */
+.fm-roam-once {
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
 .fm-bubble {
   position: relative;
   margin-bottom: 7px;

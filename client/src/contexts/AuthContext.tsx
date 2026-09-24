@@ -106,7 +106,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLevels(me.levels);
     setExamResults(me.examResults);
     if (me.user.role === 'admin' || me.user.subscription) {
-      await loadBootstrap(me.user.id);
+      // فشل جلب المحتوى لا يعني موت الجلسة — نحتفظ بالتوكن ونكمل حتى لا يخرج
+      // المستخدم من حسابه بسبب انقطاع مؤقت أو تجاوز حد الطلبات أثناء جلب المحتوى.
+      try {
+        await loadBootstrap(me.user.id);
+      } catch {
+        /* content يبقى فاضي/قديم — الجلسة سليمة */
+      }
       setStats(statsFor(me.user, me.levels, me.examResults));
     } else {
       setStats(emptyStats(me.levels));

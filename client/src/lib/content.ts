@@ -1,5 +1,5 @@
 import { api } from '../api/client';
-import { getCached, setCached, removeCached } from './cache';
+import { getCached, getCachedStale, setCached, removeCached } from './cache';
 import { getAllVideoProgressLocal, type VideoProgressLocal } from './localStore';
 
 // ===== جلب المحتوى الكامل دفعة واحدة (bootstrap) مع كاش محلي =====
@@ -100,6 +100,13 @@ export function loadBootstrap(userId: number, force = false): Promise<BootstrapD
       setCached(key, data);
       return data;
     })
+    .catch((err) => {
+      // فشل الشبكة/الخادم لا يعني فقدان البيانات: نعيد آخر نسخة مخزنة (حتى لو قديمة)
+      // بدل إظهار صفحات فاضية بعد إعادة التحميل.
+      const stale = getCachedStale<BootstrapData>(key);
+      if (stale) return stale;
+      throw err;
+    })
     .finally(() => {
       if (inFlightByUser.get(userId) === p) inFlightByUser.delete(userId);
     });
@@ -108,7 +115,8 @@ export function loadBootstrap(userId: number, force = false): Promise<BootstrapD
 }
 
 export function getBootstrapSync(userId: number): BootstrapData | null {
-  return getCached<BootstrapData>(bootstrapKey(userId), BOOTSTRAP_TTL);
+  // لا نمنع قراءة البيانات المنتهية صلاحيتها هنا — نعرضها حتى تتجدد في الخلفية.
+  return getCachedStale<BootstrapData>(bootstrapKey(userId));
 }
 
 export function invalidateBootstrap(userId: number): void {
@@ -232,7 +240,7 @@ export function loadTopStudents(force = false): Promise<TopStudent[]> {
       return students;
     })
     .catch((e) => {
-      const cached = getCached<TopStudent[]>(TOP_KEY, TOP_TTL);
+      const cached = getCachedStale<TopStudent[]>(TOP_KEY);
       if (cached) return cached;
       throw e;
     });
@@ -276,7 +284,7 @@ export function loadLatestExamTop(force = false): Promise<Record<string, LatestE
       return leaderboards;
     })
     .catch((e) => {
-      const cached = getCached<Record<string, LatestExamTop>>(LATEST_TOP_KEY, LATEST_TOP_TTL);
+      const cached = getCachedStale<Record<string, LatestExamTop>>(LATEST_TOP_KEY);
       if (cached) return cached;
       throw e;
     });

@@ -24,6 +24,19 @@ export function getCached<T>(key: string, ttlMs: number): T | null {
   }
 }
 
+/** قراءة الكاش حتى لو انتهت صلاحيته — بدون حذفه — لاستخدامه كـ"آخر بيانات معروفة" عند فشل الشبكة. */
+export function getCachedStale<T>(key: string): T | null {
+  const raw = getLocal(CACHE_PREFIX + key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as CacheEntry<T>;
+    if (typeof parsed.at !== 'number') return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
 export function setCached<T>(key: string, data: T): void {
   const entry: CacheEntry<T> = { at: Date.now(), data };
   setLocal(CACHE_PREFIX + key, JSON.stringify(entry));
