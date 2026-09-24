@@ -1,26 +1,19 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { loadBootstrap, type Note } from '../lib/content';
+import { useBootstrapData } from '../lib/useBootstrapData';
+import { StaleNotice, LoadError } from '../components/PageStatus';
 
 const Markdown = lazy(() => import('react-markdown'));
 
 export default function Notes() {
   const { t, lang } = useLang();
   const { user } = useAuth();
-  const [notes, setNotes] = useState<Note[]>([]);
+  const { data, error, retry } = useBootstrapData(user?.id);
+  const notes = data?.notes ?? [];
   const [open, setOpen] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const userId = user?.id;
-
-  useEffect(() => {
-    if (!userId) return;
-    loadBootstrap(userId)
-      .then((b) => setNotes(b.notes))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [userId]);
+  const loading = !data && !error;
 
   return (
     <div className="space-y-6">
@@ -29,7 +22,11 @@ export default function Notes() {
         <p className="mt-1 text-gray-400">{t('home.subtitle')}</p>
       </motion.div>
 
-      {loading ? (
+      {error && data && <StaleNotice message={error} onRetry={retry} />}
+
+      {error && !data ? (
+        <LoadError message={error} onRetry={retry} />
+      ) : loading ? (
         <p className="text-gray-400">{t('common.loading')}</p>
       ) : notes.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('note.noNotes')}</p>

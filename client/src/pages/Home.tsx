@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { loadBootstrap, buildCourseList, type CourseWithProgress } from '../lib/content';
+import { buildCourseList, type CourseWithProgress } from '../lib/content';
+import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal } from '../lib/localStore';
+import { StaleNotice, LoadError } from '../components/PageStatus';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
 import ProgressBar from '../components/ProgressBar';
@@ -13,17 +15,12 @@ import DoctorCode from '../components/DoctorCode';
 export default function Home() {
   const { t, lang } = useLang();
   const { user, stats } = useAuth();
-  const [courses, setCourses] = useState<CourseWithProgress[]>([]);
-  const [loading, setLoading] = useState(true);
-  const userId = user?.id;
-
-  useEffect(() => {
-    if (!userId) return;
-    loadBootstrap(userId)
-      .then((b) => setCourses(buildCourseList(b, getAllVideoProgressLocal())))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [userId]);
+  const { data, error, retry } = useBootstrapData(user?.id);
+  const courses = useMemo<CourseWithProgress[]>(
+    () => (data ? buildCourseList(data, getAllVideoProgressLocal()) : []),
+    [data]
+  );
+  const loading = !data && !error;
 
   const watchHours = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10)) / 10 : 0;
   const nextCourse = courses.filter((c) => c.progress > 0 && c.progress < 100).sort((a, b) => b.progress - a.progress)[0];
@@ -31,6 +28,8 @@ export default function Home() {
 
   return (
     <div className="space-y-8">
+      {error && data && <StaleNotice message={error} onRetry={retry} />}
+
       {/* Hero مميز: الماسكوت + نافذة كود */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
@@ -143,7 +142,9 @@ export default function Home() {
               {t('common.back')} ←
             </Link>
           </div>
-          {loading ? (
+          {error && !data ? (
+            <LoadError message={error} onRetry={retry} />
+          ) : loading ? (
             <p className="text-gray-400">{t('common.loading')}</p>
           ) : courses.length === 0 ? (
             <p className="text-gray-400">{t('home.noCourses')}</p>

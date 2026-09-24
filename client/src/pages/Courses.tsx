@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { loadBootstrap, buildCourseList, type CourseWithProgress } from '../lib/content';
+import { buildCourseList, type CourseWithProgress } from '../lib/content';
+import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal } from '../lib/localStore';
+import { StaleNotice, LoadError } from '../components/PageStatus';
 import ProgressBar from '../components/ProgressBar';
 
 function fmtDuration(sec: number): string {
@@ -16,17 +18,12 @@ function fmtDuration(sec: number): string {
 export default function Courses() {
   const { t, lang } = useLang();
   const { user } = useAuth();
-  const [courses, setCourses] = useState<CourseWithProgress[]>([]);
-  const [loading, setLoading] = useState(true);
-  const userId = user?.id;
-
-  useEffect(() => {
-    if (!userId) return;
-    loadBootstrap(userId)
-      .then((b) => setCourses(buildCourseList(b, getAllVideoProgressLocal())))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [userId]);
+  const { data, error, retry } = useBootstrapData(user?.id);
+  const courses = useMemo<CourseWithProgress[]>(
+    () => (data ? buildCourseList(data, getAllVideoProgressLocal()) : []),
+    [data]
+  );
+  const loading = !data && !error;
 
   return (
     <div className="space-y-6">
@@ -35,7 +32,11 @@ export default function Courses() {
         <p className="mt-1 text-gray-400">{t('home.subtitle')}</p>
       </motion.div>
 
-      {loading ? (
+      {error && data && <StaleNotice message={error} onRetry={retry} />}
+
+      {error && !data ? (
+        <LoadError message={error} onRetry={retry} />
+      ) : loading ? (
         <p className="text-gray-400">{t('common.loading')}</p>
       ) : courses.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('course.noCourses')}</p>

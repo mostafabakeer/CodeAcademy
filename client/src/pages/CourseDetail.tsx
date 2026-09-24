@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { loadBootstrap, buildCourseDetail, type CourseDetailData } from '../lib/content';
+import { buildCourseDetail, type CourseDetailData } from '../lib/content';
+import { useBootstrapData } from '../lib/useBootstrapData';
+import { StaleNotice, LoadError } from '../components/PageStatus';
 import ProgressBar from '../components/ProgressBar';
 
 function fmt(sec: number): string {
@@ -16,39 +18,24 @@ export default function CourseDetail() {
   const { id } = useParams();
   const { t, lang } = useLang();
   const { user } = useAuth();
-  const [data, setData] = useState<CourseDetailData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: boot, error, retry } = useBootstrapData(user?.id);
   const courseId = id ? Number(id) : null;
-  const userId = user?.id;
+  const detail = useMemo<CourseDetailData | null>(
+    () => (boot && courseId ? buildCourseDetail(boot, courseId) : null),
+    [boot, courseId]
+  );
 
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    if (!courseId || !userId) {
-      setLoading(false);
-      return;
-    }
-    loadBootstrap(userId)
-      .then((b) => {
-        if (active) setData(buildCourseDetail(b, courseId));
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [courseId, userId]);
+  if (!boot && !error) return <p className="text-gray-400">{t('common.loading')}</p>;
+  if (error && !boot) return <LoadError message={error} onRetry={retry} />;
+  if (!detail) return <p className="text-gray-400">{t('errors.generic')}</p>;
 
-  if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
-  if (!data) return <p className="text-gray-400">{t('errors.generic')}</p>;
-
-  const { course, lessons } = data;
+  const { course, lessons } = detail;
   const done = lessons.filter((l) => l.completed).length;
 
   return (
     <div className="space-y-6">
+      {error && <StaleNotice message={error} onRetry={retry} />}
+
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="card-fire rounded-3xl p-6">
         <Link to="/courses" className="text-sm font-semibold text-gray-400 hover:text-fire-400">← {t('course.title')}</Link>
         <h1 className="mt-2 text-3xl font-black">{lang === 'ar' ? course.title : course.titleEn}</h1>
@@ -61,9 +48,9 @@ export default function CourseDetail() {
             </div>
             <ProgressBar value={lessons.length ? Math.round((done / lessons.length) * 100) : 0} showLabel={false} />
           </div>
-          {data.examsCount > 0 && (
+          {detail.examsCount > 0 && (
             <Link to="/exams" className="btn-ghost-fire rounded-xl px-4 py-2 text-sm font-bold">
-              📝 {t('course.exam')} ({data.examsCount})
+              📝 {t('course.exam')} ({detail.examsCount})
             </Link>
           )}
           <Link to="/notes" className="btn-ghost-fire rounded-xl px-4 py-2 text-sm font-bold">

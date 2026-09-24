@@ -119,6 +119,39 @@ function loadReviewLocally(examId: string): ReviewItem[] | null {
   }
 }
 
+// ===== مسودة إجابات الامتحان الجاري: تبقى محفوظة بعد إعادة التحميل، وتُمحى عند التسليم =====
+
+function draftKey(examId: string): string {
+  return `exam_draft_${examId}`;
+}
+
+function clearDraft(examId: string): void {
+  try {
+    localStorage.removeItem(draftKey(examId));
+  } catch {
+    /* تجاهل أخطاء التخزين */
+  }
+}
+
+/** يقرأ إجابات محفوظة لامتحان جارٍ — مع تحقق كامل من الأنواع لمنع أي قيمة خاطئة. */
+function loadDraft(examId: string | undefined): Record<number, number> {
+  if (!examId) return {};
+  try {
+    const raw = localStorage.getItem(draftKey(examId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as { answers?: Record<string, unknown> };
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.answers !== 'object' || parsed.answers === null) return {};
+    const out: Record<number, number> = {};
+    for (const [k, v] of Object.entries(parsed.answers)) {
+      const qid = Number(k);
+      if (Number.isInteger(qid) && typeof v === 'number' && v >= 0) out[qid] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 // مكوّن مشترك لعرض ملخص النتيجة + مراجعة الأخطاء (يُستخدم في شاشة النتيجة وعند إعادة الدخول)
 function ReviewPanel({ review, result, canRetake, onRetake, onBack }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void }) {
   const { t, lang } = useLang();
@@ -201,7 +234,7 @@ export default function ExamTake() {
   const navigate = useNavigate();
   const { applyExamResult } = useAuth();
   const [data, setData] = useState<ExamData | null>(null);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [answers, setAnswers] = useState<Record<number, number>>(() => loadDraft(id));
   const [result, setResult] = useState<Result | null>(null);
   const [showSavedReview, setShowSavedReview] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -214,6 +247,7 @@ export default function ExamTake() {
     mountedRef.current = true;
     setLoading(true);
     setError('');
+    setAnswers(loadDraft(id));
     api<ExamData>(`/api/exams/${id}`)
       .then((d) => {
         if (active) setData(d);
@@ -233,6 +267,16 @@ export default function ExamTake() {
   const answeredCount = Object.keys(answers).length;
   const remaining = data ? data.questions.length - answeredCount : 0;
 
+  // حفظ تلقائي للإجابات أثناء الكتابة (مسودة جارية بعد إعادة التحميل) — تُمسح عند التسليم.
+  useEffect(() => {
+    if (!id) return;
+    try {
+      localStorage.setItem(draftKey(id), JSON.stringify({ answers }));
+    } catch {
+      /* تجاهل أخطاء التخزين */
+    }
+  }, [id, answers]);
+
   const submit = async () => {
     if (!id || submitting) return;
     setSubmitting(true);
@@ -244,6 +288,7 @@ export default function ExamTake() {
       });
       if (!mountedRef.current) return;
       setResult(res);
+      if (id) clearDraft(id);
       if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
       applyExamResult({
         examId: Number(id),
@@ -261,6 +306,7 @@ export default function ExamTake() {
   };
 
   const retake = () => {
+    if (id) clearDraft(id);
     setResult(null);
     setAnswers({});
     setError('');

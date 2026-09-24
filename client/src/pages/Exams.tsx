@@ -1,50 +1,55 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
-import { loadBootstrap, type ExamListItem, type Exam } from '../lib/content';
+import { type ExamListItem, type Exam } from '../lib/content';
+import { useBootstrapData } from '../lib/useBootstrapData';
+import { StaleNotice } from '../components/PageStatus';
 import DoctorCode from '../components/DoctorCode';
 
 export default function Exams() {
   const { t, lang } = useLang();
   const { user, examResults } = useAuth();
+  const { data: boot, error: bootError, retry } = useBootstrapData(user?.id);
   const [exams, setExams] = useState<ExamListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
   const userId = user?.id;
 
-  useEffect(() => {
-    if (!userId) return;
-    let active = true;
-    setLoading(true);
-    setError('');
-
-    const merge = (list: Exam[]) => {
+  const mergeAll = useCallback(
+    (list: Exam[]) => {
       const map = new Map(examResults.map((r) => [r.examId, r]));
-      const items: ExamListItem[] = list.map((e) => ({
+      return list.map((e) => ({
         ...e,
         taken: !!map.get(e.id),
         bestScore: map.get(e.id)?.best ?? null,
         attempts: map.get(e.id)?.attempts ?? 0,
       }));
-      if (active) setExams(items);
-    };
+    },
+    [examResults]
+  );
 
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    setLoading(true);
+    setError('');
+    // عرض فوري من آخر نسخة محفوظة (بوتستراب) حتى لا تفرغ الصفحة عند إعادة التحميل.
+    if (boot) setExams(mergeAll(boot.exams));
     api<{ exams: Exam[] }>('/api/exams')
-      .then((d) => merge(d.exams ?? []))
-      .catch(() =>
-        // آخر حل: نرجع للنسخة المخزنة من bootstrap حتى لا تفرغ الصفحة فجأة
-        loadBootstrap(userId)
-          .then((b) => merge(b.exams))
-          .catch(() => {
-            if (!active) return;
-            setExams([]);
-            setError(t('exam.loadError'));
-          })
-      )
+      .then((d) => {
+        if (active) setExams(mergeAll(d.exams ?? []));
+      })
+      .catch(() => {
+        // سقط الجلب الطازج: نبقي النسخة المحفوظة (إن وُجدت) — وإلا فشل واضح بدل صفحة فاضية.
+        if (active && !boot) {
+          setExams([]);
+          setError(t('exam.loadError'));
+        }
+      })
       .finally(() => {
         if (active) setLoading(false);
       });
@@ -52,7 +57,7 @@ export default function Exams() {
     return () => {
       active = false;
     };
-  }, [userId, examResults, t, reload]);
+  }, [userId, reload, examResults, t, boot, mergeAll]);
 
   return (
     <div className="space-y-6">
@@ -60,6 +65,16 @@ export default function Exams() {
         {/* <h1 className="text-2xl font-black sm:text-3xl">📝 {t('exam.title')}</h1> */}
         {/* <p className="mt-1 text-gray-400">{t('home.subtitle')}</p> */}
       </motion.div>
+
+      {bootError && exams.length > 0 && (
+        <StaleNotice
+          message={bootError}
+          onRetry={() => {
+            retry();
+            setReload((x) => x + 1);
+          }}
+        />
+      )}
 
       {/* تحفيز دكتور كود */}
       {!loading && exams.length > 0 && (

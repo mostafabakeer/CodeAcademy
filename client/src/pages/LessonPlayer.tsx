@@ -3,8 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { loadBootstrap, buildLessonDetail, type LessonDetailData } from '../lib/content';
+import { buildLessonDetail, type LessonDetailData } from '../lib/content';
+import { useBootstrapData } from '../lib/useBootstrapData';
 import { getVideoProgressLocal, setVideoProgressLocal } from '../lib/localStore';
+import { StaleNotice, LoadError } from '../components/PageStatus';
 import VideoPlayer from '../components/VideoPlayer';
 import ProgressBar from '../components/ProgressBar';
 
@@ -14,7 +16,6 @@ export default function LessonPlayer() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [data, setData] = useState<LessonDetailData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [duration, setDuration] = useState(0);
   const [completed, setCompleted] = useState(false);
   const lessonId = id ? Number(id) : null;
@@ -26,38 +27,20 @@ export default function LessonPlayer() {
     const p = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
     return p?.seconds ?? 0;
   });
-  const userId = user?.id;
+  const { data: boot, error, retry } = useBootstrapData(user?.id);
 
   useEffect(() => {
-    if (!lessonId || !userId) return;
-    let active = true;
-    setLoading(true);
-    loadBootstrap(userId)
-      .then((b) => {
-        if (!active) return;
-        const d = buildLessonDetail(b, lessonId);
-        if (d) {
-          setData(d);
-          setDuration(d.lesson.duration || 0);
-          setCompleted(!!d.lesson.completed);
-          const local = getVideoProgressLocal(lessonId);
-          if (local) {
-            setLocalSeconds((s) => Math.max(s, local.seconds));
-            if (!d.lesson.completed) setResumeAt(Math.max(local.seconds, resumeAt));
-          }
-        } else {
-          setData(null);
-        }
-      })
-      .catch(() => setData(null))
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, userId]);
+    if (!lessonId || !boot) return;
+    const d = buildLessonDetail(boot, lessonId);
+    setData(d);
+    setDuration(d?.lesson.duration || 0);
+    setCompleted(!!d?.lesson.completed);
+    const local = getVideoProgressLocal(lessonId);
+    if (local) {
+      setLocalSeconds((s) => Math.max(s, local.seconds));
+      if (d && !d.lesson.completed) setResumeAt((r) => Math.max(local.seconds, r));
+    }
+  }, [boot, lessonId]);
 
   const reportProgress = (seconds: number) => {
     // نحتفظ دائمًا بأقصى تقدم لاستمرار الإحصائيات (لا نمسح عند 90% — فقط نعلن الإكمال).
@@ -69,7 +52,8 @@ export default function LessonPlayer() {
     }
   };
 
-  if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
+  if (!boot && !error) return <p className="text-gray-400">{t('common.loading')}</p>;
+  if (error && !boot) return <LoadError message={error} onRetry={retry} />;
   if (!data) return <p className="text-gray-400">{t('errors.generic')}</p>;
 
   const { lesson, lessons } = data;
@@ -80,6 +64,8 @@ export default function LessonPlayer() {
 
   return (
     <div className="space-y-6">
+      {error && <StaleNotice message={error} onRetry={retry} />}
+
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
         <Link to={`/courses/${lesson.courseId}`} className="text-sm font-semibold text-gray-400 hover:text-fire-400">
           ← {t('course.title')}
