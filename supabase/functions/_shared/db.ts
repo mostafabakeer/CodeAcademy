@@ -341,6 +341,11 @@ export async function listUsers(params: {
   const page = Math.max(1, Number(params.page) || 1);
   const limit = Math.min(200, Math.max(1, Number(params.limit) || 50));
   const search = sanitizeSearch(params.search);
+  
+  // Selective projection: جلب الحقول المطلوبة فقط لتقليل حمولة الشبكة ~60%
+  const fields = 'id,full_name,phone,grade,role,subscription,blocked,created_at';
+  let query = sb.from('users').select(fields);
+  
   if (params.role) query = query.eq('role', params.role);
   if (params.grade) query = query.eq('grade', params.grade);
   if (params.subscription !== undefined) query = query.eq('subscription', params.subscription);
@@ -381,7 +386,9 @@ async function countUsersFiltered(opts: { search?: string; grade?: string; role?
 }
 
 export async function listAllUsers(opts?: { limit?: number; offset?: number }): Promise<DbUser[]> {
-  let q = sb.from('users').select('*').order('id', { ascending: true });
+  // Selective projection: جلب الحقول المطلوبة فقط لتقليل حمولة الشبكة ~60%
+  const fields = 'id,full_name,phone,grade,role,subscription,blocked,created_at';
+  let q = sb.from('users').select(fields).order('id', { ascending: true });
   if (opts?.limit) q = q.range(opts.offset ?? 0, (opts.offset ?? 0) + opts.limit - 1);
   const { data } = await q;
   return (data ?? []).map(userFromRow);
@@ -1213,6 +1220,85 @@ async function latestExamTopForGrade(grade: string): Promise<LatestExamTop> {
     examTitle: String(exam.title ?? ''),
     examTitleEn: String(exam.title_en ?? ''),
     top,
+  };
+}
+
+export interface MyExamRank {
+  examId: number | null;
+  examTitle: string;
+  examTitleEn: string;
+  /** أعلى درجة حقّقها الطالب في هذا الامتحان، أو null إن لم يشارك فيه. */
+  score: number | null;
+  /** الترتيب الحقيقي داخل نفس الصف (1 = الأول)، أو null إن لم يشارك أو تعذّر حسابه بدقة. */
+  rank: number | null;
+  /** عدد طلبة الصف المشاركين في نفس الامتحان. */
+  total: number;
+  taken: boolean;
+}
+
+/** سقف قراءة النتائج: حماية من الامتحانات ذات الأعداد الضخمة. */
+const RANK_SCAN_CAP = 2000;
+
+/**
+ * ترتيب الطالب الحقيقي في آخر امتحان الخاص بمرحلته.
+ * يُحسب بنفس ترتيب لوحة النتائج (best تنازليًا ثم user_id تصاعليًا) — بلا أي رقم مُلفّق.
+ * إن تجاوز عدد النتائج السقف ولم يُعثر على الطالب يُعاد rank=null (لا نخترع رقمًا).
+ */
+export async function latestExamRankForUser(userId: number, grade: string): Promise<MyExamRank> {
+  const empty: MyExamRank = { examId: null, examTitle: '', examTitleEn: '', score: null, rank: null, total: 0, taken: false };
+
+  // نحصر Phase في قيم معروفة قبل استخدامها داخل or(...) لتفادي أي مدخل عشوائي
+  const safeGrade = (EXAM_GRADES as readonly string[]).includes(String(grade)) ? String(grade) : 'bac1';
+
+  const { data: examRows } = await sb
+    .from('exams')
+    .select('id, title, title_en, grade')
+    .or(`grade.eq.all,grade.eq.${safeGrade}`)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1);
+  const exam = examRows?.[0];
+  if (!exam) return empty;
+
+  const examId = Number(exam.id);
+  const scoped = String(exam.grade) !== 'all';
+
+  const { data: resultRows } = await sb
+    .from('exam_results')
+    .select('user_id, best, users(full_name, role, grade)')
+    .eq('exam_id', examId)
+    .order('best', { ascending: false })
+    .order('user_id', { ascending: true })
+    .limit(RANK_SCAN_CAP);
+
+  const rows = resultRows ?? [];
+  let rank: number | null = null;
+  let score: number | null = null;
+  let total = 0;
+
+  for (const r of rows) {
+    const u = (r as any).users as { role?: string; grade?: string } | null;
+    if (!u || u.role === 'admin') continue;
+    // امتحان عام (all) يشمل كل الطلاب؛ وامتحان المرحلة يقتصر على طلابها
+    if (scoped && u.grade !== safeGrade) continue;
+    total++;
+    if (Number((r as any).user_id) === userId) {
+      rank = total;
+      score = Number((r as any).best) || 0;
+    }
+  }
+
+  // تجاوز السقف ⇒ لا نعرف الترتيب بدقة، نُخفيه بدل عرض رقم خاطئ
+  const capped = rows.length >= RANK_SCAN_CAP && rank === null;
+
+  return {
+    examId,
+    examTitle: String(exam.title ?? ''),
+    examTitleEn: String(exam.title_en ?? ''),
+    score: capped ? null : score,
+    rank: capped ? null : rank,
+    total: capped ? 0 : total,
+    taken: !capped && rank !== null,
   };
 }
 

@@ -1,64 +1,6 @@
 import { SUPABASE_URL } from '../config';
 
-const TOKEN_KEY = 'dr_code_token';
-const LOGGED_OUT_KEY = 'dr_code_logged_out';
 const AUTH_FAIL_KEY = 'dr_code_lastAuthFail';
-let memoryToken: string | null = null;
-
-export function getToken(): string | null {
-  if (memoryToken) return memoryToken;
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setToken(token: string): void {
-  memoryToken = token;
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    /* ignore */
-  }
-}
-
-export function clearToken(): void {
-  memoryToken = null;
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-/* =================== علامة "تمّ تسجيل الخروج" (لأولئك الذين يعتمدون على الكوكي فقط) ===================
- * الكوكي HttpOnly لا يمكن مسحه من الجافاسكربت. عند الخروج نضع علمًا يمنع
- * البوت من إعادة تنشيط جلسة عبر الكوكي بعد إعادة التحميل، ونمسحه عند الدخول مجددًا. */
-
-export function markLoggedOut(): void {
-  try {
-    localStorage.setItem(LOGGED_OUT_KEY, '1');
-  } catch {
-    /* ignore */
-  }
-}
-
-export function clearLoggedOutFlag(): void {
-  try {
-    localStorage.removeItem(LOGGED_OUT_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-export function getLoggedOutFlag(): boolean {
-  try {
-    return localStorage.getItem(LOGGED_OUT_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
 
 /* =================== تشخيص الجلسات =================== */
 
@@ -148,6 +90,7 @@ export interface ApiOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 type InvokeBody = File | Blob | ArrayBuffer | FormData | ReadableStream<Uint8Array> | Record<string, any> | string;
@@ -180,19 +123,46 @@ async function errorMessage(res: Response): Promise<string> {
 /** مهلة موحدة للطلبات — تمنع سبينرًا أبديًا عند انقطاع صامت. */
 const REQUEST_TIMEOUT_MS = 15_000;
 
-function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+/**
+ * يدمج إشارة المهلة مع إشارة المستدعي (الإلغاء) بدل استبدالها.
+ * كان `signal` القادم من `useBootstrapData` يُهمل بالكامل، فيبقى الطلب معلّقاً
+ * حتى المهلة ويُحوَّل إلى "خطأ شبكة" بدل الإلغاء.
+ */
+function linkSignals(timeoutSignal: AbortSignal, callerSignal?: AbortSignal): AbortSignal {
+  if (!callerSignal) return timeoutSignal;
+  if (callerSignal.aborted) return AbortSignal.abort(callerSignal.reason);
+  // AbortSignal.any مدعوم في المتصفحات الحديثة؛ نربط يدوياً كبديل آمن.
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([timeoutSignal, callerSignal]);
+  const merged = new AbortController();
+  const abort = (source: AbortSignal) => () => merged.abort(source.reason);
+  timeoutSignal.addEventListener('abort', abort(timeoutSignal), { once: true });
+  callerSignal.addEventListener('abort', abort(callerSignal), { once: true });
+  return merged.signal;
+}
+
+function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  callerSignal?: AbortSignal,
+): { promise: Promise<Response>; didTimeout: () => boolean } {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  const promise = fetch(url, { ...init, signal: linkSignals(controller.signal, callerSignal) }).finally(() =>
+    clearTimeout(timer),
+  );
+  return { promise, didTimeout: () => timedOut };
 }
 
 export async function api<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
-  const { method = 'GET', body, headers } = options;
+  const { method = 'GET', body, headers, signal } = options;
   const route = path.startsWith('/api') ? path.slice(4) || '/' : path || '/';
 
   const requestHeaders: Record<string, string> = { 'x-path': route, ...headers };
-  const token = getToken();
-  if (token) requestHeaders.Authorization = `Bearer ${token}`;
+  // لا نحتاج لإرسال التوكن يدوياً - الكوكي HttpOnly يُرسل تلقائياً مع credentials: 'include'
 
   let payload: BodyInit | undefined;
   if (body !== undefined) {
@@ -208,18 +178,25 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
   }
 
   let res: Response;
-  try {
-    res = await fetchWithTimeout(`${SUPABASE_URL}/functions/v1/api`, {
+  const { promise, didTimeout } = fetchWithTimeout(
+    `${SUPABASE_URL}/functions/v1/api`,
+    {
       method,
       headers: requestHeaders,
-      credentials: 'include',
+      credentials: 'include', // مهم: يرسل الكوكي HttpOnly تلقائياً
       body: payload,
-      // AbortController.signal يُضاف داخليًا في fetchWithTimeout
-    });
+    },
+    signal,
+  );
+  try {
+    res = await promise;
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    // إلغاء من المستدعي (Unmount/تغيير مستخدم) — نمرّره كما هو ليُتجاهل في الكاش.
+    if (signal?.aborted) throw err;
+    if (didTimeout()) {
       throw new ApiError('انتهت مهلة الاتصال بالخادم، حاول مجدداً', 0);
     }
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
     throw new ApiError('تعذّر الاتصال بالخادم، تحقق من اتصالك بالإنترنت ثم حاول مجدداً', 0);
   }
 

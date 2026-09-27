@@ -13,7 +13,8 @@ const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const Home = lazy(() => import('./pages/Home'));
-const TopStudents = lazy(() => import('./pages/TopStudents'));
+const TopStudentsPublic = lazy(() => import('./pages/TopStudentsPublic'));
+const TopStudentsPrivate = lazy(() => import('./pages/TopStudentsPrivate'));
 const TopStudentCertificate = lazy(() => import('./pages/TopStudentCertificate'));
 const Courses = lazy(() => import('./pages/Courses'));
 const CourseDetail = lazy(() => import('./pages/CourseDetail'));
@@ -77,7 +78,10 @@ function AnimatedRoutes() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/top-students" element={<PageErrorBoundary><TopStudents /></PageErrorBoundary>} />
+          {/* Public top students page - no auth required */}
+          <Route path="/top-students" element={<PageErrorBoundary><TopStudentsPublic /></PageErrorBoundary>} />
+          {/* Private top students page - requires auth + subscription */}
+          <Route path="/top-students/me" element={<ProtectedRoute><SubscriberGate><TopStudentsPrivate /></SubscriberGate></ProtectedRoute>} />
           <Route path="/top-students/:id" element={<PageErrorBoundary><TopStudentCertificate /></PageErrorBoundary>} />
           <Route path="/" element={<ProtectedRoute><SubscriberGate><Home /></SubscriberGate></ProtectedRoute>} />
           <Route path="/courses" element={<ProtectedRoute><SubscriberGate><Courses /></SubscriberGate></ProtectedRoute>} />

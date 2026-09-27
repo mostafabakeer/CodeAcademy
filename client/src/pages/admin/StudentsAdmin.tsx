@@ -1,18 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
 import Modal from '../../components/Modal';
+import ModalContent from '../../components/ModalContent';
+import StudentTable from '../../components/StudentTable';
+import StudentHeader from '../../components/StudentHeader';
+import StudentContent from '../../components/StudentContent';
+import StudentPagination from '../../components/StudentPagination';
+import ResetPanel from '../../components/ResetPanel';
 import LevelBadge from '../../components/LevelBadge';
+import ExamScores from '../../components/ExamScores';
 
 const PAGE_SIZE = 25;
 const CACHE_KEY = 'dr_admin_students_cache';
 const CACHE_TTL = 5 * 60 * 1000;
 const CACHE_VERSION = 2;
-/** معرفٌ ثابت لعمليات لوحة التحكم التي لا تخص طالباً بعينه (تحديث، قائمة الطلبات). */
 const PANEL_ID = 0;
+const RESETS_ID = 'resets';
+const WA_DEDUP_KEY = 'dr_admin_wa_dedup';
+const WA_DEDUP_TTL = 24 * 60 * 60 * 1000;
 
-/** تحويل رقم محلي (01xxxxxxxxx) إلى صيغة واتساب الدولية (201xxxxxxxxx). */
 function toWhatsappNumber(p: string): string {
   let v = String(p ?? '').replace(/[\s()+-]/g, '');
   if (v.startsWith('00')) v = v.slice(2);
@@ -73,14 +80,12 @@ const RESET_STATUS_KEYS: Record<PasswordRequest['status'], string> = {
   rejected: 'admin.resetRequestRejected',
 };
 
-type Filter = 'all' | 'subscribed' | 'unsubscribed' | 'blocked';
-
-const FILTERS: { key: Filter; tKey: string }[] = [
+const FILTERS = [
   { key: 'all', tKey: 'admin.filterAll' },
   { key: 'subscribed', tKey: 'admin.filterSubscribed' },
   { key: 'unsubscribed', tKey: 'admin.filterUnsubscribed' },
   { key: 'blocked', tKey: 'admin.filterBlocked' },
-];
+] as const;
 
 const GRADES = [
   { key: 'all', tKey: 'admin.gradeAll' },
@@ -93,11 +98,17 @@ function readCache(): Student[] | null {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed?.users) || typeof parsed?.at !== 'number') return null;
-    if (parsed?.v !== CACHE_VERSION) return null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Array.isArray(parsed.users)) return null;
+    if (typeof parsed.at !== 'number' || parsed.at <= 0) return null;
+    if (typeof parsed.v !== 'number' || parsed.v !== CACHE_VERSION) return null;
+    if (!parsed.users.every((u: any) => u && typeof u.id === 'number' && typeof u.fullName === 'string')) {
+      return null;
+    }
     if (Date.now() - parsed.at > CACHE_TTL) return null;
     return parsed.users as Student[];
   } catch {
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
     return null;
   }
 }
@@ -110,7 +121,6 @@ function writeCache(users: Student[]): void {
   }
 }
 
-/** صياغة عربية مبسطة للوقت المنقضي منذ stamp (بالملي ثانية). */
 function ago(ms: number): string {
   const min = Math.max(0, Math.floor((Date.now() - ms) / 60000));
   if (min < 1) return 'الآن';
@@ -120,13 +130,39 @@ function ago(ms: number): string {
   return `منذ ${Math.floor(hrs / 24)} يوم`;
 }
 
+function wasWaSentRecently(phone: string): boolean {
+  try {
+    const raw = localStorage.getItem(WA_DEDUP_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    const normalizedPhone = toWhatsappNumber(phone);
+    const entry = data[normalizedPhone];
+    if (!entry) return false;
+    return Date.now() - entry.sentAt < WA_DEDUP_TTL;
+  } catch {
+    return false;
+  }
+}
+
+function markWaSent(phone: string): void {
+  try {
+    const raw = localStorage.getItem(WA_DEDUP_KEY);
+    const data = raw ? JSON.parse(raw) : {};
+    const normalizedPhone = toWhatsappNumber(phone);
+    data[normalizedPhone] = { sentAt: Date.now() };
+    localStorage.setItem(WA_DEDUP_KEY, JSON.stringify(data));
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function StudentsAdmin() {
   const { t } = useLang();
   const [allUsers, setAllUsers] = useState<Student[]>(() => readCache() ?? []);
   const [loading, setLoading] = useState(allUsers.length === 0);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<'all' | 'subscribed' | 'unsubscribed' | 'blocked'>('all');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [grade, setGrade] = useState('all');
@@ -136,18 +172,20 @@ export default function StudentsAdmin() {
   const [resetRequests, setResetRequests] = useState<PasswordRequest[]>([]);
   const [showResetPanel, setShowResetPanel] = useState(false);
   const [resetDiag, setResetDiag] = useState<ResetDiag | null>(null);
-  /** يمنع setState بعد إغلاق الصفحة (يمسح busy المتروك ويعرّف العمليات المعلّقة). */
   const mountedRef = useRef(true);
+  const activeOpsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      activeOpsRef.current.forEach(key => setBusy((b) => ({ ...b, [key]: false })));
+      activeOpsRef.current.clear();
     };
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 200);
+    const timer = setTimeout(() => setDebouncedQuery(query), 150);
     return () => clearTimeout(timer);
   }, [query]);
 
@@ -161,7 +199,7 @@ export default function StudentsAdmin() {
     let cancelled = false;
     setLoading(true);
     setError('');
-api<{ users: Student[] }>('/api/admin/users/all?limit=500')
+    api<{ users: Student[] }>('/api/admin/users/all?limit=500')
       .then((d) => {
         if (cancelled) return;
         setAllUsers(d.users);
@@ -173,18 +211,14 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // تحميل فوري لطلبات تغيير كلمة السر عند فتح اللوحة — حتى يظهر العداد 🔑 دون انتظار فتح السطل.
   useEffect(() => {
     loadResetRequests();
     loadResetDiag();
   }, []);
 
-  // تحديث تلقائي كل 20 ثانية طول ما السطل مفتوح — استقبال الطلبات لحظياً.
   useEffect(() => {
     if (!showResetPanel) return;
     const id = setInterval(() => {
@@ -248,28 +282,45 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
     });
   };
 
-  const run = async (id: number, action: string, fn: () => Promise<unknown>, onOk?: (d: any) => void | Promise<void>) => {
+  const run = async (
+    id: string | number,
+    action: string,
+    fn: () => Promise<unknown>,
+    onOk?: (d: any) => void | Promise<void>,
+    optimisticUpdate?: () => void
+  ) => {
     const key = `${id}:${action}`;
+    activeOpsRef.current.add(key);
     if (busy[key]) return;
     setSuccess('');
     setBusy((b) => ({ ...b, [key]: true }));
     try {
       const d = await fn();
       if (mountedRef.current) await onOk?.(d);
+      if (mountedRef.current) setSuccess(t('common.success'));
     } catch (e) {
-      if (mountedRef.current) setError((e as Error).message);
+      if (mountedRef.current) {
+        setError((e as Error).message);
+        const cached = readCache();
+        if (cached) setAllUsers(cached);
+      }
     } finally {
       if (mountedRef.current) setBusy((b) => ({ ...b, [key]: false }));
+      activeOpsRef.current.delete(key);
     }
   };
 
   const toggleRole = (s: Student) =>
     run(s.id, 'role', () => api(`/api/admin/users/${s.id}/role`, { method: 'PUT', body: JSON.stringify({ role: s.role === 'admin' ? 'student' : 'admin' }) }), () => {
       patchStudent(s.id, { role: s.role === 'admin' ? 'student' : 'admin' });
+    }, () => {
+      patchStudent(s.id, { role: s.role === 'admin' ? 'student' : 'admin' });
     });
 
   const toggleBlock = (s: Student) =>
     run(s.id, 'block', () => api(`/api/admin/users/${s.id}/block`, { method: 'PUT', body: JSON.stringify({ blocked: !s.blocked }) }), () => {
+      patchStudent(s.id, { blocked: !s.blocked });
+    }, () => {
       patchStudent(s.id, { blocked: !s.blocked });
     });
 
@@ -278,11 +329,12 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
     const name = s.fullName || '';
     await run(s.id, 'sub', () => api(`/api/admin/users/${s.id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription: activating }) }), async () => {
       patchStudent(s.id, { subscription: activating });
-      // عند التفعيل فقط: افتح واتساب الطالب برسالة "تم تفعيل المنصة".
       if (activating) {
         const msg = t('admin.notifyWaMessage', { name });
         openWaForMessage(s.phone, msg);
       }
+    }, () => {
+      patchStudent(s.id, { subscription: activating });
     });
   };
 
@@ -312,11 +364,16 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
       setError(t('admin.invalidWhatsapp'));
       return;
     }
+    if (wasWaSentRecently(phone)) {
+      setSuccess(t('admin.waAlreadySent'));
+      return;
+    }
     window.open(`https://wa.me/${wa}?text=${encodeURIComponent(message)}`, '_blank');
+    markWaSent(phone);
   };
 
   const loadResetRequests = () =>
-    run(PANEL_ID, 'resets', async () => {
+    run(RESETS_ID, 'resets', async () => {
       const d = await api<{ requests: PasswordRequest[] }>('/api/admin/password-resets');
       return d.requests;
     }, (requests) => {
@@ -324,7 +381,6 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
     });
 
   const loadResetDiag = async () => {
-    // التشخيص اختياري: أي فشل (مثل 404 لو الدالة القديمة منشورة لسه) يُتجاهل بصمت ولا يظهر كخطأ.
     try {
       const d = await api<ResetDiag>('/api/admin/password-resets/diagnose');
       if (mountedRef.current) setResetDiag(d);
@@ -367,7 +423,7 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
     setPage(1);
   };
 
-  const changeFilter = (k: Filter) => {
+  const changeFilter = (k: 'all' | 'subscribed' | 'unsubscribed' | 'blocked') => {
     setFilter(k);
     setPage(1);
   };
@@ -384,145 +440,37 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-black">
-          👨‍🎓 {t('admin.studentsList')}{' '}
-          <span className="text-base font-bold text-fire-400">({filtered.length})</span>
-        </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={refresh}
-            disabled={isBusy(PANEL_ID, 'refresh')}
-            className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isBusy(PANEL_ID, 'refresh') ? <Spinner /> : '🔄'}
-            {t('admin.refresh')}
-          </button>
-          <button
-            onClick={() => {
-              setShowResetPanel((v) => !v);
-              if (!showResetPanel) loadResetRequests();
-            }}
-            className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold"
-          >
-            🔑 {t('admin.resetListTitle')}
-            {resetRequests.filter((r) => r.status === 'pending').length > 0 && (
-              <span className="rounded-full bg-fire-500/30 px-1.5 py-0.5 text-[10px] font-black text-fire-100">
-                {resetRequests.filter((r) => r.status === 'pending').length}
-              </span>
-            )}
-          </button>
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => changeFilter(f.key)}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${
-                filter === f.key ? 'bg-fire-500/20 text-fire-300 ring-1 ring-fire-500/40' : 'bg-ink-800 text-gray-400 hover:text-white'
-              }`}
-            >
-              {t(f.tKey)}
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${filter === f.key ? 'bg-fire-500/30 text-fire-100' : 'bg-ink-700 text-gray-300'}`}>
-                {counts[f.key]}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <StudentHeader
+        filteredLength={filtered.length}
+        onRefresh={refresh}
+        isRefreshing={isBusy(PANEL_ID, 'refresh')}
+        showResetPanel={showResetPanel}
+        onToggleResetPanel={() => setShowResetPanel((v) => !v)}
+        onToggleResetPanelLoad={loadResetRequests}
+        pendingResetCount={resetRequests.filter((r) => r.status === 'pending').length}
+        currentFilter={filter}
+        onChangeFilter={changeFilter}
+        filterCounts={counts}
+        t={t}
+        isResetsLoading={false}
+      />
 
       {showResetPanel && (
-        <div className="card-fire overflow-hidden rounded-2xl">
-          <div className="flex items-center justify-between border-b border-ink-600 px-4 py-3">
-            <h2 className="text-base font-black">🔑 {t('admin.resetListTitle')}</h2>
-            <button
-              onClick={() => loadResetRequests()}
-              disabled={isBusy(PANEL_ID, 'resets')}
-              className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold disabled:opacity-60"
-            >
-              {isBusy(PANEL_ID, 'resets') ? <Spinner /> : '🔄'}
-              {t('admin.resetRefresh')}
-            </button>
-          </div>
-          {resetDiag && (
-            <div className="border-b border-ink-800 bg-ink-900/60 px-4 py-2 text-xs text-gray-400">
-              {resetDiag.total > 0 && resetDiag.lastRequestAt ? (
-                <span>🕓 {t('admin.resetDiagLast', { time: ago(resetDiag.lastRequestAt) })}</span>
-              ) : (
-                <span>🕓 {t('admin.resetDiagNone')}</span>
-              )}
-              {resetDiag.todayUnmatched > 0 && (
-                <span className="mx-2 rounded-full bg-amber-500/15 px-2.5 py-0.5 font-bold text-amber-300">
-                  ⚠ {t('admin.resetDiagUnmatched', { n: resetDiag.todayUnmatched })}
-                </span>
-              )}
-              <span className="mx-1 opacity-70">· {t('admin.resetDiagLive')}</span>
-            </div>
-          )}
-          <div className="overflow-x-auto">
-            {resetRequests.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-gray-400">{t('admin.resetPasswordEmpty')}</p>
-            ) : (
-              <table className="w-full min-w-[640px] text-sm">
-                <thead>
-                  <tr className="border-b border-ink-600 text-start text-gray-400">
-                    <th className="px-4 py-2.5 text-start">{t('admin.resetStudent')}</th>
-                    <th className="px-4 py-2.5 text-start">{t('admin.resetPhone')}</th>
-                    <th className="px-4 py-2.5 text-start">{t('admin.resetStatus')}</th>
-                    <th className="px-4 py-2.5 text-start">{t('admin.resetRequestDate')}</th>
-                    <th className="px-4 py-2.5 text-end">{t('admin.resetActions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {resetRequests.map((r) => (
-                    <tr key={r.id} className="border-b border-ink-800">
-                      <td className="px-4 py-2.5 font-bold">{r.fullName}</td>
-                      <td className="px-4 py-2.5" dir="ltr">{r.phone}</td>
-                      <td className="px-4 py-2.5">
-                        {r.status === 'pending' ? (
-                          <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-xs font-bold text-amber-300">{t(RESET_STATUS_KEYS.pending)}</span>
-                        ) : r.status === 'approved' ? (
-                          <span className="rounded-full bg-sky-500/20 px-2.5 py-0.5 text-xs font-bold text-sky-300">{t(RESET_STATUS_KEYS.approved)}</span>
-                        ) : r.status === 'completed' ? (
-                          <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-bold text-emerald-300">{t(RESET_STATUS_KEYS.completed)}</span>
-                        ) : (
-                          <span className="rounded-full bg-fire-500/20 px-2.5 py-0.5 text-xs font-bold text-fire-300">{t(RESET_STATUS_KEYS.rejected)}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-400">{new Date(r.createdAt).toLocaleString()}</td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {(r.status === 'pending' || r.status === 'rejected') && (
-                            <button
-                              onClick={() => approveReset(r)}
-                              disabled={isBusy(r.id, 'reset-approve')}
-                              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-60"
-                            >
-                              {isBusy(r.id, 'reset-approve') ? <Spinner /> : '✓'}
-                              {t('admin.resetApprove')}
-                            </button>
-                          )}
-                          {r.status === 'pending' && (
-                            <button
-                              onClick={() => rejectReset(r)}
-                              disabled={isBusy(r.id, 'reset-reject')}
-                              className="inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30 disabled:opacity-60"
-                            >
-                              {isBusy(r.id, 'reset-reject') ? <Spinner /> : '✕'}
-                              {t('admin.resetReject')}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+        <ResetPanel
+          resetRequests={resetRequests}
+          resetDiag={resetDiag}
+          isBusy={isBusy}
+          onLoadResetRequests={loadResetRequests}
+          onApproveReset={approveReset}
+          onRejectReset={rejectReset}
+          t={t}
+          RESET_STATUS_KEYS={RESET_STATUS_KEYS}
+          ago={ago}
+        />
       )}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative min-w-56 flex-1">
+      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3">
+        <div className="relative min-w-0 flex-1">
           <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-gray-500">🔍</span>
           <input
             type="search"
@@ -535,7 +483,7 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
         <select
           value={grade}
           onChange={(e) => changeGrade(e.target.value)}
-          className="input-fire rounded-xl px-3.5 py-2.5 text-sm"
+          className="input-fire rounded-xl px-3.5 py-2.5 text-sm w-full sm:w-auto"
         >
           {GRADES.map((g) => (
             <option key={g.key} value={g.key}>
@@ -543,7 +491,7 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
             </option>
           ))}
         </select>
-        <span className="rounded-full bg-ink-800 px-3.5 py-1.5 text-xs font-bold text-fire-300">
+        <span className="rounded-full bg-ink-800 px-3.5 py-1.5 text-xs font-bold text-fire-300 flex items-center justify-center w-full sm:w-auto">
           {t('admin.resultsCount', { count: paged.length, total: filtered.length })}
         </span>
       </div>
@@ -567,158 +515,27 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
       ) : paged.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noStudents')}</p>
       ) : (
-        <div className="card-fire overflow-x-auto rounded-2xl">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead>
-              <tr className="border-b border-ink-600 text-start text-gray-400">
-                <th className="px-4 py-3 text-start">{t('profile.fullName')}</th>
-                <th className="px-4 py-3 text-start">{t('profile.phone')}</th>
-                <th className="px-4 py-3 text-start">{t('profile.grade')}</th>
-                <th className="px-4 py-3 text-start">{t('admin.level')}</th>
-                <th className="px-4 py-3 text-start">{t('admin.examScoresLabel')}</th>
-                <th className="px-4 py-3 text-start">{t('admin.status')}</th>
-                <th className="px-4 py-3 text-start">{t('admin.role')}</th>
-                <th className="px-4 py-3 text-end">{t('common.actions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paged.map((s, i) => (
-                <motion.tr key={s.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 120, damping: 15, delay: i * 0.02 }} className="border-b border-ink-800 hover:bg-ink-850">
-                  <td className="px-4 py-3 font-bold">{s.fullName}</td>
-                  <td className="px-4 py-3" dir="ltr">{s.phone}</td>
-                  <td className="px-4 py-3">{s.gradeName}</td>
-                  <td className="px-4 py-3">
-                    <LevelBadge levelKey={s.level?.key} name={s.level?.name} nameEn={s.level?.nameEn} size="sm" />
-                  </td>
-                  <td className="px-4 py-3">
-                    <ExamScores scores={s.examScores ?? []} emptyLabel={t('admin.noExamScores')} />
-                  </td>
-                  <td className="px-4 py-3">{statusBadge(s)}</td>
-                  <td className="px-4 py-3">
-                    {s.role === 'admin' ? (
-                      <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-xs font-bold text-amber-300">{t('profile.admin')}</span>
-                    ) : (
-                      <span className="rounded-full bg-sky-500/20 px-2.5 py-0.5 text-xs font-bold text-sky-300">{t('profile.student')}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-end gap-1.5">
-                      {s.role === 'student' && (
-                        <>
-                          <button
-                            onClick={() => toggleSubscription(s)}
-                            disabled={isBusy(s.id, 'sub')}
-                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60 ${s.subscription ? 'border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 transition-colors' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors'}`}
-                          >
-                            {isBusy(s.id, 'sub') ? <Spinner /> : null}
-                            {s.subscription ? t('admin.disableSub') : t('admin.enableSub')}
-                          </button>
-                          <button
-                            onClick={() => toggleBlock(s)}
-                            disabled={isBusy(s.id, 'block')}
-                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60 ${s.blocked ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors' : 'bg-fire-500/20 text-fire-300 hover:bg-fire-500/30 transition-colors'}`}
-                          >
-                            {isBusy(s.id, 'block') ? <Spinner /> : null}
-                            {s.blocked ? t('admin.unblock') : t('admin.block')}
-                          </button>
-                          <button
-                            onClick={() => deleteStudent(s)}
-                            disabled={isBusy(s.id, 'delete')}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {isBusy(s.id, 'delete') ? <Spinner /> : '🗑'}
-                            {t('admin.deleteAccount')}
-                          </button>
-                        </>
-                      )}
-                      <button
-                        onClick={() => toggleRole(s)}
-                        disabled={isBusy(s.id, 'role')}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isBusy(s.id, 'role') ? <Spinner /> : null}
-                        {s.role === 'admin' ? t('admin.makeStudent') : t('admin.makeAdmin')} ⇄
-                      </button>
-                      <button
-                        onClick={() => openDetail(s.id)}
-                        disabled={isBusy(s.id, 'detail')}
-                        className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isBusy(s.id, 'detail') ? <Spinner /> : null}
-                        {t('admin.details')}
-                      </button>
-                    </div>
-                  </td>
-                </motion.tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <StudentTable
+          students={paged}
+          isBusy={isBusy}
+          onToggleSubscription={toggleSubscription}
+          onToggleBlock={toggleBlock}
+          onToggleRole={toggleRole}
+          onDelete={deleteStudent}
+          onOpenDetail={openDetail}
+        />
       )}
 
-      {totalPages > 1 && (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="text-sm text-gray-400">{t('admin.pageInfo', { page, totalPages })}</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1}
-              className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t('admin.pagePrev')}
-            </button>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
-              className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t('admin.pageNext')}
-            </button>
-          </div>
-        </div>
-      )}
+      <StudentPagination page={page} totalPages={totalPages} onPageChange={setPage} />
 
       <Modal open={!!detail} onClose={() => setDetail(null)} title={detail ? detail.user.fullName : ''}>
         {detail && (
-          <div className="space-y-4 text-sm">
-            <div className="flex flex-wrap gap-2">
-              {statusBadge(detail.user)}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Info label={t('profile.phone')} value={<span dir="ltr">{detail.user.phone}</span>} />
-              <Info label={t('profile.grade')} value={detail.user.gradeName} />
-              <Info label={t('profile.examAvg')} value={`${detail.stats.examAvg}%`} />
-              <Info label={t('admin.points')} value={`${detail.stats.points}/100`} />
-              <Info label={t('profile.completedLessons')} value={`${detail.stats.completedLessons}/${detail.stats.totalLessons}`} />
-              <Info label={t('exam.bestScore')} value={detail.results.length ? `${Math.max(...detail.results.map((r) => r.best ?? 0))}%` : '—'} />
-            </div>
-            {detail.codeFiles.length > 0 && (
-              <div>
-                <div className="mb-2 font-bold text-gray-300">💻 {t('profile.savedCode')}</div>
-                <div className="max-h-40 space-y-1.5 overflow-y-auto">
-                  {detail.codeFiles.map((f) => (
-                    <div key={f.id} className="rounded-lg bg-ink-900 px-3 py-2">
-                      <div className="font-bold">{f.name}</div>
-                      <div className="text-xs text-gray-500">{t(`code.${f.language}`)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {detail.progress.length > 0 && (
-              <div>
-                <div className="mb-2 font-bold text-gray-300">🎬 {t('course.progress')}</div>
-                <div className="max-h-40 space-y-1.5 overflow-y-auto">
-                  {detail.progress.slice(0, 20).map((p) => (
-                    <div key={p.lessonId} className="flex items-center justify-between rounded-lg bg-ink-900 px-3 py-1.5 text-xs">
-                      <span>{t('course.lesson')} #{p.lessonId}</span>
-                      <span className={p.completed ? 'text-emerald-400' : 'text-gray-400'}>{Math.round(p.secondsWatched)}s {p.completed ? '✓' : ''}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <ModalContent
+            detail={detail}
+            t={t}
+            statusBadge={statusBadge}
+            Info={Info}
+          />
         )}
       </Modal>
     </div>
@@ -728,7 +545,7 @@ api<{ users: Student[] }>('/api/admin/users/all?limit=500')
 function Spinner({ className = '' }: { className?: string }) {
   return (
     <span
-      className={`inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent ${className}`}
+      className={`inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-fire-400 border-t-transparent ${className}`}
       aria-hidden="true"
     />
   );
@@ -739,28 +556,6 @@ function Info({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="rounded-xl bg-ink-900 px-4 py-3">
       <div className="text-xs text-gray-500">{label}</div>
       <div className="font-bold">{value}</div>
-    </div>
-  );
-}
-
-/** درجات الطالب المئوية في كل امتحاناته، مرتبة الأحدث أولاً (بحسب at). */
-function ExamScores({ scores, emptyLabel }: { scores: { examId: number; at: number; score: number }[]; emptyLabel: string }) {
-  if (scores.length === 0) {
-    return <div className="text-xs text-gray-500">{emptyLabel}</div>;
-  }
-  const sorted = [...scores].sort((a, b) => b.at - a.at);
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {sorted.map((s) => (
-        <span
-          key={s.examId}
-          className={`inline-block rounded-md px-2 py-0.5 text-xs font-bold ${
-            s.score >= 50 ? 'bg-fire-400/15 text-fire-300' : 'bg-red-500/15 text-red-400'
-          }`}
-        >
-          {s.score}%
-        </span>
-      ))}
     </div>
   );
 }

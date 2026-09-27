@@ -1,173 +1,265 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { useLang } from '../i18n';
 
-declare global {
-  interface Window {
-    YT?: any;
-    onYouTubeIframeAPIReady?: () => void;
-  }
-}
-
-function extractYouTubeId(url: string): string | null {
-  const m = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([\w-]{11})/);
-  return m ? m[1] : null;
-}
-
-const apiQueue: Array<() => void> = [];
-let apiLoaded = false;
-
-function ensureYouTubeApi(cb: () => void) {
-  apiQueue.push(cb);
-  if (apiLoaded || (window.YT && window.YT.Player)) return;
-  if (document.getElementById('yt-iframe-api')) return;
-  apiLoaded = true;
-  window.onYouTubeIframeAPIReady = () => {
-    for (const fn of apiQueue.splice(0)) fn();
-  };
-  const tag = document.createElement('script');
-  tag.id = 'yt-iframe-api';
-  tag.src = 'https://www.youtube.com/iframe_api';
-  document.head.appendChild(tag);
-}
-
-interface Props {
-  videoType: 'youtube' | 'upload';
-  videoUrl: string;
-  onProgress?: (seconds: number) => void;
-  onDuration?: (seconds: number) => void;
+interface VideoPlayerProps {
+  // Interface 1: Direct video source
+  src?: string;
+  poster?: string;
+  autoPlay?: boolean;
+  onTimeUpdate?: (seconds: number) => void;
+  onDurationChange?: (duration: number) => void;
+  onEnded?: () => void;
+  onError?: (error: Error) => void;
+  resumeAt?: number;
+  
+  // Interface 2: LessonPlayer style (videoType + videoUrl)
+  videoType?: 'youtube' | 'upload';
+  videoUrl?: string;
   initialTime?: number;
+  onProgress?: (seconds: number) => void;
+  onDuration?: (duration: number) => void;
 }
 
-export default function VideoPlayer({ videoType, videoUrl, onProgress, onDuration, initialTime = 0 }: Props) {
-  const playerRef = useRef<any>(null);
-  const videoElRef = useRef<HTMLVideoElement | null>(null);
-  const maxWatched = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const reportedDuration = useRef(0);
-  const propsRef = useRef({ onProgress, onDuration, videoUrl, videoType, initialTime });
-  propsRef.current = { onProgress, onDuration, videoUrl, videoType, initialTime };
+function getVideoSrc(props: VideoPlayerProps): string {
+  if (props.src) return props.src;
+  if (props.videoUrl) return props.videoUrl;
+  return '';
+}
 
-  // ===== رفع محلي =====
+function getResumeTime(props: VideoPlayerProps): number {
+  if (props.resumeAt !== undefined) return props.resumeAt;
+  if (props.initialTime !== undefined) return props.initialTime;
+  return 0;
+}
+
+export default function VideoPlayer({
+  src,
+  poster,
+  autoPlay = false,
+  onTimeUpdate,
+  onDurationChange,
+  onEnded,
+  onError,
+  resumeAt = 0,
+  videoType,
+  videoUrl,
+  initialTime,
+  onProgress,
+  onDuration,
+}: VideoPlayerProps) {
+  const { t } = useLang();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const hideControlsTimeout = useRef<ReturnType<typeof setTimeout>>();
+
+  const effectiveSrc = getVideoSrc({ src, videoUrl });
+  const effectiveResumeAt = getResumeTime({ resumeAt, initialTime });
+
   useEffect(() => {
-    if (videoType !== 'upload') return;
-    const el = videoElRef.current;
-    if (!el) return;
-    const report = () => {
-      if (!el) return;
-      maxWatched.current = Math.max(maxWatched.current, el.currentTime || 0);
-      propsRef.current.onProgress?.(Math.floor(maxWatched.current));
-    };
-    const onLoaded = () => {
-      reportedDuration.current = el.duration || 0;
-      propsRef.current.onDuration?.(Math.floor(el.duration || 0));
-      const resume = propsRef.current.initialTime || 0;
-      if (resume > 0 && resume < (el.duration || 0)) {
-        el.currentTime = resume;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleLoadedMetadata = () => {
+      setDuration(video.duration);
+      onDurationChange?.(video.duration);
+      onDuration?.(video.duration);
+      if (effectiveResumeAt > 0 && effectiveResumeAt < video.duration) {
+        video.currentTime = effectiveResumeAt;
       }
     };
-    const onEnded = () => {
-      maxWatched.current = Math.max(maxWatched.current, el.duration || 0);
-      propsRef.current.onProgress?.(Math.floor(maxWatched.current));
-    };
-    el.addEventListener('timeupdate', report);
-    el.addEventListener('loadedmetadata', onLoaded);
-    el.addEventListener('ended', onEnded);
-    timerRef.current = setInterval(report, 4000);
-    return () => {
-      el.removeEventListener('timeupdate', report);
-      el.removeEventListener('loadedmetadata', onLoaded);
-      el.removeEventListener('ended', onEnded);
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [videoType, videoUrl]);
 
-  // ===== يوتيوب =====
-  useEffect(() => {
-    if (videoType !== 'youtube') return;
-    const id = extractYouTubeId(videoUrl);
-    if (!id) return;
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+      onTimeUpdate?.(video.currentTime);
+      onProgress?.(video.currentTime);
+    };
 
-    let player: any = null;
-    const build = () => {
-      if (!window.YT?.Player) return;
-      player = new window.YT.Player('yt-player', {
-        videoId: id,
-        playerVars: { rel: 0, modestbranding: 1, playsinline: 1 },
-        events: {
-          onReady: (e: any) => {
-            const dur = e.target.getDuration?.() || 0;
-            if (dur) {
-              reportedDuration.current = dur;
-              propsRef.current.onDuration?.(Math.floor(dur));
-            }
-            const resume = propsRef.current.initialTime || 0;
-            if (resume > 0 && resume < dur) {
-              try {
-                e.target.seekTo(resume, true);
-              } catch {}
-            }
-          },
-          onStateChange: (e: any) => {
-            if (e.data === 1) {
-              timerRef.current = setInterval(() => {
-                if (!player) return;
-                const t = player.getCurrentTime?.() || 0;
-                maxWatched.current = Math.max(maxWatched.current, t);
-                propsRef.current.onProgress?.(Math.floor(maxWatched.current));
-              }, 4000);
-            } else if (timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-            }
-            if (e.data === 0) {
-              const dur = player.getDuration?.() || reportedDuration.current;
-              maxWatched.current = Math.max(maxWatched.current, dur);
-              propsRef.current.onProgress?.(Math.floor(maxWatched.current));
-            }
-          },
-        },
+    const handleCanPlay = () => {
+      setLoading(false);
+    };
+
+    const handleWaiting = () => {
+      setLoading(true);
+    };
+
+    const handlePlaying = () => {
+      setIsPlaying(true);
+      setLoading(false);
+    };
+
+    const handlePause = () => {
+      setIsPlaying(false);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      onEnded?.();
+    };
+
+    const handleError = () => {
+      const err = new Error(t('video.error') || 'Video playback error');
+      setError(err.message);
+      setLoading(false);
+      onError?.(err);
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('canplay', handleCanPlay);
+    video.addEventListener('waiting', handleWaiting);
+    video.addEventListener('playing', handlePlaying);
+    video.addEventListener('pause', handlePause);
+    video.addEventListener('ended', handleEnded);
+    video.addEventListener('error', handleError);
+
+    if (autoPlay) {
+      video.play().catch(() => {
+        /* autoplay prevented */
       });
-    };
-
-    // انتظار وجود عنصر الـ div قبل بناء المشغل
-    const attempt = setInterval(() => {
-      if (document.getElementById('yt-player')) {
-        clearInterval(attempt);
-        ensureYouTubeApi(build);
-      }
-    }, 50);
-    setTimeout(() => clearInterval(attempt), 8000);
+    }
 
     return () => {
-      clearInterval(attempt);
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (player) {
-        try {
-          player.destroy();
-        } catch {}
-      }
-      playerRef.current = null;
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('canplay', handleCanPlay);
+      video.removeEventListener('waiting', handleWaiting);
+      video.removeEventListener('playing', handlePlaying);
+      video.removeEventListener('pause', handlePause);
+      video.removeEventListener('ended', handleEnded);
+      video.removeEventListener('error', handleError);
     };
-  }, [videoType, videoUrl]);
+  }, [autoPlay, onTimeUpdate, onDurationChange, onDuration, onEnded, onError, onProgress, effectiveResumeAt, t]);
 
-  if (videoType === 'youtube') {
-    const id = extractYouTubeId(videoUrl);
-    if (!id) {
-      return (
-        <div className="flex aspect-video items-center justify-center rounded-2xl border border-fire-500/30 bg-ink-900 text-gray-400">
-          رابط يوتيوب غير صحيح
-        </div>
-      );
+  const togglePlay = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play();
+    } else {
+      video.pause();
     }
+  };
+
+  const seek = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, Math.min(seconds, video.duration));
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleMouseMove = () => {
+    setShowControls(true);
+    if (hideControlsTimeout.current) clearTimeout(hideControlsTimeout.current);
+    hideControlsTimeout.current = setTimeout(() => {
+      if (!videoRef.current?.paused) setShowControls(false);
+    }, 3000);
+  };
+
+  if (error) {
     return (
-      <div className="aspect-video overflow-hidden rounded-2xl border border-fire-500/30 shadow-2xl shadow-fire-950/40">
-        <div id="yt-player" className="h-full w-full" />
+      <div className="relative aspect-video rounded-2xl bg-ink-900/50 flex items-center justify-center">
+        <div className="text-center p-4">
+          <p className="text-fire-400 font-semibold">⚠️ {error}</p>
+          <p className="text-gray-400 text-sm mt-1">{t('video.unavailable')}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-fire-500/30 shadow-2xl shadow-fire-950/40">
-      <video ref={videoElRef} src={videoUrl} controls preload="metadata" playsInline webkit-playsinline="true" className="w-full rounded-2xl bg-black" />
+    <div
+      className="relative aspect-video rounded-2xl overflow-hidden bg-ink-900"
+      onMouseEnter={() => setShowControls(true)}
+      onMouseLeave={() => {
+        if (!videoRef.current?.paused) setShowControls(false);
+      }}
+      onMouseMove={handleMouseMove}
+    >
+      <video
+        ref={videoRef}
+        src={effectiveSrc}
+        poster={poster}
+        playsInline
+        className="absolute inset-0 w-full h-full object-contain"
+        preload="metadata"
+      />
+
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-ink-900/80 z-10">
+          <div className="relative h-12 w-12">
+            <div className="absolute inset-0 animate-spin rounded-full border-4 border-fire-500/25 border-t-fire-500" />
+            <div className="absolute inset-0 m-auto h-6 w-6 animate-flame rounded-full bg-gradient-to-br from-fire-500 to-ember-500" />
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence mode="wait">
+        {showControls && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="absolute inset-0 bg-gradient-to-t from-ink-950/90 via-transparent to-transparent z-10 flex flex-col justify-end p-4"
+          >
+            <div className="flex items-center gap-3 text-white">
+              <button
+                onClick={togglePlay}
+                className="btn-ghost-fire rounded-lg p-2"
+                aria-label={isPlaying ? t('video.pause') : t('video.play')}
+              >
+                {isPlaying ? (
+                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+                ) : (
+                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                )}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max={duration || 100}
+                value={currentTime}
+                onChange={(e) => seek(Number(e.target.value))}
+                className="flex-1 accent-fire-500"
+                aria-label={t('video.seek')}
+              />
+              <span className="text-sm font-mono tabular-nums w-20 text-right">
+                {formatTime(currentTime)} / {formatTime(duration)}
+              </span>
+              <button
+                onClick={() => {
+                  const video = videoRef.current;
+                  if (video) video.playbackRate = video.playbackRate === 1 ? 1.5 : video.playbackRate === 1.5 ? 2 : 1;
+                }}
+                className="btn-ghost-fire rounded-lg px-2 py-1 text-xs font-bold"
+              >
+                {videoRef.current?.playbackRate || 1}x
+              </button>
+              <button
+                onClick={() => {
+                  const video = videoRef.current;
+                  if (video) video.requestFullscreen();
+                }}
+                className="btn-ghost-fire rounded-lg p-2"
+                aria-label={t('video.fullscreen')}
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

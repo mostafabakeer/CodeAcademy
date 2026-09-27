@@ -7,6 +7,7 @@ import { buildCourseDetail, type CourseDetailData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import ProgressBar from '../components/ProgressBar';
+import LessonListItem from '../components/LessonListItem';
 
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -61,35 +62,7 @@ export default function CourseDetail() {
 
       <div className="space-y-3">
         {lessons.map((l, i) => (
-          <motion.div key={l.id} initial={{ opacity: 0, x: 14 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}>
-            <Link to={`/lessons/${l.id}`} className="card-fire card-fire-hover flex items-center gap-4 rounded-2xl p-4">
-              <div
-                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg font-black ${
-                  l.completed ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gradient-to-br from-fire-600 to-ember-500 text-white'
-                }`}
-              >
-                {l.completed ? '✓' : i + 1}
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="truncate font-bold">{lang === 'ar' ? l.title : l.titleEn}</h3>
-                <div className="mt-1 flex items-center gap-3 text-xs text-gray-500">
-                  <span>🎬 {fmt(l.duration)} {t('lessonPage.durationSec')}</span>
-                  {l.completed && <span className="text-emerald-400">{t('course.completed')}</span>}
-                  {!l.completed && l.watchedSeconds > 0 && (
-                    <span>{l.progressPct}% {t('lessonPage.watched')}</span>
-                  )}
-                </div>
-              </div>
-              {!l.completed && l.watchedSeconds > 0 && (
-                <div className="hidden w-28 sm:block">
-                  <ProgressBar value={l.progressPct} showLabel={false} />
-                </div>
-              )}
-              <span className="btn-fire shrink-0 rounded-xl px-4 py-2 text-sm font-bold text-white">
-                {l.completed ? t('course.review') : l.watchedSeconds > 0 ? t('course.continue') : t('course.start')}
-              </span>
-            </Link>
-          </motion.div>
+          <LessonListItem key={l.id} lesson={l} index={i} lang={lang} />
         ))}
         {lessons.length === 0 && <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noData')}</p>}
       </div>

@@ -91,6 +91,14 @@ html[lang='en'] body {
   0% { opacity: 0; transform: translateY(14px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+@keyframes fadeInRow {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-row {
+  animation: fadeInRow 0.5s ease-out forwards;
+}
 
 /* شظايا صغيرة متطايرة تلمع من الأسفل فوق الفورم */
 @keyframes sparkRise {

@@ -19,19 +19,28 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
   const [reloading, setReloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idRef = useRef<number | null | undefined>(userId);
+  const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(
     (force: boolean) => {
       if (userId == null) return;
+      
+      // إلغاء الطلب السابق إذا كان قيد التنفيذ
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+      abortRef.current = new AbortController();
+      
       setReloading(true);
-      loadBootstrap(userId, force)
+      loadBootstrap(userId, force, abortRef.current.signal)
         .then((b) => {
-          if (idRef.current === userId) {
+          if (idRef.current === userId && !abortRef.current?.signal.aborted) {
             setData(b);
             setError(null);
           }
         })
         .catch((err) => {
+          if (err.name === 'AbortError') return; // تجاهل الإلغاء
           if (idRef.current !== userId) return;
           setError(err instanceof Error ? err.message : 'تعذّر تحديث المحتوى');
         })
@@ -53,6 +62,13 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
     const sync = getBootstrapSync(userId);
     if (sync) setData(sync);
     run(false);
+
+    // تنظيف عند unmount
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+    };
   }, [userId, run]);
 
   const retry = useCallback(() => run(true), [run]);

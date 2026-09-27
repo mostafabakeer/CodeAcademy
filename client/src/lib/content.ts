@@ -87,7 +87,7 @@ function bootstrapKey(userId: number): string {
 const inFlightByUser = new Map<number, Promise<BootstrapData>>();
 
 /** يعيد المحتوى الكامل للمستخدم (مع كاش 5 دقائق). */
-export function loadBootstrap(userId: number, force = false): Promise<BootstrapData> {
+export function loadBootstrap(userId: number, force = false, signal?: AbortSignal): Promise<BootstrapData> {
   const key = bootstrapKey(userId);
   if (!force) {
     const cached = getCached<BootstrapData>(key, BOOTSTRAP_TTL);
@@ -95,12 +95,13 @@ export function loadBootstrap(userId: number, force = false): Promise<BootstrapD
   }
   const existing = inFlightByUser.get(userId);
   if (existing) return existing;
-  const p = api<BootstrapData>('/api/bootstrap')
+  const p = api<BootstrapData>('/api/bootstrap', { signal })
     .then((data) => {
       setCached(key, data);
       return data;
     })
     .catch((err) => {
+      if (err.name === 'AbortError') throw err; // إعادة رمي خطأ الإلغاء
       // فشل الشبكة/الخادم لا يعني فقدان البيانات: نعيد آخر نسخة مخزنة (حتى لو قديمة)
       // بدل إظهار صفحات فاضية بعد إعادة التحميل.
       const stale = getCachedStale<BootstrapData>(key);
@@ -121,6 +122,19 @@ export function getBootstrapSync(userId: number): BootstrapData | null {
 
 export function invalidateBootstrap(userId: number): void {
   removeCached(bootstrapKey(userId));
+}
+
+/**
+ * تنظيف كامل لكاش المستخدم عند تسجيل الخروج — يمنع بقاء محتوى/إحصائيات
+ * الحساب السابق في الذاكرة (تسريب بيانات بين حسابين على نفس الجهاز).
+ */
+export function clearBootstrapCache(userId: number | null): void {
+  if (userId != null) {
+    removeCached(bootstrapKey(userId));
+    inFlightByUser.delete(userId);
+  }
+  courseDetailCache.clear();
+  lessonDetailCache.clear();
 }
 
 /* =================== بناء البيانات (من bootstrap + المشاهدة المحلية) =================== */
@@ -179,34 +193,67 @@ export interface CourseDetailData {
   examsCount: number;
 }
 
-export function buildCourseDetail(b: BootstrapData, courseId: number): CourseDetailData | null {
-  const course = b.courses.find((c) => c.id === courseId);
-  if (!course) return null;
-  const watch = getAllVideoProgressLocal();
-  const lessons = b.lessons
-    .filter((l) => l.courseId === courseId)
-    .map((l) => lessonWithProgress(l, watch))
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const examsCount = b.exams.filter((e) => e.courseId === courseId).length;
-  return { course, lessons, examsCount };
-}
-
 export interface LessonDetailData {
   lesson: LessonWithProgress;
   lessons: { id: number; title: string; titleEn: string }[];
 }
 
+// كاش للتفاصيل المحسوبة - المفتاح: courseId + hash بيانات المشاهدة
+const courseDetailCache = new Map<string, CourseDetailData>();
+
+function getWatchHash(watch: Record<number, VideoProgressLocal>): string {
+  let hash = 0;
+  for (const [id, v] of Object.entries(watch)) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(0) + v.seconds;
+    hash |= 0;
+  }
+  return String(hash);
+}
+
+export function buildCourseDetail(b: BootstrapData, courseId: number): CourseDetailData | null {
+  const course = b.courses.find((c) => c.id === courseId);
+  if (!course) return null;
+  const watch = getAllVideoProgressLocal();
+  const watchHash = getWatchHash(watch);
+  const cacheKey = `${courseId}:${watchHash}`;
+  
+  const cached = courseDetailCache.get(cacheKey);
+  if (cached) return cached;
+  
+  const lessons = b.lessons
+    .filter((l) => l.courseId === courseId)
+    .map((l) => lessonWithProgress(l, watch))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const examsCount = b.exams.filter((e) => e.courseId === courseId).length;
+  const data = { course, lessons, examsCount };
+  
+  courseDetailCache.set(cacheKey, data);
+  return data;
+}
+
+// كاش لتفاصيل الدرس
+const lessonDetailCache = new Map<string, LessonDetailData>();
+
 export function buildLessonDetail(b: BootstrapData, lessonId: number): LessonDetailData | null {
   const lesson = b.lessons.find((l) => l.id === lessonId);
   if (!lesson) return null;
   const watch = getAllVideoProgressLocal();
+  const watchHash = getWatchHash(watch);
+  const cacheKey = `${lessonId}:${watchHash}`;
+  
+  const cached = lessonDetailCache.get(cacheKey);
+  if (cached) return cached;
+  
   const siblings = b.lessons
     .filter((l) => l.courseId === lesson.courseId)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return {
+  const data = {
     lesson: lessonWithProgress(lesson, watch),
     lessons: siblings.map((l) => ({ id: l.id, title: l.title, titleEn: l.titleEn })),
   };
+  
+  lessonDetailCache.set(cacheKey, data);
+  return data;
 }
 
 export interface ExamListItem extends Exam {
@@ -279,5 +326,57 @@ export function loadLatestExamTop(force = false): Promise<Record<string, LatestE
       const cached = getCachedStale<Record<string, LatestExamTop>>(LATEST_TOP_KEY);
       if (cached) return cached;
       throw e;
+    });
+}
+
+/* =================== ترتيبي الحقيقي في آخر امتحان (خاص) =================== */
+
+export interface MyExamRank {
+  examId: number | null;
+  examTitle: string;
+  examTitleEn: string;
+  score: number | null;
+  rank: number | null;
+  total: number;
+  taken: boolean;
+}
+
+const MY_RANK_TTL = 60_000;
+
+const EMPTY_MY_RANK: MyExamRank = {
+  examId: null,
+  examTitle: '',
+  examTitleEn: '',
+  score: null,
+  rank: null,
+  total: 0,
+  taken: false,
+};
+
+/** ترتيب الطالب في آخر امتحان — يبقى null إن لم يشارك أو تعذّرت دقة الحساب (لا رقم مُلفّق). */
+export function loadMyExamRank(userId: number, force = false): Promise<MyExamRank> {
+  const key = `myExamRank:${userId}`;
+  if (!force) {
+    const cached = getCached<MyExamRank>(key, MY_RANK_TTL);
+    if (cached) return Promise.resolve(cached);
+  }
+  return api<Partial<MyExamRank>>(`/api/my-exam-rank`)
+    .then((d) => {
+      const data: MyExamRank = {
+        examId: typeof d?.examId === 'number' ? d.examId : null,
+        examTitle: String(d?.examTitle ?? ''),
+        examTitleEn: String(d?.examTitleEn ?? ''),
+        score: typeof d?.score === 'number' ? d.score : null,
+        rank: typeof d?.rank === 'number' ? d.rank : null,
+        total: typeof d?.total === 'number' ? d.total : 0,
+        taken: d?.taken === true,
+      };
+      setCached(key, data);
+      return data;
+    })
+    .catch((e) => {
+      const cached = getCachedStale<MyExamRank>(key);
+      if (cached) return cached;
+      return EMPTY_MY_RANK;
     });
 }

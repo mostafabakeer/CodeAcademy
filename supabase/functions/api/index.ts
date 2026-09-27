@@ -85,7 +85,9 @@ import {
   invalidateSessionEpoch,
   type ResetStatus,
   listLatestExamTop,
+  latestExamRankForUser,
   listExamResultsPage,
+  type MyExamRank,
 } from '../_shared/db.ts';
 import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
 
@@ -889,8 +891,14 @@ app.get('/top-students', async (c) => {
 let latestExamTopCache: { at: number; data: unknown } | null = null;
 const LATEST_EXAM_TOP_TTL = 60_000;
 
+/** ترتيب كل طالب في آخر امتحان — 30 ثانية لكل مستخدم (لا يُخزَّن على خادم مشترك). */
+const myExamRankCache = new Map<number, { at: number; data: MyExamRank }>();
+const MY_EXAM_RANK_TTL = 30_000;
+const MY_EXAM_RANK_MAX = 5_000;
+
 function clearLatestExamTopCache(): void {
   latestExamTopCache = null;
+  myExamRankCache.clear();
 }
 
 app.get('/latest-exam-top', async (c) => {
@@ -907,6 +915,25 @@ app.get('/latest-exam-top', async (c) => {
   const data = { leaderboards: await listLatestExamTop() };
   latestExamTopCache = { at: Date.now(), data };
   c.header('Cache-Control', 'public, max-age=60');
+  return c.json(data);
+});
+
+/**
+ * ترتيب الطالب الحقيقي في آخر امتحان (خاص بالمستخدم).
+ * لا يُخترع أي رقم: إن لم يشارك يظهر taken=false، وإن تعذّرت دقة الحساب يظهر rank=null.
+ */
+app.get('/my-exam-rank', requireAuth, requireSubscriber, async (c) => {
+  const me = getUser(c);
+  const hit = myExamRankCache.get(me.id);
+  if (hit && Date.now() - hit.at < MY_EXAM_RANK_TTL) {
+    c.header('Cache-Control', 'private, no-store');
+    return c.json(hit.data);
+  }
+  const data = await latestExamRankForUser(me.id, me.grade);
+  // سقف أمان: الخريطة تنمو بعدد المستخدمين بين المسح، فنمسحها كلها عند التجاوز
+  if (myExamRankCache.size >= MY_EXAM_RANK_MAX) myExamRankCache.clear();
+  myExamRankCache.set(me.id, { at: Date.now(), data });
+  c.header('Cache-Control', 'private, no-store');
   return c.json(data);
 });
 

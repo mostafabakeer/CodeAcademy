@@ -41,6 +41,11 @@ export interface VideoProgressLocal {
   updatedAt: number;
 }
 
+/** كاش بسيط لـ getAllVideoProgressLocal لتجنب قراءة localStorage المتكررة */
+let videoProgressCache: Record<number, VideoProgressLocal> | null = null;
+let videoProgressCacheAt = 0;
+const VIDEO_PROGRESS_CACHE_TTL = 1000; // 1 ثانية
+
 /** مسودة عمل ملف المحرر قبل الحفظ في السيرفر (تُستعاد عند فتح الملف). */
 export function getCodeDraft(fileId: number): string | null {
   return getLocal(DRAFT_PREFIX + fileId);
@@ -67,10 +72,16 @@ export function getVideoProgressLocal(lessonId: number): VideoProgressLocal | nu
 
 export function setVideoProgressLocal(lessonId: number, seconds: number, duration: number): void {
   setLocal(VIDEO_PREFIX + lessonId, JSON.stringify({ seconds, duration, updatedAt: Date.now() }));
+  videoProgressCache = null; // إبطال الكاش عند التحديث
 }
 
 /** خريطة كل تقدم المشاهدة المحلي: lessonId → progress (تُستخدم لحساب التقدم والإحصائيات في المتصفح). */
 export function getAllVideoProgressLocal(): Record<number, VideoProgressLocal> {
+  const now = Date.now();
+  if (videoProgressCache && now - videoProgressCacheAt < VIDEO_PROGRESS_CACHE_TTL) {
+    return videoProgressCache;
+  }
+
   const out: Record<number, VideoProgressLocal> = {};
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -90,6 +101,9 @@ export function getAllVideoProgressLocal(): Record<number, VideoProgressLocal> {
   } catch {
     /* ignore */
   }
+
+  videoProgressCache = out;
+  videoProgressCacheAt = now;
   return out;
 }
 

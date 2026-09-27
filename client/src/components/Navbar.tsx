@@ -12,7 +12,7 @@ export default function Navbar() {
 
   const links = [
     { to: '/', label: t('nav.home') },
-    { to: '/top-students', label: t('nav.topStudents') },
+    { to: user ? '/top-students/me' : '/top-students', label: t('nav.topStudents') },
     { to: '/courses', label: t('nav.courses') },
     { to: '/exams', label: t('nav.exams') },
     { to: '/notes', label: t('nav.notes') },
@@ -21,9 +21,13 @@ export default function Navbar() {
   if (user?.role === 'admin') links.push({ to: '/admin', label: t('nav.admin') });
   if (user) links.push({ to: '/profile', label: t('nav.profile') });
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  const handleLogout = async () => {
+    // ننتظر مسح كوكي الجلسة من الخادم قبل الانتقال، مع ضمان الانتقال في كل الأحوال.
+    try {
+      await logout();
+    } finally {
+      navigate('/login', { replace: true });
+    }
   };
 
   return (
