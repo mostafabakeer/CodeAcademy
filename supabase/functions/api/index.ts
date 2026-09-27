@@ -1320,15 +1320,47 @@ async function ensureBucket(bucket: string): Promise<void> {
   }
 }
 
+const FUNCTION_MOUNT = '/functions/v1/';
+
+/**
+ * يستخرج مسار الـ API الحقيقي من رابط الطلب.
+ * Supabase يركّب الدالة تحت /functions/v1/<اسم-الدالة>، فيصل pathname
+ * مع تلك البادئة. كان الكود يقرأ المسار من header باسم "x-path" فقط، فأي طلب
+ * لا يحمله (كوكي من بروكسي، أداة، أو طلب مباشر) كان يُعامل على أنه /health
+ * فيرجع {ok:true} لكل المسارات — وهو سبب ظهور "unauthorized" وصفحات فارغة.
+ */
+function resolveApiPath(url: URL, req: Request): string {
+  // تجاوز صريح: نحافظ على التوافق مع عميل قديم يعتمد x-path أو ?path
+  const explicit = url.searchParams.get('path') ?? req.headers.get('x-path');
+  if (explicit) return explicit.startsWith('/') ? explicit : `/${explicit}`;
+
+  const mountAt = url.pathname.indexOf(FUNCTION_MOUNT);
+  const afterMount = mountAt === -1 ? url.pathname : url.pathname.slice(mountAt + FUNCTION_MOUNT.length);
+
+  // "api/auth/me" تصبح "auth/me": نزع شرطات البداية، ثم اسم الدالة، ثم ما تلاها
+  const trimmed = afterMount.replace(/^\/+/, '');
+  const rest = trimmed.replace(/^api(?=\/|$)/, '').replace(/^\/+/, '');
+  const route = rest ? `/${rest}` : '/health';
+
+  // نحفظ query string لأن الـ handlers تقرأ منه (ترقيم، فلاتر، حدود)
+  const qs = url.searchParams.toString();
+  return qs ? `${route}?${qs}` : route;
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  const path = url.searchParams.get('path') ?? req.headers.get('x-path') ?? '/health';
-  const target = new URL(`http://internal${path}`);
+  const target = new URL(`http://internal${resolveApiPath(url, req)}`);
 
   const headers = new Headers(req.headers);
   headers.delete('host');
+  // المسار الآن يُقرأ من الرابط نفسه، فلا نحتاج هذا header
+  headers.delete('x-path');
 
-  const init: RequestInit = { method: req.method, headers, signal: (req as any).signal };
+  const init: RequestInit = {
+    method: req.method,
+    headers,
+    signal: (req as any).signal,
+  };
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     init.body = req.body;
   }

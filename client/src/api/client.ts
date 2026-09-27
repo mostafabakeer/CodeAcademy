@@ -109,15 +109,19 @@ function normalizeBody(body: unknown): InvokeBody {
   return body as InvokeBody;
 }
 
-async function errorMessage(res: Response): Promise<string> {
-  try {
-    const parsed = (await res.json()) as { error?: string; detail?: string };
-    if (parsed?.detail) return `${parsed.error}: ${parsed.detail}`;
-    if (parsed?.error) return parsed.error;
-  } catch {
-    /* ignore */
-  }
-  return res.status >= 500 ? 'تعذر الاتصال بالخادم، حاول مجدداً' : `Request failed (${res.status})`;
+function errorMessage(res: Response): Promise<string> {
+  return res
+    .json()
+    .then((parsed) => apiErrorMessage(parsed, res.status))
+    .catch(() => (res.status >= 500 ? 'تعذر الاتصال بالخادم، حاول مجدداً' : `Request failed (${res.status})`));
+}
+
+/** يبني رسالة خطأ من جسم الاستجابة بعد تحليله (أو من status لو تعذّر التحليل). */
+function apiErrorMessage(parsed: unknown, status: number): string {
+  const body = parsed as { error?: string; detail?: string } | null;
+  if (body?.detail) return `${body.error}: ${body.detail}`;
+  if (body?.error) return body.error;
+  return status >= 500 ? 'تعذر الاتصال بالخادم، حاول مجدداً' : `Request failed (${status})`;
 }
 
 /** مهلة موحدة للطلبات — تمنع سبينرًا أبديًا عند انقطاع صامت. */
@@ -157,6 +161,20 @@ function fetchWithTimeout(
   return { promise, didTimeout: () => timedOut };
 }
 
+/**
+ * عناوين الـ API بالترتيب المفضّل.
+ *
+ * في الإنتاج نستدعي `/api` على نفس الأصل (Worker يمرّره إلى Supabase)، وهذا
+ * ضروري وليس تحسيناً: الكوكي HttpOnly للـ supabase.co كان يُحظر على الموبايل
+ * لأنه كوكي طرف ثالث ⇒ 401 unauthorized. نفس الأصل يجعله first-party.
+ * نُبقي العنوان المباشر كبديل لو كان الموقع مُقدَّماً من سيرفر لا يمرّر /api.
+ * في التطوير المحلي لا يوجد بروكسي، فنستخدم Supabase مباشرة.
+ */
+function apiTargets(): string[] {
+  const supabase = `${SUPABASE_URL}/functions/v1/api`;
+  return import.meta.env.DEV ? [supabase] : ['/api', supabase];
+}
+
 export async function api<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, headers, signal } = options;
   const route = path.startsWith('/api') ? path.slice(4) || '/' : path || '/';
@@ -177,37 +195,60 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
     }
   }
 
-  let res: Response;
-  const { promise, didTimeout } = fetchWithTimeout(
-    `${SUPABASE_URL}/functions/v1/api`,
-    {
-      method,
-      headers: requestHeaders,
-      credentials: 'include', // مهم: يرسل الكوكي HttpOnly تلقائياً
-      body: payload,
-    },
-    signal,
-  );
-  try {
-    res = await promise;
-  } catch (err) {
-    // إلغاء من المستدعي (Unmount/تغيير مستخدم) — نمرّره كما هو ليُتجاهل في الكاش.
-    if (signal?.aborted) throw err;
-    if (didTimeout()) {
-      throw new ApiError('انتهت مهلة الاتصال بالخادم، حاول مجدداً', 0);
+  const targets = apiTargets();
+  let lastFailure: ApiError | null = null;
+
+  for (const base of targets) {
+    let res: Response;
+    const { promise, didTimeout } = fetchWithTimeout(
+      `${base}${route}`,
+      {
+        method,
+        headers: requestHeaders,
+        credentials: 'include', // مهم: يرسل الكوكي HttpOnly تلقائياً
+        body: payload,
+      },
+      signal,
+    );
+    try {
+      res = await promise;
+    } catch (err) {
+      // إلغاء من المستدعي (Unmount/تغيير مستخدم) — نمرّره كما هو ليُتجاهل في الكاش.
+      if (signal?.aborted) throw err;
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      const message = didTimeout()
+        ? 'انتهت مهلة الاتصال بالخادم، حاول مجدداً'
+        : 'تعذّر الاتصال بالخادم، تحقق من اتصالك بالإنترنت ثم حاول مجدداً';
+      // الوجهة التالية قد تعمل (مثلاً البروكسي معطل فنرجع لـ Supabase مباشرة)
+      lastFailure = new ApiError(message, 0);
+      continue;
     }
-    if (err instanceof DOMException && err.name === 'AbortError') throw err;
-    throw new ApiError('تعذّر الاتصال بالخادم، تحقق من اتصالك بالإنترنت ثم حاول مجدداً', 0);
+
+    // 404 = الوجهة لا تخدم الـ API (سيرفر ثابت بلا بروكسي) ⇒ جرّب التالية
+    if (res.status === 404) {
+      res.body?.cancel().catch(() => {});
+      lastFailure = new ApiError('الخادم لا يوفّر واجهة الـ API على هذا النطاق', 0);
+      continue;
+    }
+
+    if (res.status === 204) return undefined as T;
+
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch {
+      // 200 بغير JSON = صفحة SPA بدلاً من استجابة API ⇒ الوجهة غير صالحة
+      res.body?.cancel().catch(() => {});
+      lastFailure = new ApiError('الخادم أعاد استجابة غير صالحة', 502);
+      continue;
+    }
+
+    if (!res.ok) {
+      throw new ApiError(apiErrorMessage(parsed, res.status), res.status);
+    }
+    return parsed as T;
   }
 
-  if (!res.ok) {
-    throw new ApiError(await errorMessage(res), res.status);
-  }
-  if (res.status === 204) return undefined as T;
-  try {
-    return (await res.json()) as T;
-  } catch {
-    // استجابة 200 بغير JSON (صفحة HTML من CDN/بروكسي) لا تعني نجاحًا.
-    throw new ApiError('الخادم أعاد استجابة غير صالحة', 502);
-  }
+  throw lastFailure ?? new ApiError('تعذّر الاتصال بالخادم، حاول مجدداً', 0);
 }
+
