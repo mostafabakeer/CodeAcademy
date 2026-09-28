@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import type { TopStudent, LatestExamTop } from '../lib/content';
+import type { TopStudent, LatestExamTop, ExamLeaderboard } from '../lib/content';
 
 export const MEDALS: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
@@ -60,7 +60,7 @@ export function TopStudentCard({ s, i, to }: { s: TopStudent; i: number; to?: st
   );
 }
 
-/** بطاقة أعلى 3 في آخر امتحان لم阶段 واحدة. */
+/** بطاقة أعلى 3 في آخر امتحان لمرحلة واحدة. */
 export function LatestExamCard({
   entry,
   loading,
@@ -153,6 +153,78 @@ export function LatestExamCard({
           {t('top.noLatestExam')}
         </p>
       )}
+    </motion.div>
+  );
+}
+
+/** بطاقة أوائل ٣ في امتحان واحد — تُعرض في قسم «أوائل كل امتحان». */
+export function ExamLeaderboardCard({
+  board,
+  i,
+  highlightUserId,
+}: {
+  board: ExamLeaderboard;
+  i: number;
+  highlightUserId?: number;
+}) {
+  const { t, lang } = useLang();
+  const examName =
+    lang === 'ar' || !board.examTitleEn ? board.examTitle : board.examTitleEn || board.examTitle;
+  // امتحان مشترك بين الطورين يبقى بلوحة واحدة بلا تكرار
+  const shared = board.examGrade === 'all';
+  const gradeLabel = shared
+    ? lang === 'ar'
+      ? 'مشترك'
+      : 'Shared'
+    : board.examGrade === 'bac1'
+      ? t('auth.bac1')
+      : t('auth.bac2');
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: Math.min(i, 6) * 0.05 }}
+      className="rounded-2xl border border-white/10 bg-ink-950/40 p-4 backdrop-blur-md sm:p-5"
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-fire-500/40 bg-fire-500/15 px-3 py-1 text-xs font-bold text-fire-300">
+          📝 {examName}
+        </span>
+        <span className="rounded-full border border-white/15 px-2.5 py-1 text-[11px] font-semibold text-gray-400">
+          {gradeLabel}
+        </span>
+      </div>
+
+      <ol className="space-y-2">
+        {board.top.map((s, idx) => {
+          const isMe = highlightUserId != null && s.userId === highlightUserId;
+          return (
+            <motion.li
+              key={s.userId}
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: idx * 0.08 }}
+              className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 ${
+                isMe ? 'bg-fire-500/20 ring-1 ring-fire-500/50' : 'bg-ink-900/70'
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0 text-lg">{MEDALS[idx + 1] ?? `#${idx + 1}`}</span>
+                <span className="truncate text-sm font-bold text-gray-200">
+                  {s.fullName}
+                  {isMe && (
+                    <span className="ms-1 text-fire-300">{lang === 'ar' ? '(أنت)' : '(you)'}</span>
+                  )}
+                </span>
+              </span>
+              <span className="shrink-0 rounded-md border border-fire-500/40 bg-fire-500/15 px-2 py-0.5 text-xs font-black text-fire-300">
+                {s.score}%
+              </span>
+            </motion.li>
+          );
+        })}
+      </ol>
     </motion.div>
   );
 }

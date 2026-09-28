@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 
 interface AuthInitializerProps {
@@ -19,23 +19,27 @@ interface AuthInitializerProps {
 export function AuthInitializer({ children }: AuthInitializerProps) {
   const [authReady, setAuthReady] = useState(false);
   const runBoot = useAuthStore((s) => s.runBoot);
+  const bootedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
-    // StrictMode يركّب التأثير مرتين في التطوير — نتجاهل الثانية.
-    const store = useAuthStore;
-    if (!(store as unknown as { __booted?: boolean }).__booted) {
-      (store as unknown as { __booted?: boolean }).__booted = true;
+
+    // تشغيل boot مرة واحدة فقط (لا يعتمد على mutation للـ store)
+    if (!bootedRef.current) {
+      bootedRef.current = true;
       void runBoot();
     }
+
     // فك الحجب فور استقرار حالة الجلسة.
-    const unsub = store.subscribe((state) => {
+    const unsub = useAuthStore.subscribe((state) => {
       if (active && !state.loading) setAuthReady(true);
     });
+
     // شبكة صامتة بلا استجابة = لا ننتظر للأبد (loading=false يُضبط عند الأخطاء).
     const failsafe = setTimeout(() => {
       if (active) setAuthReady(true);
     }, 6000);
+
     return () => {
       active = false;
       unsub();

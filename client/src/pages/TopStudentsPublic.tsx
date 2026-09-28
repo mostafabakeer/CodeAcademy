@@ -2,16 +2,17 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { loadTopStudents, loadLatestExamTop, type TopStudent, type LatestExamTop } from '../lib/content';
+import { loadTopStudents, loadLatestExamTop, loadExamLeaderboards, type TopStudent, type LatestExamTop, type ExamLeaderboard } from '../lib/content';
 import Sparkles from '../components/Sparkles';
 import DoctorCode from '../components/DoctorCode';
-import { TopStudentCard, LatestExamCard } from '../components/TopStudentsShared';
+import { TopStudentCard, LatestExamCard, ExamLeaderboardCard } from '../components/TopStudentsShared';
 
 export default function TopStudentsPublic() {
   const { t, lang } = useLang();
   const navigate = useNavigate();
   const [students, setStudents] = useState<TopStudent[]>([]);
   const [latestTop, setLatestTop] = useState<Record<string, LatestExamTop>>({});
+  const [boards, setBoards] = useState<ExamLeaderboard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -19,14 +20,14 @@ export default function TopStudentsPublic() {
     let alive = true;
     setLoading(true);
     setError('');
-    Promise.all([loadTopStudents(), loadLatestExamTop()])
-      .then(([s, l]) => {
+    // كل مصدر مستقل: فشل أحدها لا يُسقط الصفحة، وكل واحد له كاش على حدة
+    Promise.allSettled([loadTopStudents(), loadLatestExamTop(), loadExamLeaderboards()])
+      .then(([s, l, b]) => {
         if (!alive) return;
-        setStudents(s);
-        setLatestTop(l);
-      })
-      .catch((e: Error) => {
-        if (alive) setError(e.message);
+        if (s.status === 'fulfilled') setStudents(s.value);
+        if (l.status === 'fulfilled') setLatestTop(l.value);
+        if (b.status === 'fulfilled') setBoards(b.value);
+        setError(s.status === 'rejected' ? (s.reason as Error).message : '');
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -168,6 +169,42 @@ export default function TopStudentsPublic() {
           <LatestExamCard entry={latestTop?.bac1} loading={loading} error={error} accent="sky" grade="bac1" />
           <LatestExamCard entry={latestTop?.bac2} loading={loading} error={error} accent="ember" grade="bac2" />
         </div>
+      </motion.section>
+
+      {/* أوائل كل امتحان — أعلى ٣ لكل امتحان، الأحدث أولًا */}
+      <motion.section
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.25, duration: 0.5 }}
+        className="space-y-5"
+      >
+        <div className="flex flex-col items-center gap-2 text-center md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-black md:text-2xl">📚 {t('top.everyExamTitle')}</h2>
+            <p className="mt-1 text-sm text-gray-400">{t('top.everyExamSubtitle')}</p>
+          </div>
+          <span className="rounded-full border border-dashed border-white/25 px-3 py-1 text-xs font-bold text-gray-300">
+            {t('top.everyExamParticipants')}
+          </span>
+        </div>
+
+        {loading ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-44 animate-pulse rounded-2xl bg-ink-800/60" />
+            ))}
+          </div>
+        ) : boards.length === 0 ? (
+          <p className="card-fire rounded-2xl px-4 py-8 text-center text-sm text-gray-400">
+            {t('top.everyExamEmpty')}
+          </p>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {boards.map((b, i) => (
+              <ExamLeaderboardCard key={b.examId} board={b} i={i} />
+            ))}
+          </div>
+        )}
       </motion.section>
 
       {/* CTA Section */}

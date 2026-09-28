@@ -20,12 +20,51 @@ const RESETS_ID = 'resets';
 const WA_DEDUP_KEY = 'dr_admin_wa_dedup';
 const WA_DEDUP_TTL = 24 * 60 * 60 * 1000;
 
+const EGYPT_CODE = '20';
+
+/**
+ * يحوّل رقم الهاتف إلى الصيغة الدولية التي يقبلها wa.me.
+ *
+ * كان الخطأ هنا يضيف الرقم '2' بدل كود الدولة '20'، فكان
+ * 01068633486 يتحول إلى 21068633486 بدل 201068633486،
+ * وواتساب يرد "لا يوجد مثل هذا الرقم". الدالة الآن idempotent:
+ * تشغيلها مرتين يعطي نفس النتيجة.
+ */
 function toWhatsappNumber(p: string): string {
-  let v = String(p ?? '').replace(/[\s()+-]/g, '');
-  if (v.startsWith('00')) v = v.slice(2);
-  if (v.startsWith('0')) v = v.slice(1);
-  if (!v.startsWith('2')) v = '2' + v;
-  return v;
+  let v = String(p ?? '').replace(/\D/g, '');
+  if (!v) return '';
+
+  if (v.startsWith('00')) v = v.slice(2); // 002010… => 2010…
+  if (v.startsWith(EGYPT_CODE)) return v; // 2010… => جاهزة
+
+  if (v.startsWith('0')) v = v.slice(1); // 010… => 10…
+  return v.startsWith(EGYPT_CODE) ? v : EGYPT_CODE + v;
+}
+
+/** مصر: 20 + (10 أرقام للموبايل أو أرقام أرضي) = 11-13 رقماً. */
+function isValidWaNumber(wa: string): boolean {
+  return /^20\d{9,11}$/.test(wa);
+}
+
+/** رابط واتساب جاهز، أو null إن كان الرقم غير صالح. */
+function buildWaUrl(phone: string, message: string): string | null {
+  const wa = toWhatsappNumber(phone);
+  if (!isValidWaNumber(wa)) return null;
+  return `https://wa.me/${wa}?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * يفتح واتساب. لازم تُستدعى مباشرة من الحدث قبل أي await،
+ * لأن المتصفحات ترفض window.open بعد失去 user gesture وتحجبه كـ popup.
+ */
+function launchWa(url: string): boolean {
+  const win = window.open(url, '_blank');
+  if (win) {
+    win.focus?.();
+    return true;
+  }
+  window.location.href = url; // المتصفح حجب النوافذ ⇒ ننتقل في نفس التبويب
+  return false;
 }
 
 interface Student {

@@ -1193,10 +1193,24 @@ async function latestExamTopForGrade(grade: string): Promise<LatestExamTop> {
   const exam = examRows?.[0];
   if (!exam) return { examId: null, examTitle: '', examTitleEn: '', top: [] };
 
+  return {
+    examId: Number(exam.id),
+    examTitle: String(exam.title ?? ''),
+    examTitleEn: String(exam.title_en ?? ''),
+    top: await topForExam(Number(exam.id), String(exam.grade ?? 'all')),
+  };
+}
+
+/**
+ * أعلى ٣ طلاب في امتحان واحد — منطق واحد مشترك بين «أوائل آخر امتحان» و«أوائل كل
+ * الامتحانات» حتى لا يتفرّق الترتيب بين المسارين.
+ * النتيجة الأفضل (`best`) تنازليًا، ثم `user_id` تصاعديًا عند التعادل، مع استبعاد الأدمن.
+ */
+async function topForExam(examId: number, examGrade: string): Promise<ExamTopEntry[]> {
   const { data: resultRows } = await sb
     .from('exam_results')
     .select('user_id, best, users(full_name, role, grade)')
-    .eq('exam_id', Number(exam.id))
+    .eq('exam_id', examId)
     .order('best', { ascending: false })
     .order('user_id', { ascending: true })
     .limit(50);
@@ -1206,7 +1220,7 @@ async function latestExamTopForGrade(grade: string): Promise<LatestExamTop> {
     const u = (r as any).users as { full_name?: string; role?: string; grade?: string } | null;
     if (!u || u.role === 'admin') continue;
     // امتحان عام (all) يشمل كل الطلاب؛ وامتحان المرحلة يقتصر على طلابها
-    if (exam.grade !== 'all' && u.grade !== grade) continue;
+    if (examGrade !== 'all' && u.grade !== examGrade) continue;
     top.push({
       userId: Number(r.user_id),
       fullName: String(u.full_name ?? ''),
@@ -1214,13 +1228,51 @@ async function latestExamTopForGrade(grade: string): Promise<LatestExamTop> {
     });
     if (top.length >= 3) break;
   }
+  return top;
+}
 
-  return {
-    examId: Number(exam.id),
-    examTitle: String(exam.title ?? ''),
-    examTitleEn: String(exam.title_en ?? ''),
-    top,
-  };
+/* =================== أوائل كل الامتحانات =================== */
+
+export interface ExamLeaderboard {
+  examId: number;
+  examTitle: string;
+  examTitleEn: string;
+  /** `'all'` لامتحان مشترك بين الطورين. */
+  examGrade: string;
+  top: ExamTopEntry[];
+}
+
+/** سقف عدد الامتحانات المقروءة في اللوحة الواحدة — حماية من جداول ضخمة. */
+const LEADERBOARD_EXAM_CAP = 30;
+
+/**
+ * أوائل ٣ لكل امتحان، الأحدث أولًا — نفس ترتيب «أوائل آخر امتحان» بالضبط.
+ * تُخفي الامتحانات التي لم يشارك فيها أحد بدل عرض بطاقة فارغة.
+ */
+export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
+  const { data: examRows } = await sb
+    .from('exams')
+    .select('id, title, title_en, grade')
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(LEADERBOARD_EXAM_CAP);
+
+  const exams = (examRows ?? []) as { id: number; title?: string; title_en?: string; grade?: string }[];
+
+  const boards = await Promise.all(
+    exams.map(async (exam) => {
+      const examGrade = String(exam.grade ?? 'all');
+      return {
+        examId: Number(exam.id),
+        examTitle: String(exam.title ?? ''),
+        examTitleEn: String(exam.title_en ?? ''),
+        examGrade,
+        top: await topForExam(Number(exam.id), examGrade),
+      };
+    }),
+  );
+
+  return boards.filter((b) => b.top.length > 0);
 }
 
 export interface MyExamRank {

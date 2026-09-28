@@ -85,6 +85,7 @@ import {
   invalidateSessionEpoch,
   type ResetStatus,
   listLatestExamTop,
+  listExamLeaderboards,
   latestExamRankForUser,
   listExamResultsPage,
   type MyExamRank,
@@ -891,6 +892,10 @@ app.get('/top-students', async (c) => {
 let latestExamTopCache: { at: number; data: unknown } | null = null;
 const LATEST_EXAM_TOP_TTL = 60_000;
 
+/** أوائل ٣ لكل امتحان — بكاش 5 دقائق؛ يُبطَل مع كاش آخر امتحان بعد تسجيل أي نتيجة. */
+let examLeaderboardsCache: { at: number; data: unknown } | null = null;
+const EXAM_LEADERBOARDS_TTL = 5 * 60_000;
+
 /** ترتيب كل طالب في آخر امتحان — 30 ثانية لكل مستخدم (لا يُخزَّن على خادم مشترك). */
 const myExamRankCache = new Map<number, { at: number; data: MyExamRank }>();
 const MY_EXAM_RANK_TTL = 30_000;
@@ -898,6 +903,7 @@ const MY_EXAM_RANK_MAX = 5_000;
 
 function clearLatestExamTopCache(): void {
   latestExamTopCache = null;
+  examLeaderboardsCache = null;
   myExamRankCache.clear();
 }
 
@@ -914,6 +920,25 @@ app.get('/latest-exam-top', async (c) => {
   }
   const data = { leaderboards: await listLatestExamTop() };
   latestExamTopCache = { at: Date.now(), data };
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json(data);
+});
+
+/**
+ * أوائل ٣ لكل امتحان (أوائل الطور) — عام مثل /latest-exam-top و /top-students.
+ */
+app.get('/exam-leaderboards', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  // 30/دقيقة: الصفحة بتطلب مرة واحدة مع الكاش، والحد أعلى من الحاجة مع أريحية.
+  if (!genericRateLimit(`exam-leaderboards:${clientIp}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+  if (examLeaderboardsCache && Date.now() - examLeaderboardsCache.at < EXAM_LEADERBOARDS_TTL) {
+    c.header('Cache-Control', 'public, max-age=60');
+    return c.json(examLeaderboardsCache.data);
+  }
+  const data = { leaderboards: await listExamLeaderboards() };
+  examLeaderboardsCache = { at: Date.now(), data };
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(data);
 });

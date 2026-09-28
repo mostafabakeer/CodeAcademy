@@ -329,6 +329,43 @@ export function loadLatestExamTop(force = false): Promise<Record<string, LatestE
     });
 }
 
+/* =================== أوائل كل الامتحانات =================== */
+
+export interface ExamLeaderboardEntry {
+  userId: number;
+  fullName: string;
+  score: number;
+}
+
+export interface ExamLeaderboard {
+  examId: number;
+  examTitle: string;
+  examTitleEn: string;
+  examGrade: string;
+  top: ExamLeaderboardEntry[];
+}
+
+const LEADERBOARD_KEY = 'examLeaderboards';
+const LEADERBOARD_TTL = 5 * 60_000;
+
+export function loadExamLeaderboards(force = false): Promise<ExamLeaderboard[]> {
+  if (!force) {
+    const cached = getCached<ExamLeaderboard[]>(LEADERBOARD_KEY, LEADERBOARD_TTL);
+    if (cached) return Promise.resolve(cached);
+  }
+  return api<{ leaderboards?: ExamLeaderboard[] }>('/api/exam-leaderboards')
+    .then((d) => {
+      const list = Array.isArray(d?.leaderboards) ? d.leaderboards : [];
+      setCached(LEADERBOARD_KEY, list);
+      return list;
+    })
+    .catch((e) => {
+      const cached = getCachedStale<ExamLeaderboard[]>(LEADERBOARD_KEY);
+      if (cached) return cached;
+      throw e;
+    });
+}
+
 /* =================== ترتيبي الحقيقي في آخر امتحان (خاص) =================== */
 
 export interface MyExamRank {
