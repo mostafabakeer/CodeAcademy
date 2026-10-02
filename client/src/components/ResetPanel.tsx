@@ -1,17 +1,11 @@
-import { FC } from 'react';
-import { useLang } from '../i18n';
-import { Spinner } from './Spinner';
+import type { FC } from 'react';
+import type { PasswordRequest } from '../types/admin';
+
+/** يطابق RESETS_ID في StudentsAdmin — مفتاح busy الخاص بتحميل قائمة الطلبات. */
+const RESETS_BUSY_ID = 'resets';
 
 interface ResetPanelProps {
-  resetRequests: Array<{
-    id: number;
-    userId: number;
-    status: 'pending' | 'approved' | 'completed' | 'rejected';
-    createdAt: number;
-    updatedAt: number;
-    fullName: string;
-    phone: string;
-  }>;
+  resetRequests: PasswordRequest[];
   resetDiag: {
     total: number;
     byStatus: Record<string, number>;
@@ -19,12 +13,12 @@ interface ResetPanelProps {
     today: string;
     todayUnmatched: number;
   } | null;
-  isBusy: (id: number, action: string) => boolean;
+  isBusy: (id: number | string, action: string) => boolean;
   onLoadResetRequests: () => void;
-  onApproveReset: (r: { id: number; phone: string }) => void;
-  onRejectReset: (r: { id: number; phone: string }) => void;
+  onApproveReset: (r: PasswordRequest) => void;
+  onRejectReset: (r: PasswordRequest) => void;
+  onDeleteReset: (r: PasswordRequest) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
-  RESET_STATUS_KEYS: Record<string, string>;
   ago: (ms: number) => string;
 }
 
@@ -35,18 +29,24 @@ const ResetPanel: FC<ResetPanelProps> = ({
   onLoadResetRequests,
   onApproveReset,
   onRejectReset,
+  onDeleteReset,
   t,
-  RESET_STATUS_KEYS,
   ago,
 }) => {
+  // مفتاح busy الخاص بالتحميل يطابق StudentsAdmin: run(RESETS_ID, 'resets', …)
+  // RESETS_BUSY_ID نصي ('resets') بينما busy مخزّن كـ `${id}:${action}`، لذا
+  // نمرّر النص كما هو — التوقيع الآن يسمح بـ string | number بلا cast.
+  const refreshing = isBusy(RESETS_BUSY_ID, 'resets');
+
   return (
     <div className="card-fire overflow-hidden rounded-2xl">
       <div className="flex items-center justify-between border-b border-ink-600 px-4 py-3">
         <h2 className="text-base font-black">🔑 {t('admin.resetListTitle')}</h2>
         <button
+          type="button"
           onClick={onLoadResetRequests}
-          disabled={false}
-          className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold disabled:opacity-60"
+          disabled={refreshing}
+          className="btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-60"
         >
           🔄 {t('admin.resetRefresh')}
         </button>
@@ -101,20 +101,34 @@ const ResetPanel: FC<ResetPanelProps> = ({
                     <div className="flex items-center justify-end gap-1.5">
                       {(r.status === 'pending' || r.status === 'rejected') && (
                         <button
-                          onClick={() => {}}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25"
+                          type="button"
+                          onClick={() => onApproveReset(r)}
+                          disabled={isBusy(r.id, 'reset-approve')}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          ✓ {t('admin.resetApprove')}
+                          {isBusy(r.id, 'reset-approve') ? '…' : '✓'} {t('admin.resetApprove')}
                         </button>
                       )}
                       {r.status === 'pending' && (
                         <button
-                          onClick={() => {}}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30"
+                          type="button"
+                          onClick={() => onRejectReset(r)}
+                          disabled={isBusy(r.id, 'reset-reject')}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 px-2.5 py-1 text-xs font-bold text-fire-300 hover:bg-fire-600/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          ✕ {t('admin.resetReject')}
+{isBusy(r.id, 'reset-reject') ? '…' : '✕'} {t('admin.resetReject')}
                         </button>
                       )}
+                      {/* الحذف متاح لكل الحالات (بما فيها approved غير المكتمل) */}
+                      <button
+                        type="button"
+                        onClick={() => onDeleteReset(r)}
+                        disabled={isBusy(r.id, 'reset-delete')}
+                        title={t('admin.resetDelete')}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-ink-800/70 px-2.5 py-1 text-xs font-bold text-gray-400 hover:bg-fire-950/60 hover:text-fire-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isBusy(r.id, 'reset-delete') ? '…' : '🗑'} {t('admin.resetDelete')}
+                      </button>
                     </div>
                   </td>
                 </tr>

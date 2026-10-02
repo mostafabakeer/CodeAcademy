@@ -224,11 +224,25 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       continue;
     }
 
-    // 404 = الوجهة لا تخدم الـ API (سيرفر ثابت بلا بروكسي) ⇒ جرّب التالية
     if (res.status === 404) {
+      // 404有两种含义，必须区分，否则会产生误导性报错和重复执行风险：
+      //  a) الصفحة ردّت HTML ⇒ هذه الوجهة ليست الـ API إطلاقاً (سيرفر ثابت بلا
+      //     بروكسي، أو SPA fallback) ⇒ نجرّب الوجهة التالية.
+      //  b) ردّ الـ API نفسه 404 ⇒ المسار غير موجود على الخادم (غالباً لأن
+      //     التحديثات لم تُنشر). حينها لا نعيد المحاولة: على غير GET قد يعني
+      //     ذلك تنفيذ العملية مرتين.
+      const contentType = res.headers.get('content-type') || '';
+      const isHtmlFallback = contentType.includes('text/html');
       res.body?.cancel().catch(() => {});
-      lastFailure = new ApiError('الخادم لا يوفّر واجهة الـ API على هذا النطاق', 0);
-      continue;
+
+      if (isHtmlFallback) {
+        lastFailure = new ApiError('الخادم لا يوفّر واجهة الـ API على هذا النطاق', 0);
+        continue;
+      }
+      throw new ApiError(
+        `المسار غير موجود على الخادم (404): ${method} ${route} — تأكد من نشر آخر تحديثات الـ API`,
+        404,
+      );
     }
 
     if (res.status === 204) return undefined as T;

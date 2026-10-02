@@ -4,12 +4,18 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  // esbuild خيار top-level في Vite 6 (ليس build.esbuild ولا build.esbuildOptions).
+  // نحذف debugger فقط. لا نحذف console لأن CodeLab يعترض console.error/warn
+  // لعرضه للطالب، و ErrorBoundary يعتمدها لتتبّع الأعطال في الإنتاج.
+  esbuild: {
+    drop: ['debugger'],
+  },
   plugins: [
     react(),
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['logo.png', 'pwa-192.png', 'pwa-512.png', 'pwa-maskable-512.png'],
+      includeAssets: ['pwa-192.png', 'pwa-512.png', 'pwa-maskable-512.png'],
       manifest: {
         name: 'DR Code | موقع البرمجة',
         short_name: 'DR Code',
@@ -72,10 +78,10 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1200,
+    cssCodeSplit: true,
+    modulePreload: false,
     rollupOptions: {
       output: {
-        // فصل المكتبات إلى كتل vendor مستقلة: تحديث/تحميل مكتبة لا يعيد تنزيل الآخرين،
-        // ويُحسّن الكاش (assets CacheFirst مدتها 30 يومًا) والتحميل المتوازي.
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-motion': ['motion'],

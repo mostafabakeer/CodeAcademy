@@ -1,4 +1,4 @@
-import { FC } from 'react';
+import type { FC } from 'react';
 import { useLang } from '../i18n';
 import { Spinner } from './Spinner';
 
@@ -26,7 +26,7 @@ interface StudentContentProps {
   error: string;
   success: string;
   onClearSuccess: () => void;
-  isBusy: (id: number, action: string) => boolean;
+  isBusy: (id: number | string, action: string) => boolean;
   onToggleSubscription: (s: any) => void;
   onToggleBlock: (s: any) => void;
   onToggleRole: (s: any) => void;

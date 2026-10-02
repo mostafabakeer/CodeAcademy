@@ -10,6 +10,7 @@ import StudentPagination from '../../components/StudentPagination';
 import ResetPanel from '../../components/ResetPanel';
 import LevelBadge from '../../components/LevelBadge';
 import ExamScores from '../../components/ExamScores';
+import type { GradeFilter, PasswordRequest, StudentFilter } from '../../types/admin';
 
 const PAGE_SIZE = 25;
 const CACHE_KEY = 'dr_admin_students_cache';
@@ -94,15 +95,7 @@ interface Detail {
   codeFiles: { id: number; name: string; language: string; updatedAt: number }[];
 }
 
-interface PasswordRequest {
-  id: number;
-  userId: number;
-  status: 'pending' | 'approved' | 'completed' | 'rejected';
-  createdAt: number;
-  updatedAt: number;
-  fullName: string;
-  phone: string;
-}
+/** أنواع الفلاتر والتصنيفات تأتي من src/types/admin (مصدر واحد مشترك). */
 
 interface ResetDiag {
   total: number;
@@ -112,21 +105,14 @@ interface ResetDiag {
   todayUnmatched: number;
 }
 
-const RESET_STATUS_KEYS: Record<PasswordRequest['status'], string> = {
-  pending: 'admin.resetRequestPending',
-  approved: 'admin.resetRequestApproved',
-  completed: 'admin.resetRequestCompleted',
-  rejected: 'admin.resetRequestRejected',
-};
-
-const FILTERS = [
+const FILTERS: ReadonlyArray<{ key: StudentFilter; tKey: string }> = [
   { key: 'all', tKey: 'admin.filterAll' },
   { key: 'subscribed', tKey: 'admin.filterSubscribed' },
   { key: 'unsubscribed', tKey: 'admin.filterUnsubscribed' },
   { key: 'blocked', tKey: 'admin.filterBlocked' },
-] as const;
+];
 
-const GRADES = [
+const GRADES: ReadonlyArray<{ key: GradeFilter; tKey: string }> = [
   { key: 'all', tKey: 'admin.gradeAll' },
   { key: 'bac1', tKey: 'auth.bac1' },
   { key: 'bac2', tKey: 'auth.bac2' },
@@ -201,10 +187,10 @@ export default function StudentsAdmin() {
   const [loading, setLoading] = useState(allUsers.length === 0);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [filter, setFilter] = useState<'all' | 'subscribed' | 'unsubscribed' | 'blocked'>('all');
+  const [filter, setFilter] = useState<StudentFilter>('all');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [grade, setGrade] = useState('all');
+  const [grade, setGrade] = useState<GradeFilter>('all');
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [success, setSuccess] = useState('');
@@ -452,24 +438,37 @@ export default function StudentsAdmin() {
     });
   };
 
+  /** حذف نهائي لطلب مكتمل/مرفوض — يحرّر المكان لعميل جديد يريد تغيير كلمة السر. */
+  const deleteReset = (r: PasswordRequest) => {
+    if (!window.confirm(t('admin.resetDeleteConfirm', { name: r.fullName || r.phone }))) return;
+    run(r.id, 'reset-delete', async () => {
+      await api(`/api/admin/password-resets/${r.id}`, { method: 'DELETE' });
+      setSuccess(t('admin.resetDeleteSuccess'));
+      return true;
+    }, async () => {
+      await loadResetRequests();
+    });
+  };
+
   const changeQuery = (v: string) => {
     setQuery(v);
     setPage(1);
   };
 
-  const changeGrade = (v: string) => {
+  const changeGrade = (v: GradeFilter) => {
     setGrade(v);
     setPage(1);
   };
 
-  const changeFilter = (k: 'all' | 'subscribed' | 'unsubscribed' | 'blocked') => {
+  const changeFilter = (k: StudentFilter) => {
     setFilter(k);
     setPage(1);
   };
 
-  const isBusy = (id: number, action: string) => !!busy[`${id}:${action}`];
+  const isBusy = (id: number | string, action: string) => !!busy[`${id}:${action}`];
 
-  const statusBadge = (s: Student) => {
+  // يقبل الحد الأدنى (blocked/subscription) فيقبل Student كاملاً وتفاصيل الـ modal معاً
+  const statusBadge = (s: { blocked: boolean; subscription: boolean }) => {
     if (s.blocked)
       return <span className="rounded-full bg-fire-500/20 px-2.5 py-0.5 text-xs font-bold text-fire-300 transition-colors">🚫 {t('admin.blocked')}</span>;
     if (s.subscription)
@@ -502,8 +501,8 @@ export default function StudentsAdmin() {
           onLoadResetRequests={loadResetRequests}
           onApproveReset={approveReset}
           onRejectReset={rejectReset}
+          onDeleteReset={deleteReset}
           t={t}
-          RESET_STATUS_KEYS={RESET_STATUS_KEYS}
           ago={ago}
         />
       )}
@@ -521,7 +520,7 @@ export default function StudentsAdmin() {
         </div>
         <select
           value={grade}
-          onChange={(e) => changeGrade(e.target.value)}
+          onChange={(e) => changeGrade(e.target.value as GradeFilter)}
           className="input-fire rounded-xl px-3.5 py-2.5 text-sm w-full sm:w-auto"
         >
           {GRADES.map((g) => (

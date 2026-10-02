@@ -1,4 +1,4 @@
-import { FC } from 'react';
+import type { FC } from 'react';
 import { motion } from 'motion/react';
 import LevelBadge from './LevelBadge';
 import ExamScores from './ExamScores';
@@ -25,7 +25,7 @@ interface Student {
 
 interface StudentTableProps {
   students: Student[];
-  isBusy: (id: number, action: string) => boolean;
+  isBusy: (id: number | string, action: string) => boolean;
   onToggleSubscription: (s: Student) => void;
   onToggleBlock: (s: Student) => void;
   onToggleRole: (s: Student) => void;
@@ -119,16 +119,16 @@ const StudentTable: FC<StudentTableProps> = ({
                         {isBusy(s.id, 'block') ? <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-fire-400 border-t-transparent" /> : null}
                         {s.blocked ? t('admin.unblock') : t('admin.block')}
                       </button>
-                      <button
-                        onClick={() => onToggleRole(s)}
-                        disabled={isBusy(s.id, 'role')}
-                        className="btn-fire-rounded inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isBusy(s.id, 'role') ? <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-fire-400 border-t-transparent" /> : null}
-                        {s.role === 'admin' ? t('admin.makeStudent') : t('admin.makeAdmin')} ⇄
-                      </button>
                     </>
                   )}
+                  <button
+                    onClick={() => onToggleRole(s)}
+                    disabled={isBusy(s.id, 'role')}
+                    className="btn-fire-rounded inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isBusy(s.id, 'role') ? <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-fire-400 border-t-transparent" /> : null}
+                    {s.role === 'admin' ? t('admin.makeStudent') : t('admin.makeAdmin')} ⇄
+                  </button>
                   <button
                     onClick={() => onDelete(s)}
                     disabled={isBusy(s.id, 'delete')}

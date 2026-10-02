@@ -1,4 +1,4 @@
-import { FC } from 'react';
+import type { FC } from 'react';
 
 interface ExamScoresProps {
   scores: { examId: number; at: number; score: number }[];

@@ -227,6 +227,29 @@ export async function listAllPasswordResets(limit = 100): Promise<(PasswordReset
   }));
 }
 
+/**
+ * جلب طلب واحد بمعرّفه (مع بيانات الطالب).
+ * ضرورية للمسارات التي تحتاج حالة طلب محدّد دون الاعتماد على القائمة —
+ * القائمة محدودة بـ limit وتُرجع null لأي طلب أقدم من النافذة، بينما
+ * الحذف/الرفض يجب أن يعملا على أي سجل بRegardless من عمره.
+ */
+export async function getPasswordResetById(
+  id: number,
+): Promise<(PasswordReset & { fullName: string; phone: string }) | null> {
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const { data } = await sb
+    .from('password_resets')
+    .select('*, users(full_name, phone)')
+    .eq('id', id)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    ...resetFromRow(data),
+    fullName: data.users?.full_name ?? '',
+    phone: data.users?.phone ?? '',
+  };
+}
+
 /** تحديث حالة طلب (رفض/إكمال) — يضمن انتقالاً صحيحاً ومقيداً. */
 export async function updatePasswordResetStatus(id: number, status: ResetStatus): Promise<PasswordReset | null> {
   if (!['pending', 'approved', 'completed', 'rejected'].includes(status)) return null;
@@ -257,6 +280,22 @@ export async function completePasswordReset(id: number): Promise<PasswordReset |
     .select()
     .maybeSingle();
   return data ? resetFromRow(data) : null;
+}
+
+/**
+ * حذف طلب تغيير كلمة السر نهائياً من السجل.
+ * تُستدعى للإدارة فقط بعد حالة نهائية (completed/rejected) حتى لا تتراكم
+ * الأرقام القديمة وتُفسد قراءة قائمة الطلبات.
+ * المصادقة والصلاحيات مفروضة في طبقة الـ endpoint قبل الوصول هنا.
+ */
+export async function deletePasswordReset(id: number): Promise<boolean> {
+  if (!Number.isFinite(id) || id <= 0) return false;
+  const { data, error } = await sb.from('password_resets').delete().eq('id', id).select('id').maybeSingle();
+  if (error) {
+    console.error('[db] deletePasswordReset:', error.message);
+    return false;
+  }
+  return !!data;
 }
 
 /* =================== تشخيص طلبات كلمة السر =================== */
@@ -1157,6 +1196,12 @@ export interface ExamTopEntry {
   score: number;
 }
 
+/**
+ * عنصر تراكم داخلي أثناء البناء الدفعي للوحات المتصدرة: يحمل المرحلة لأن
+ * الفلترة حسب المرحلة تتم بعد الجلب، ثم يُسقط قبل التصدير (GradeStripped).
+ */
+type ExamTopEntryWithGrade = ExamTopEntry & { grade: string };
+
 export interface LatestExamTop {
   examId: number | null;
   examTitle: string;
@@ -1248,6 +1293,7 @@ const LEADERBOARD_EXAM_CAP = 30;
 /**
  * أوائل ٣ لكل امتحان، الأحدث أولًا — نفس ترتيب «أوائل آخر امتحان» بالضبط.
  * تُخفي الامتحانات التي لم يشارك فيها أحد بدل عرض بطاقة فارغة.
+ * مُحسّنة: استعلام واحد لكل النتائج + تجميع في الذاكرة (بدل 30 استعلام متوازي).
  */
 export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
   const { data: examRows } = await sb
@@ -1258,21 +1304,49 @@ export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
     .limit(LEADERBOARD_EXAM_CAP);
 
   const exams = (examRows ?? []) as { id: number; title?: string; title_en?: string; grade?: string }[];
+  if (exams.length === 0) return [];
 
-  const boards = await Promise.all(
-    exams.map(async (exam) => {
-      const examGrade = String(exam.grade ?? 'all');
-      return {
-        examId: Number(exam.id),
-        examTitle: String(exam.title ?? ''),
-        examTitleEn: String(exam.title_en ?? ''),
-        examGrade,
-        top: await topForExam(Number(exam.id), examGrade),
-      };
-    }),
-  );
+  // استعلام واحد لكل النتائج + تجميع في الذاكرة (تفادي N+1)
+  const examIds = exams.map((e) => Number(e.id));
+  const { data: resultRows } = await sb
+    .from('exam_results')
+    .select('exam_id, user_id, best, users(full_name, role, grade)')
+    .in('exam_id', examIds)
+    .order('best', { ascending: false })
+    .order('user_id', { ascending: true });
 
-  return boards.filter((b) => b.top.length > 0);
+  // تجميع النتائج لكل امتحان مع فلترة المرحلة
+  const byExam = new Map<number, ExamTopEntryWithGrade[]>();
+  for (const r of resultRows ?? []) {
+    const u = (r as any).users as { full_name?: string; role?: string; grade?: string } | null;
+    if (!u || u.role === 'admin') continue;
+    const examId = Number(r.exam_id);
+    if (!byExam.has(examId)) byExam.set(examId, []);
+    byExam.get(examId)!.push({
+      userId: Number(r.user_id),
+      fullName: String(u.full_name ?? ''),
+      score: Number(r.best) || 0,
+      grade: String(u.grade ?? ''),
+    });
+  }
+
+  const boards: ExamLeaderboard[] = [];
+  for (const exam of exams) {
+    const examGrade = String(exam.grade ?? 'all');
+    const allEntries = byExam.get(Number(exam.id)) ?? [];
+    // فلترة حسب المرحلة: امتحان عام (all) يأخذ الكل، امتحان مرحلة يأخذ طلابها فقط
+    const filtered = allEntries.filter((e) => examGrade === 'all' || e.grade === examGrade);
+    if (filtered.length === 0) continue;
+    boards.push({
+      examId: Number(exam.id),
+      examTitle: String(exam.title ?? ''),
+      examTitleEn: String(exam.title_en ?? ''),
+      examGrade,
+      top: filtered.slice(0, 3).map(({ userId, fullName, score }) => ({ userId, fullName, score })),
+    });
+  }
+
+  return boards;
 }
 
 export interface MyExamRank {

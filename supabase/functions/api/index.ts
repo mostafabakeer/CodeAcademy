@@ -80,6 +80,8 @@ import {
   updatePasswordResetStatus,
   approvePasswordReset,
   completePasswordReset,
+  deletePasswordReset,
+  getPasswordResetById,
   incrementUnmatchedPasswordReset,
   getPasswordResetDiagnostics,
   invalidateSessionEpoch,
@@ -426,6 +428,9 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
 
 app.get('/courses', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
+  if (!genericRateLimit(`courses:${reqUser.id}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
   const isAdmin = reqUser.role === 'admin';
   const [courses, lessonStats] = await Promise.all([
     isAdmin ? listCourses() : listCoursesByGrade(reqUser.grade),
@@ -589,6 +594,9 @@ app.delete('/lessons/:id', requireAuth, requireAdmin, async (c) => {
 
 app.get('/exams', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
+  if (!genericRateLimit(`exams:${reqUser.id}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
   const isAdmin = reqUser.role === 'admin';
   const examsWithCounts = isAdmin ? await listExamsWithQuestionCounts() : await listExamsByGradeWithQuestionCounts(reqUser.grade);
   const out = examsWithCounts
@@ -751,6 +759,9 @@ app.delete('/questions/:id', requireAuth, requireAdmin, async (c) => {
 
 app.get('/notes', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
+  if (!genericRateLimit(`notes:${reqUser.id}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
   const isAdmin = reqUser.role === 'admin';
   const notes = (isAdmin ? await listNotes() : await listNotesByGrade(reqUser.grade))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -811,6 +822,9 @@ app.delete('/notes/:id', requireAuth, requireAdmin, async (c) => {
 
 app.get('/code', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
+  if (!genericRateLimit(`code:${reqUser.id}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
   const files = (await listCodeFilesByUser(reqUser.id)).map((f) => ({
     id: f.id,
     name: f.name,
@@ -872,6 +886,11 @@ app.delete('/code/:id', requireAuth, requireSubscriber, async (c) => {
 /* =================== أوائل الطلبة =================== */
 
 app.get('/top-students', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  // 60/دقيقة: صفحة عامة، كاش 120 ثانية، حد أعلى من الحاجة مع أريحية
+  if (!genericRateLimit(`top-students:${clientIp}`, 60, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
   const items = await listTopStudents();
   const students = items
     .filter((s) => TOP_GRADES.includes(s.grade))
@@ -1199,8 +1218,9 @@ app.get('/admin/password-resets/diagnose', requireAuth, requireAdmin, async (c) 
 app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
-  const requests = await listAllPasswordResets();
-  const req = requests.find((r) => r.id === id);
+  // قراءة مباشرة بالمعرّف — القائمة محدودة بـ limit، فالاعتماد عليها كان
+  // يجعل أي طلب أقدم من نافذة القائمة يُرجع 404 ويُفقد المدير القدرة على الموافقة عليه.
+  const req = await getPasswordResetById(id);
   if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
   if (req.status === 'completed') return c.json({ error: 'تم إتمام هذا الطلب بالفعل' }, 400);
 
@@ -1222,13 +1242,31 @@ app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async 
 app.post('/admin/password-resets/:id/reject', requireAuth, requireAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
-  const requests = await listAllPasswordResets();
-  const req = requests.find((r) => r.id === id);
+  // قراءة مباشرة بالمعرّف حتى لا تسقط الطلبات الأقدم من نافذة القائمة.
+  const req = await getPasswordResetById(id);
   if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
   if (req.status === 'completed') return c.json({ error: 'لا يمكن رفض طلب تم إتمامه' }, 400);
 
   await updatePasswordResetStatus(id, 'rejected');
   return c.json({ ok: true });
+});
+
+/**
+ * حذف نهائي لطلب تغيير كلمة السر — مسموح في أي حالة (pending/approved/completed/rejected).
+ * الغرض: إخلاء القائمة من الطلبات القديمة حتى لا تتراكم أرقام قديمة وتُضعف قراءتها.
+ * حذف طلب approved يُبطل كوده، فالمسؤولية على تأكيد الواجهة قبل النداء.
+ */
+app.delete('/admin/password-resets/:id', requireAuth, requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
+
+  // نقرأ السجل بمعرّفه مباشرة لا من القائمة (محدودة بـ limit).
+  const req = await getPasswordResetById(id);
+  if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
+
+  const deleted = await deletePasswordReset(id);
+  if (!deleted) return c.json({ error: 'فشل حذف الطلب' }, 500);
+  return c.json({ ok: true, id });
 });
 
 // رابط رفع مباشر إلى Storage (تجاوز حد الحجم في الدوال) — يوقّع URL ثم يرفع المتصفح مباشرة

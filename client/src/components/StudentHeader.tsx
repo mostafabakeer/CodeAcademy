@@ -1,5 +1,6 @@
-import { FC } from 'react';
+import type { FC } from 'react';
 import { useLang } from '../i18n';
+import type { StudentFilter } from '../types/admin';
 
 interface StudentHeaderProps {
   filteredLength: number;
@@ -9,19 +10,19 @@ interface StudentHeaderProps {
   onToggleResetPanel: () => void;
   pendingResetCount: number;
   onToggleResetPanelLoad: () => void;
-  currentFilter: string;
-  onChangeFilter: (filter: string) => void;
-  filterCounts: { all: number; subscribed: number; unsubscribed: number; blocked: number };
+  currentFilter: StudentFilter;
+  onChangeFilter: (filter: StudentFilter) => void;
+  filterCounts: Record<StudentFilter, number>;
   t: (key: string, params?: Record<string, string | number>) => string;
   isResetsLoading: boolean;
 }
 
-const FILTERS = [
+const FILTERS: ReadonlyArray<{ key: StudentFilter; tKey: string }> = [
   { key: 'all', tKey: 'admin.filterAll' },
   { key: 'subscribed', tKey: 'admin.filterSubscribed' },
   { key: 'unsubscribed', tKey: 'admin.filterUnsubscribed' },
   { key: 'blocked', tKey: 'admin.filterBlocked' },
-] as const;
+];
 
 export const StudentHeader: FC<StudentHeaderProps> = ({
   filteredLength,

@@ -1,4 +1,5 @@
-import { FC } from 'react';
+import type { FC, ReactNode } from 'react';
+import type { BadgeUser } from '../types/admin';
 
 interface ModalContentProps {
   detail: {
@@ -16,11 +17,12 @@ interface ModalContentProps {
       totalLessons: number;
     };
     results: Array<{ best?: number }>;
-    codeFiles: Array<{ name: string; language: string }>;
+    // يطابق ما يرسله GET /admin/users/:id/detail (id مستخدم كمفتاح React key)
+    codeFiles: Array<{ id: number; name: string; language: string; updatedAt?: number }>;
     progress: Array<{ lessonId: number; secondsWatched: number; completed: boolean }>;
   };
   t: (key: string, params?: Record<string, string | number>) => string;
-  statusBadge: (user: { blocked: boolean; subscription: boolean }) => React.ReactNode;
+  statusBadge: (user: BadgeUser) => ReactNode;
   Info: FC<{ label: string; value: React.ReactNode }>;
 }
 

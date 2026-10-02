@@ -12,3 +12,9 @@
 
 /logo.png
   Cache-Control: public, max-age=86400
+
+/login-hero.png
+  Cache-Control: public, max-age=86400
+
+/owner.png
+  Cache-Control: public, max-age=86400
