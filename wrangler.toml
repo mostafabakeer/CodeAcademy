@@ -6,4 +6,7 @@ workers_dev = true
 [assets]
 directory = "./client/dist"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
+# تحكّم كامل لـ src/worker.js: نُعطّل معالجة HTML/404 التلقائية حتى يختار
+# الـ Worker المسار الصحيح: أصل ثابت → HTML مُقدَّم مسبقاً → SPA fallback.
+html_handling = "none"
+not_found_handling = "none"

@@ -13,11 +13,14 @@ export default function Navbar() {
   const links = [
     { to: '/', label: t('nav.home') },
     { to: user ? '/top-students/me' : '/top-students', label: t('nav.topStudents') },
-    { to: '/courses', label: t('nav.courses') },
-    { to: '/exams', label: t('nav.exams') },
-    { to: '/notes', label: t('nav.notes') },
-    { to: '/codelab', label: t('nav.codeLab') },
   ];
+  if (user) {
+    links.push(
+      { to: '/exams', label: t('nav.exams') },
+      { to: '/notes', label: t('nav.notes') },
+      { to: '/codelab', label: t('nav.codeLab') },
+    );
+  }
   if (user?.role === 'admin') links.push({ to: '/admin', label: t('nav.admin') });
   if (user) links.push({ to: '/profile', label: t('nav.profile') });
 
@@ -42,6 +45,8 @@ export default function Navbar() {
           <img
             src="/logo.png"
             alt="DR Code"
+            width={56}
+            height={56}
             className="h-14 w-14 rounded-bl-full rounded-b-full object-contain shadow-xl shadow-fire-900/40 transition-transform group-hover:scale-110"
           />
           <span className="text-xl font-black tracking-tight">

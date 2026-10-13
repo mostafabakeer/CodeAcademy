@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import Navbar from './components/Navbar';
@@ -8,6 +8,7 @@ import PageErrorBoundary from './components/PageErrorBoundary';
 import FloatingMascot from './components/FloatingMascot';
 import InstallPrompt from './components/InstallPrompt';
 import { useLang } from './i18n';
+import { useSession } from './store/authStore';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
@@ -18,6 +19,9 @@ const TopStudentsPrivate = lazy(() => import('./pages/TopStudentsPrivate'));
 const TopStudentCertificate = lazy(() => import('./pages/TopStudentCertificate'));
 const Courses = lazy(() => import('./pages/Courses'));
 const CourseDetail = lazy(() => import('./pages/CourseDetail'));
+const PublicLanding = lazy(() => import('./pages/PublicLanding'));
+const PublicCatalog = lazy(() => import('./pages/PublicCatalog'));
+const PublicCourseDetail = lazy(() => import('./pages/PublicCourseDetail'));
 const LessonPlayer = lazy(() => import('./pages/LessonPlayer'));
 const Exams = lazy(() => import('./pages/Exams'));
 const ExamTake = lazy(() => import('./pages/ExamTake'));
@@ -45,6 +49,22 @@ function PageLoader() {
       </div>
       <p className="text-sm text-gray-400">DR Code</p>
     </div>
+  );
+}
+
+/**
+ * مسار واعٍ بالزائر: غير المسجّل يرى نسخة عامة قابلة للفهرسة،
+ * والمسجّل يرى النسخة الكاملة خلف الاشتراك. ننتظر انتهاء الجلسة
+ * قبل الحسم لتفادي وميض النسخة العامة للمستخدم المسجّل.
+ */
+function VisitorRoute({ children, publicPage }: { children: ReactNode; publicPage: ReactNode }) {
+  const { user, loading } = useSession();
+  if (loading) return <PageLoader />;
+  if (!user) return <>{publicPage}</>;
+  return (
+    <ProtectedRoute>
+      <SubscriberGate>{children}</SubscriberGate>
+    </ProtectedRoute>
   );
 }
 
@@ -83,9 +103,9 @@ function AnimatedRoutes() {
           {/* Private top students page - requires auth + subscription */}
           <Route path="/top-students/me" element={<ProtectedRoute><SubscriberGate><TopStudentsPrivate /></SubscriberGate></ProtectedRoute>} />
           <Route path="/top-students/:id" element={<PageErrorBoundary><TopStudentCertificate /></PageErrorBoundary>} />
-          <Route path="/" element={<ProtectedRoute><SubscriberGate><Home /></SubscriberGate></ProtectedRoute>} />
-          <Route path="/courses" element={<ProtectedRoute><SubscriberGate><Courses /></SubscriberGate></ProtectedRoute>} />
-          <Route path="/courses/:id" element={<ProtectedRoute><SubscriberGate><CourseDetail /></SubscriberGate></ProtectedRoute>} />
+          <Route path="/" element={<VisitorRoute publicPage={<PageErrorBoundary><PublicLanding /></PageErrorBoundary>}><Home /></VisitorRoute>} />
+          <Route path="/courses" element={<VisitorRoute publicPage={<PageErrorBoundary><PublicCatalog /></PageErrorBoundary>}><Courses /></VisitorRoute>} />
+          <Route path="/courses/:id" element={<VisitorRoute publicPage={<PageErrorBoundary><PublicCourseDetail /></PageErrorBoundary>}><CourseDetail /></VisitorRoute>} />
           <Route path="/lessons/:id" element={<ProtectedRoute><SubscriberGate><LessonPlayer /></SubscriberGate></ProtectedRoute>} />
           <Route path="/exams" element={<ProtectedRoute><SubscriberGate><Exams /></SubscriberGate></ProtectedRoute>} />
           <Route path="/exams/:id" element={<ProtectedRoute><SubscriberGate><ExamTake /></SubscriberGate></ProtectedRoute>} />

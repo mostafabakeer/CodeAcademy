@@ -417,3 +417,73 @@ export function loadMyExamRank(userId: number, force = false): Promise<MyExamRan
       return EMPTY_MY_RANK;
     });
 }
+
+/* =================== الفهرس العام (SEO) — بدون مصادقة =================== */
+
+export interface PublicCourse {
+  id: number;
+  title: string;
+  titleEn: string;
+  description: string;
+  descriptionEn: string;
+  image: string;
+  grade: string;
+  gradeName: string;
+  order: number;
+  lessonCount: number;
+  duration: number;
+}
+
+export interface PublicLesson {
+  id: number;
+  title: string;
+  titleEn: string;
+  duration: number;
+  grade: string;
+  order: number;
+}
+
+export interface PublicCourseDetail {
+  course: PublicCourse;
+  lessons: PublicLesson[];
+  examsCount: number;
+}
+
+const PUBLIC_COURSES_KEY = 'publicCourses';
+const PUBLIC_COURSES_TTL = 5 * 60_000;
+
+export function loadPublicCourses(force = false): Promise<PublicCourse[]> {
+  if (!force) {
+    const cached = getCached<PublicCourse[]>(PUBLIC_COURSES_KEY, PUBLIC_COURSES_TTL);
+    if (cached) return Promise.resolve(cached);
+  }
+  return api<{ courses?: PublicCourse[] }>('/api/public/courses')
+    .then((d) => {
+      const list = Array.isArray(d?.courses) ? d.courses : [];
+      setCached(PUBLIC_COURSES_KEY, list);
+      return list;
+    })
+    .catch((e) => {
+      const cached = getCachedStale<PublicCourse[]>(PUBLIC_COURSES_KEY);
+      if (cached) return cached;
+      throw e;
+    });
+}
+
+const PUBLIC_COURSE_TTL = 5 * 60_000;
+
+export function loadPublicCourse(id: number): Promise<PublicCourseDetail> {
+  const key = `publicCourse:${id}`;
+  const cached = getCached<PublicCourseDetail>(key, PUBLIC_COURSE_TTL);
+  if (cached) return Promise.resolve(cached);
+  return api<PublicCourseDetail>(`/api/public/courses/${id}`)
+    .then((d) => {
+      setCached(key, d);
+      return d;
+    })
+    .catch((e) => {
+      const stale = getCachedStale<PublicCourseDetail>(key);
+      if (stale) return stale;
+      throw e;
+    });
+}

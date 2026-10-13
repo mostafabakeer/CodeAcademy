@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { loadTopStudents, type TopStudent } from '../lib/content';
 import Sparkles from '../components/Sparkles';
+import Seo from '../components/Seo';
 
 const RANK_LABEL: Record<string, { ar: string; en: string }> = {
   '1': { ar: 'الأول', en: '1st' },
@@ -57,6 +58,11 @@ export default function TopStudentCertificate() {
 
   return (
     <div className="relative mx-auto flex min-h-[80vh] max-w-3xl flex-col items-center justify-center py-10">
+      <Seo
+        title={student ? `${t('top.certificate')} — ${student.name}` : t('top.certificate')}
+        path={id ? `/top-students/${id}` : '/top-students'}
+        noindex
+      />
       <Sparkles behind />
 
       <div className="relative z-10 flex w-full flex-col items-center">

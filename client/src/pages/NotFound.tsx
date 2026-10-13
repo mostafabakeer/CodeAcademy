@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
+import { Seo } from '../components/Seo';
 
 export default function NotFound() {
   const { t } = useLang();
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
+      <Seo title="الصفحة غير موجودة" path="/404" noindex />
       <motion.div
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}

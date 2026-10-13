@@ -122,7 +122,7 @@ export default {
       return proxyApi(request, url);
     }
 
-    // Paths that should be served as static assets (not SPA routes)
+    // مسارات الأصول الثابتة المعروفة (لا تمرّ بمنطق SPA/الـ prerender)
     const staticPaths = [
       '/assets/',
       '/sw.js',
@@ -137,28 +137,37 @@ export default {
       '/owner.png',
     ];
 
-    const isStaticPath = staticPaths.some(p => pathname.startsWith(p));
-
-    // Try to serve the asset first
-    const assetResponse = await env.ASSETS.fetch(request);
-
-    // If asset found (not 404), return it
-    if (assetResponse.status !== 404) {
-      return assetResponse;
+    if (staticPaths.some((p) => pathname.startsWith(p))) {
+      return env.ASSETS.fetch(request);
     }
 
-    // If it's a static path but not found, return the 404
-    if (isStaticPath) {
-      return assetResponse;
+    const hasExtension = /\.[a-z0-9]+$/i.test(pathname);
+
+    if (hasExtension) {
+      // ملفات ذات امتداد على الجذر: robots.txt / sitemap.xml / favicon ... (خدمة مباشرة)
+      const assetResponse = await env.ASSETS.fetch(request);
+      if (assetResponse.status !== 404) return assetResponse;
+    } else {
+      // مسارات صفحات (بلا امتداد): اخدم النسخة المُقدَّمة مسبقاً إن وُجدت
+      const candidates =
+        pathname === '/'
+          ? ['/index.html']
+          : [`${pathname}/index.html`, `${pathname}.html`];
+
+      for (const candidate of candidates) {
+        const candidateRequest = new Request(new URL(candidate, url.origin).toString(), {
+          method: 'GET',
+          headers: request.headers,
+        });
+        const candidateResponse = await env.ASSETS.fetch(candidateRequest);
+        if (candidateResponse.status !== 404) return candidateResponse;
+      }
     }
 
-    // For all other paths (SPA routes), serve index.html
-    const indexUrl = new URL('/index.html', request.url);
-    const indexRequest = new Request(indexUrl.toString(), {
-      method: request.method,
+    // SPA fallback لباقي المسارات
+    const indexRequest = new Request(new URL('/index.html', url.origin).toString(), {
+      method: 'GET',
       headers: request.headers,
-      body: request.body,
-      redirect: request.redirect,
     });
     return env.ASSETS.fetch(indexRequest);
   },

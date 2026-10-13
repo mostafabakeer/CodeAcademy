@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useAuthStore } from '../store/authStore';
 import Sparkles from '../components/Sparkles';
+import Seo from '../components/Seo';
 
 export default function Register() {
   const { t } = useLang();
@@ -35,6 +36,7 @@ export default function Register() {
 
   return (
     <div className="relative mx-auto flex min-h-[80vh] max-w-lg flex-col items-center justify-center py-10">
+      <Seo title={t('auth.registerTitle')} path="/register" />
       <Sparkles behind />
 
       <motion.div
@@ -45,6 +47,7 @@ export default function Register() {
         <img
           src="/login-hero.png"
           alt=""
+          fetchPriority="high"
           className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
         />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/95 via-ink-950/60 to-ink-950/20" />

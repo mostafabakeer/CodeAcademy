@@ -1,2 +1,3 @@
-# SPA handled by not_found_handling = "single-page-application" in the Worker config (wrangler.toml).
-# Do not add "/* /index.html 200" here: Cloudflare rejects it as an infinite loop on Workers assets.
+# SPA fallback يُدار في src/worker.js (html_handling/not_found_handling = "none" في wrangler.toml).
+# الـ Worker يخدم HTML المُقدَّم مسبقاً للصفحات العامة ثم يرجع إلى index.html.
+# لا تضف "/* /index.html 200" هنا: Cloudflare يرفضها كحلقة لا نهائية على Workers assets.

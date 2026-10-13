@@ -91,6 +91,7 @@ import {
   latestExamRankForUser,
   listExamResultsPage,
   type MyExamRank,
+  type Course,
 } from '../_shared/db.ts';
 import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
 
@@ -960,6 +961,72 @@ app.get('/exam-leaderboards', async (c) => {
   examLeaderboardsCache = { at: Date.now(), data };
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(data);
+});
+
+/* =================== الفهرس العام (SEO) =================== */
+
+/** يحوّل الكورس إلى حقول عامة فقط (بلا أي بيانات حساسة أو فيديوهات). */
+function publicCourse(course: Course, stats?: { count: number; duration: number }) {
+  return {
+    id: course.id,
+    title: course.title,
+    titleEn: course.titleEn,
+    description: course.description,
+    descriptionEn: course.descriptionEn,
+    image: course.image,
+    grade: course.grade,
+    gradeName: GRADES[course.grade]?.name ?? course.grade,
+    order: course.order,
+    lessonCount: stats?.count ?? 0,
+    duration: stats?.duration ?? 0,
+  };
+}
+
+/** كتالوج الكورسات العام — متاح بلا مصادقة لأغراض الفهرسة والعرض. */
+app.get('/public/courses', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  if (!genericRateLimit(`public-courses:${clientIp}`, 60, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+  const [courses, lessonStats] = await Promise.all([listCourses(), listLessonStats()]);
+  const statsMap = new Map(lessonStats.map((s) => [s.courseId, s]));
+  const out = courses
+    .map((course) => publicCourse(course, statsMap.get(course.id)))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json({ courses: out });
+});
+
+/** تفاصيل كورس عامة: بيانات الكورس + عناوين الدروس فقط (بدون روابط فيديو). */
+app.get('/public/courses/:id', async (c) => {
+  const clientIp = ipOf(c.req.raw);
+  if (!genericRateLimit(`public-course:${clientIp}`, 120, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+  const id = Number(c.req.param('id'));
+  if (!Number.isFinite(id)) return c.json({ error: 'معرّف غير صالح' }, 400);
+  const course = await findCourseById(id);
+  if (!course) return c.json({ error: 'الكورس غير موجود' }, 404);
+
+  const [lessons, lessonStats, examsCount] = await Promise.all([
+    listLessonsByCourse(id),
+    listLessonStats(),
+    countExamsByCourse(id),
+  ]);
+  const stat = lessonStats.find((s) => s.courseId === id);
+  const lessonList = lessons
+    .map((l) => ({
+      id: l.id,
+      title: l.title,
+      titleEn: l.titleEn,
+      duration: l.duration,
+      grade: l.grade,
+      order: l.order,
+    }))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  c.header('Cache-Control', 'public, max-age=300');
+  return c.json({ course: publicCourse(course, stat), lessons: lessonList, examsCount });
 });
 
 /**

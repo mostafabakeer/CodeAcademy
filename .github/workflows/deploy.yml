@@ -24,7 +24,17 @@ jobs:
         working-directory: client
         env:
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SITE_URL: ${{ secrets.SITE_URL || 'https://codeacademy2.drcode.workers.dev' }}
         run: npm run build
+
+      - name: Verify SEO artifacts
+        shell: bash
+        run: |
+          test -f client/dist/robots.txt || { echo "::error::client/dist/robots.txt missing"; exit 1; }
+          test -f client/dist/sitemap.xml || { echo "::error::client/dist/sitemap.xml missing"; exit 1; }
+          if [ -z "${{ secrets.SITE_URL }}" ]; then
+            echo "::warning::Secret SITE_URL is empty — build used the default domain https://codeacademy2.drcode.workers.dev. Set the secret to switch to a custom domain."
+          fi
 
       - name: Verify build output (wrangler.toml expects client/dist)
         shell: bash

@@ -48,6 +48,8 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // لا نُخزّن مسبقاً مجموعات الخطوط غير المستخدمة (لغة عربية + لاتينية فقط).
+        globIgnores: ['**/inter-cyrillic*.woff2', '**/inter-greek*.woff2', '**/inter-vietnamese*.woff2'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
@@ -79,7 +81,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 1200,
     cssCodeSplit: true,
-    modulePreload: false,
+    modulePreload: true,
     rollupOptions: {
       output: {
         manualChunks: {

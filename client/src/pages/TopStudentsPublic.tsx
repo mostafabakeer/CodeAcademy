@@ -5,6 +5,7 @@ import { useLang } from '../i18n';
 import { loadTopStudents, loadLatestExamTop, loadExamLeaderboards, type TopStudent, type LatestExamTop, type ExamLeaderboard } from '../lib/content';
 import Sparkles from '../components/Sparkles';
 import DoctorCode from '../components/DoctorCode';
+import Seo from '../components/Seo';
 import { TopStudentCard, LatestExamCard, ExamLeaderboardCard } from '../components/TopStudentsShared';
 
 export default function TopStudentsPublic() {
@@ -44,6 +45,7 @@ export default function TopStudentsPublic() {
 
   return (
     <div className="space-y-8">
+      <Seo title={t('top.title')} description={t('top.subtitle')} path="/top-students" />
       {/* Hero Section */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
