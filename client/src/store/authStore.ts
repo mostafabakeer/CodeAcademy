@@ -126,9 +126,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       }
 
       // جلسة مرفوضة نهائياً (401 منتهي/غير صالح، 403 محظور، 404 محذوف).
-      // نُبقي سجل التشخيص (لا clearAuthFail) ليقرأه صفحة الدخول ويعرض السبب الحقيقي.
+      // لكن: 401 على /auth/me أثناء الإقلاع يعني فقط "لا توجد جلسة" — ليس فشلاً.
+      const isBootAuthCheck = status === 401; // runBoot يستدعي /auth/me فقط
+      
       if (status === 401 || status === 403 || status === 404) {
-        recordAuthFailure(status, null);
+        // لا نسجل 401 كـ "فشل" أثناء الإقلاع — هو مجرد "لا جلسة"
+        if (!isBootAuthCheck) {
+          recordAuthFailure(status, null);
+        }
         set({ offline: false, user: null, stats: null, examResults: [], levels: [], loading: false });
         return;
       }

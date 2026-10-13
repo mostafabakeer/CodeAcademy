@@ -175,6 +175,27 @@ function apiTargets(): string[] {
   return import.meta.env.DEV ? [supabase] : ['/api', supabase];
 }
 
+/**
+ * مسارات المصادقة التي لا نعيد المحاولة عليها عند 401 (لأنها ذاتية المصادقة).
+ * - /auth/me: قراءة الجلسة
+ * - /auth/login, /auth/register, /auth/logout: عمليات مصادقة
+ * - /auth/refresh: تحديث الجلسة (لو موجود)
+ */
+const AUTH_PATHS_NO_RETRY = new Set([
+  '/auth/me',
+  '/auth/login',
+  '/auth/register',
+  '/auth/logout',
+  '/auth/refresh',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+]);
+
+/** هل المسار مسار مصادقة ذاتي لا يستدعي إعادة المحاولة عند 401؟ */
+function isAuthPathNoRetry(route: string): boolean {
+  return AUTH_PATHS_NO_RETRY.has(route);
+}
+
 export async function api<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, headers, signal } = options;
   const route = path.startsWith('/api') ? path.slice(4) || '/' : path || '/';
@@ -197,6 +218,9 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
 
   const targets = apiTargets();
   let lastFailure: ApiError | null = null;
+
+  // للطلبات المحمية (غير مسارات المصادقة)، نحاول مرة واحدة عند 401 لتحديث الكوكي
+  const shouldRetryOn401 = !isAuthPathNoRetry(route);
 
   for (const base of targets) {
     let res: Response;
@@ -255,6 +279,51 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       res.body?.cancel().catch(() => {});
       lastFailure = new ApiError('الخادم أعاد استجابة غير صالحة', 502);
       continue;
+    }
+
+    // معالجة 401 مع إعادة محاولة واحدة للطلبات المحمية
+    if (res.status === 401 && shouldRetryOn401) {
+      // محاولة تحديث الكوكي عبر نداء صامت للمسار /auth/me (الذي يُحدث الكوكي)
+      try {
+        await new Promise((r) => setTimeout(r, 300)); // انتظار قصير لتحديث الكوكي من جانب الخادم
+        const refreshRes = await fetch(`${base}/auth/me`, {
+          method: 'GET',
+          headers: { 'x-path': '/auth/me' },
+          credentials: 'include',
+        });
+        if (refreshRes.ok) {
+          // الكوكي تم تحديثه، أعد المحاولة للطلب الأصلي
+          const { promise: retryPromise, didTimeout: retryTimeout } = fetchWithTimeout(
+            `${base}${route}`,
+            {
+              method,
+              headers: requestHeaders,
+              credentials: 'include',
+              body: payload,
+            },
+            signal,
+          );
+          let retryRes: Response;
+          try {
+            retryRes = await retryPromise;
+          } catch (err) {
+            if (signal?.aborted) throw err;
+            if (err instanceof DOMException && err.name === 'AbortError') throw err;
+            throw new ApiError('فشل تحديث الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+          }
+          if (retryRes.ok) {
+            const retryParsed = await retryRes.json();
+            return retryParsed as T;
+          }
+          // إذا فشل بعد التحديث، نرمي الخطأ الأصلي
+          const retryParsed = await retryRes.json().catch(() => ({}));
+          throw new ApiError(apiErrorMessage(retryParsed, retryRes.status), retryRes.status);
+        }
+      } catch (refreshErr) {
+        // فشل التحديث - نرمي الخطأ الأصلي
+      }
+      // وصلنا هنا = فشل التحديث أو لا يوجد توكن صالح
+      throw new ApiError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً', 401);
     }
 
     if (!res.ok) {
