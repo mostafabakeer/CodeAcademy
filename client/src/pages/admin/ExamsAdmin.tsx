@@ -148,15 +148,24 @@ export default function ExamsAdmin() {
     setQError('');
     if (!qmExam) return;
     if (!qForm.text.trim()) return setQError(t('errors.required'));
-    const options = qForm.options.slice(0, 4).filter((o) => o.trim() !== '');
-    const optionsEn = qForm.optionsEn.slice(0, 4);
-    if (options.length < 2) return setQError(t('errors.required'));
+    // نربط كل خيار عربي بنظيره الإنجليزي *قبل* حذف الخيارات الفارغة،
+    // ثم نعيد حساب موضع الإجابة الصحيحة بعد الحذف. سابقًا كانت `optionsEn`
+    // تُقتطع بمؤشرها الأصلي فتنزاح الترجمات، و`correctIndex` قد يشير لخيار محذوف.
+    const pairs = qForm.options.slice(0, 4).map((text, index) => ({
+      text: text.trim(),
+      textEn: (qForm.optionsEn[index] ?? '').trim(),
+      sourceIndex: index,
+    }));
+    const kept = pairs.filter((p) => p.text !== '');
+    if (kept.length < 2) return setQError(t('errors.required'));
+    const mappedCorrect = kept.findIndex((p) => p.sourceIndex === qForm.correctIndex);
     try {
       const body = {
         text: qForm.text,
         textEn: qForm.textEn,
-        options: options.map((text, i) => ({ text, textEn: optionsEn[i] ?? '' })),
-        correctIndex: qForm.correctIndex,
+        options: kept.map(({ text, textEn }) => ({ text, textEn })),
+        // -1 = لا توجد إجابة صحيحة (الخيار الصحيح كان فارغًا وحُذف) بدل تخمين خاطئ.
+        correctIndex: mappedCorrect >= 0 ? mappedCorrect : -1,
         explanation: qForm.explanation,
         explanationEn: qForm.explanationEn,
       };

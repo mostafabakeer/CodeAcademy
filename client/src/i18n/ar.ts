@@ -159,6 +159,10 @@ export const ar = {
     progressUnavailable: 'التقدّم غير محفوظ في هذه الجلسة',
     openOnYoutube: 'افتح على يوتيوب',
     openLink: 'فتح الرابط',
+    mute: 'كتم الصوت',
+    unmute: 'تشغيل الصوت',
+    rewind: 'رجوع 10 ثوانٍ',
+    forward: 'تقديم 10 ثوانٍ',
   },
   exam: {
     title: 'الامتحانات',

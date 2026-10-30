@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import ProgressBar from '../components/ProgressBar';
-import { useExamTimer, formatExamClock, clearExamTimer } from '../lib/useExamTimer';
+import { useExamDeadline, formatExamClock, clearExamTimer } from '../lib/useExamTimer';
 
 interface Question {
   id: number;
@@ -229,6 +229,49 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack }: { review: 
   );
 }
 
+/**
+ * ساعة الامتحان في مكوّن مستقل: التحديث كل ثانية يُعيد رسم هذا المكوّن الصغير
+ * فقط، لا صفحة الامتحان كلها. (سابقًا: setState كل 250ms في الصفحة الأم.)
+ */
+const ExamClock = memo(function ExamClock({
+  deadline,
+  enabled,
+  onExpire,
+}: {
+  deadline: number;
+  enabled: boolean;
+  onExpire: () => void;
+}) {
+  const [remainingMs, setRemainingMs] = useState(() => Math.max(0, deadline - Date.now()));
+  const expireRef = useRef(false);
+  const onExpireRef = useRef(onExpire);
+  const enabledRef = useRef(enabled);
+  onExpireRef.current = onExpire;
+  enabledRef.current = enabled;
+
+  useEffect(() => {
+    expireRef.current = false;
+    const tick = () => {
+      const left = Math.max(0, deadline - Date.now());
+      // تحديث الحالة عند تغيّر الثانية المعروضة فقط (لا عند كل نبضة).
+      setRemainingMs((prev) => (Math.ceil(prev / 1000) === Math.ceil(left / 1000) ? prev : left));
+      if (left <= 0 && !expireRef.current && enabledRef.current) {
+        expireRef.current = true;
+        onExpireRef.current();
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [deadline]);
+
+  return (
+    <span className={`font-bold tabular-nums ${remainingMs <= 60_000 ? 'animate-pulse text-fire-400' : 'text-gray-200'}`}>
+      ⏱️ {formatExamClock(remainingMs)}
+    </span>
+  );
+});
+
 export default function ExamTake() {
   const { id } = useParams();
   const { t, lang } = useLang();
@@ -249,12 +292,14 @@ export default function ExamTake() {
     mountedRef.current = true;
     setLoading(true);
     setError('');
-    setAnswers(loadDraft(id));
+    const draft = loadDraft(id);
+    setAnswers(draft);
     api<ExamData>(`/api/exams/${id}`)
       .then((d) => {
         if (active) {
           setData(d);
-          setAttemptInProgress(!d.lastResult);
+          // مسودة موجودة = محاولة جارية (ربما إعادة) بعد إعادة تحميل الصفحة → نستأنفها.
+          setAttemptInProgress(!d.lastResult || Object.keys(draft).length > 0);
         }
       })
       .catch((e) => {
@@ -273,14 +318,15 @@ export default function ExamTake() {
   const remaining = data ? data.questions.length - answeredCount : 0;
 
   // حفظ تلقائي للإجابات أثناء الكتابة (مسودة جارية بعد إعادة التحميل) — تُمسح عند التسليم.
+  // لا نكتب مسودة إلا في محاولة جارية فعلية، حتى لا تُنشأ مسودة فارغة تُشوّش الاستئناف.
   useEffect(() => {
-    if (!id) return;
+    if (!id || !attemptInProgress) return;
     try {
       localStorage.setItem(draftKey(id), JSON.stringify({ answers }));
     } catch {
       /* تجاهل أخطاء التخزين */
     }
-  }, [id, answers]);
+  }, [id, answers, attemptInProgress]);
 
   const submit = async () => {
     if (!id || submitting) return;
@@ -293,6 +339,7 @@ export default function ExamTake() {
       });
       if (!mountedRef.current) return;
       setResult(res);
+      setAttemptInProgress(false);
       if (id) {
         clearDraft(id);
         clearExamTimer(id);
@@ -328,14 +375,11 @@ export default function ExamTake() {
 
   // عدّاد الامتحان المرن: مهلة من timeLimit (دقائق)، تُستأنف من موعدها المحفوظ
   // بعد أي إعادة تحميل، وتُسلّم الإجابات تلقائيًا عند بلوغ الصفر.
-  const { remainingMs } = useExamTimer({
+  // الحساب هنا للموعد فقط؛ العدّ التنازلي المرئي داخل <ExamClock/>.
+  const { deadline } = useExamDeadline({
     examId: id,
     durationMinutes: data?.exam.timeLimit ?? null,
     active: attemptInProgress && !!data && !result && !showSavedReview,
-    enabled: !!data && !submitting && !loading,
-    onExpire: () => {
-      void submit();
-    },
   });
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
@@ -367,15 +411,33 @@ export default function ExamTake() {
     : null;
 
   // أدّى الامتحان من قبل ولا يسمح الأدمن بإعادته → نعرض النتيجة + مراجعة الأخطاء دائماً (حتى بعد الخروج والعودة)
-  if (data.lastResult && !canRetake && savedResult) {
+  if (data.lastResult && !canRetake) {
+    if (savedResult) {
+      return (
+        <ReviewPanel
+          review={savedResult.review}
+          result={savedResult}
+          canRetake={false}
+          onRetake={() => {}}
+          onBack={() => navigate('/exams')}
+        />
+      );
+    }
+    // لا تتوفر مراجعة (لا محفوظة محليًا ولا إجابات من الخادم): لا نفتح الامتحان من جديد،
+    // لأن المحاولة مسجّلة والإعادة غير مسموحة.
     return (
-      <ReviewPanel
-        review={savedResult.review}
-        result={savedResult}
-        canRetake={false}
-        onRetake={() => {}}
-        onBack={() => navigate('/exams')}
-      />
+      <div className="mx-auto max-w-lg">
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/20 text-4xl">✅</div>
+          <h1 className="text-2xl font-black">{lang === 'ar' ? exam.title : exam.titleEn}</h1>
+          <p className="mt-2 text-sm font-bold text-gray-300">{t('exam.doneOnce')}</p>
+          <p className="mt-1 text-xs text-gray-500">{t('exam.cannotRetake')}</p>
+          <p className="mt-4 rounded-xl bg-ink-900 p-4 text-sm leading-relaxed text-gray-400">{t('exam.completedNoReview')}</p>
+          <button onClick={() => navigate('/exams')} className="btn-ghost-fire mt-5 w-full rounded-xl px-6 py-2.5 font-bold">
+            {t('common.back')}
+          </button>
+        </motion.div>
+      </div>
     );
   }
 
@@ -406,8 +468,9 @@ export default function ExamTake() {
     );
   }
 
-  // أدّى الامتحان من قبل ويسمح بإعادته → شاشة ترحيب مع خيار استعراض آخر محاولة قبل الإعادة
-  if (data.lastResult && canRetake && savedResult) {
+  // أدّى الامتحان من قبل ويسمح بإعادته → شاشة ترحيب مع خيار استعراض آخر محاولة قبل الإعادة.
+  // شرط `!attemptInProgress` ضروري: بدونه تعود شاشة الترحيب فورًا بعد الضغط على "إعادة الامتحان".
+  if (data.lastResult && canRetake && savedResult && !attemptInProgress) {
     return (
       <div className="mx-auto max-w-lg">
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
@@ -441,10 +504,8 @@ export default function ExamTake() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-black">📋 {lang === 'ar' ? exam.title : exam.titleEn}</h1>
           <div className="flex items-center gap-3 text-sm text-gray-400">
-            {remainingMs !== null ? (
-              <span className={`font-bold tabular-nums ${remainingMs <= 60_000 ? 'animate-pulse text-fire-400' : 'text-gray-200'}`}>
-                ⏱️ {formatExamClock(remainingMs)}
-              </span>
+            {deadline !== null ? (
+              <ExamClock deadline={deadline} enabled={!!data && !submitting && !loading} onExpire={() => void submit()} />
             ) : exam.timeLimit ? <span>⏱️ {exam.timeLimit} {t('exam.timeLimit')}</span> : null}
             <span>
               {answeredCount}/{questions.length} {t('exam.questionsCount')}

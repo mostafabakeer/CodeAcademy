@@ -85,14 +85,26 @@ export default function LeaderboardAdmin() {
     load();
   }, [load]);
 
-  useEffect(() => {
+  // تحميل قائمة الامتحانات. مهم: إطفاء `loading` في كل المسارات، وإلا بقي
+  // الهيكل العظمي (skeleton) ظاهرًا للأبد عند فشل الطلب أو عدم وجود امتحانات.
+  const loadExams = useCallback(() => {
+    setLoading(true);
+    setError('');
     api<{ exams: ExamOption[] }>('/api/admin/exams/select')
       .then((d) => {
         setExams(d.exams);
         if (d.exams.length > 0) setExamId(d.exams[0].id);
+        else setLoading(false);
       })
-      .catch((e) => setError((e as Error).message));
+      .catch((e) => {
+        setError((e as Error).message);
+        setLoading(false);
+      });
   }, []);
+
+  useEffect(() => {
+    loadExams();
+  }, [loadExams]);
 
   const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const showTop3 = page === 1 && !debounced.trim();
@@ -118,7 +130,16 @@ export default function LeaderboardAdmin() {
         </select>
       </div>
 
-      {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
+      {error && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
+          <span>{error}</span>
+          {exams.length === 0 && (
+            <button onClick={loadExams} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+              {t('exam.retry')}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="relative">
         <input

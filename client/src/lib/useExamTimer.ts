@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getLocal, setLocal, removeLocal } from './storage';
 
 const TIMER_PREFIX = 'exam_timer:';
@@ -51,63 +51,41 @@ export function formatExamClock(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-interface UseExamTimerOptions {
+interface UseExamDeadlineOptions {
   examId: string | undefined;
   /** مدة الامتحان بالدقائق من بيانات الخادم؛ null/0/غير محدد = بلا عدّاد. */
   durationMinutes: number | null | undefined;
   /** هل المستخدم في طور أداء فعلي للامتحان الآن (لا مراجعة/نتيجة/شاشة ترحيب). */
   active: boolean;
-  /** هل البيانات كاملة بما يكفي للسماح بالتسليم التلقائي عند الانتهاء. */
-  enabled: boolean;
-  /** يُستدعى مرة واحدة عند بلوغ الصفر. */
-  onExpire: () => void;
 }
 
 /**
- * عدّاد امتحان يعتمد على `deadline` محفوظ محليًا، لا على تناقص بالتكت:
- * يُحسب المتبقي من الساعة في كل لحظة، فإعادة التحميل تستأنف من النقطة ذاتها
- * بالضبط حتى بعد إغلاق التبويب (يبقى الموعد في localStorage) بتوافق مع سلوك
- * التطبيق الحالي للمسودات.
+ * يحسب/يحفظ/يزامن موعد نهاية الامتحان فقط — بلا أي مؤقّت React.
+ *
+ * كان هذا الهوك يحدّث حالة الصفحة كل 250ms، فيُعاد رسم صفحة الامتحان كاملة
+ * (مئات العناصر) أربع مرات في الثانية. الآن العدّ التنازلي يتم داخل مكوّن
+ * صغير مستقل (ExamClock) مرة واحدة كل ثانية، وتبقى الصفحة ثابتة.
+ *
+ * المهلة محفوظة محليًا، فإعادة التحميل تستأنف من النقطة ذاتها بالضبط.
  */
-export function useExamTimer({
+export function useExamDeadline({
   examId,
   durationMinutes,
   active,
-  enabled,
-  onExpire,
-}: UseExamTimerOptions): { remainingMs: number | null } {
-  const [remainingMs, setRemainingMs] = useState<number | null>(null);
-  const deadlineRef = useRef<number | null>(null);
-  const expireHandledRef = useRef(false);
-  const onExpireRef = useRef(onExpire);
-  onExpireRef.current = onExpire;
-
-  const tick = useCallback(() => {
-    const d = deadlineRef.current;
-    setRemainingMs(d === null ? null : Math.max(0, d - Date.now()));
-  }, []);
+}: UseExamDeadlineOptions): { deadline: number | null } {
+  const [deadline, setDeadline] = useState<number | null>(null);
 
   // بدء العدّاد من جديد أو استئناؤه من مهلة محفوظة (مرة واحدة لكل امتحان).
   useEffect(() => {
     if (!examId || !durationMinutes || durationMinutes <= 0 || !active) {
-      deadlineRef.current = null;
-      setRemainingMs(null);
-      expireHandledRef.current = false;
+      setDeadline(null);
       return;
     }
     const saved = readDeadline(examId);
-    deadlineRef.current = saved ?? Date.now() + durationMinutes * 60_000;
-    if (!saved) writeDeadline(examId, deadlineRef.current);
-    setRemainingMs(Math.max(0, deadlineRef.current - Date.now()));
-    expireHandledRef.current = false;
+    const next = saved ?? Date.now() + durationMinutes * 60_000;
+    if (!saved) writeDeadline(examId, next);
+    setDeadline(next);
   }, [examId, durationMinutes, active]);
-
-  // تحديث متكرر مُستقٍ من الساعة (دقة بلا انجراف).
-  useEffect(() => {
-    if (!active || deadlineRef.current === null) return;
-    const id = window.setInterval(tick, 250);
-    return () => window.clearInterval(id);
-  }, [active, tick]);
 
   // مزامنة دفاعية بين التبويبات: إذا تغيّرت المهلة في تبويب آخر نتبنّاها.
   useEffect(() => {
@@ -115,33 +93,11 @@ export function useExamTimer({
     const onStorage = (e: StorageEvent) => {
       if (!e.key || e.key !== rawTimerKey(examId)) return;
       const d = readDeadline(examId);
-      if (d) {
-        deadlineRef.current = d;
-        tick();
-      }
+      if (d) setDeadline(d);
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, [examId, tick]);
+  }, [examId]);
 
-  // بلوغ الصفر → استدعاء onExpire مرة واحدة فقط (منها التسليم التلقائي).
-  useEffect(() => {
-    const d = deadlineRef.current;
-    if (!examId || !active || d === null) {
-      expireHandledRef.current = false;
-      return;
-    }
-    if (Date.now() >= d) {
-      // لا نعلّم الانتهاء كـ"مُعالج" إلا حين نستدعي onExpire فعليًا؛ أثناء التحميل
-      // (enabled = false) يُرجَّأ التسليم إلى أن تكتمل البيانات ثم يُستدعى عندئذ.
-      if (!expireHandledRef.current && enabled) {
-        expireHandledRef.current = true;
-        onExpireRef.current();
-      }
-    } else {
-      expireHandledRef.current = false;
-    }
-  }, [remainingMs, examId, active, enabled]);
-
-  return { remainingMs };
+  return { deadline };
 }

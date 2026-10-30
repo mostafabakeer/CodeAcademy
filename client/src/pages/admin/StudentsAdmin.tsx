@@ -56,7 +56,7 @@ function buildWaUrl(phone: string, message: string): string | null {
 
 /**
  * يفتح واتساب. لازم تُستدعى مباشرة من الحدث قبل أي await،
- * لأن المتصفحات ترفض window.open بعد失去 user gesture وتحجبه كـ popup.
+ * لأن المتصفحات ترفض window.open بعد فقدان user gesture وتحجبه كـ popup.
  */
 function launchWa(url: string): boolean {
   const win = window.open(url, '_blank');
@@ -66,6 +66,32 @@ function launchWa(url: string): boolean {
   }
   window.location.href = url; // المتصفح حجب النوافذ ⇒ ننتقل في نفس التبويب
   return false;
+}
+
+/**
+ * يحجز نافذة فارغة داخل حدث الضغط نفسه (قبل أي await)، ثم نوجّهها لواتساب
+ * بعد نجاح طلب الخادم. هذا يحل حجب المتصفح للنوافذ المنبثقة.
+ */
+function preOpenWa(): Window | null {
+  try {
+    return window.open('', '_blank');
+  } catch {
+    return null;
+  }
+}
+
+/** يوجّه نافذة محجوزة إلى رابط واتساب، أو يفتحه في التبويب الحالي كبديل. */
+function openPreparedWa(win: Window | null, url: string): void {
+  if (win && !win.closed) {
+    try {
+      win.location.href = url;
+      win.focus?.();
+      return;
+    } catch {
+      /* ننتقل للبديل */
+    }
+  }
+  launchWa(url);
 }
 
 interface Student {
@@ -204,7 +230,6 @@ export default function StudentsAdmin() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      activeOpsRef.current.forEach(key => setBusy((b) => ({ ...b, [key]: false })));
       activeOpsRef.current.clear();
     };
   }, []);
@@ -312,23 +337,28 @@ export default function StudentsAdmin() {
     action: string,
     fn: () => Promise<unknown>,
     onOk?: (d: any) => void | Promise<void>,
-    optimisticUpdate?: () => void
+    _optimisticUpdate?: () => void,
+    opts?: { silent?: boolean; onFail?: () => void }
   ) => {
     const key = `${id}:${action}`;
+    // الفحص قبل الإضافة: سابقًا كان `add` يُنفّذ قبل `if (busy[key]) return`،
+    // فتظل العملية محجوزة في `activeOpsRef` للأبد إن تكرر الضغط.
+    if (activeOpsRef.current.has(key)) return;
     activeOpsRef.current.add(key);
-    if (busy[key]) return;
     setSuccess('');
+    setError('');
     setBusy((b) => ({ ...b, [key]: true }));
     try {
       const d = await fn();
       if (mountedRef.current) await onOk?.(d);
-      if (mountedRef.current) setSuccess(t('common.success'));
+      if (mountedRef.current && !opts?.silent) setSuccess(t('common.success'));
     } catch (e) {
       if (mountedRef.current) {
         setError((e as Error).message);
         const cached = readCache();
         if (cached) setAllUsers(cached);
       }
+      opts?.onFail?.();
     } finally {
       if (mountedRef.current) setBusy((b) => ({ ...b, [key]: false }));
       activeOpsRef.current.delete(key);
@@ -349,18 +379,33 @@ export default function StudentsAdmin() {
       patchStudent(s.id, { blocked: !s.blocked });
     });
 
-  const toggleSubscription = async (s: Student) => {
+  const toggleSubscription = (s: Student) => {
     const activating = !s.subscription;
     const name = s.fullName || '';
-    await run(s.id, 'sub', () => api(`/api/admin/users/${s.id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription: activating }) }), async () => {
-      patchStudent(s.id, { subscription: activating });
-      if (activating) {
-        const msg = t('admin.notifyWaMessage', { name });
-        openWaForMessage(s.phone, msg);
-      }
-    }, () => {
-      patchStudent(s.id, { subscription: activating });
-    });
+
+    // كل ما يخص واتساب يُحسب ويُحجز هنا (داخل حدث الضغط، قبل أي await) حتى لا يحجبه المتصفح.
+    const waUrl = activating ? buildWaUrl(s.phone, t('admin.notifyWaMessage', { name })) : null;
+    const waDuplicate = !!waUrl && wasWaSentRecently(s.phone);
+    const shouldOpenWa = !!waUrl && !waDuplicate;
+    const waWin = shouldOpenWa ? preOpenWa() : null;
+
+    void run(
+      s.id,
+      'sub',
+      () => api(`/api/admin/users/${s.id}/subscription`, { method: 'PUT', body: JSON.stringify({ subscription: activating }) }),
+      async () => {
+        patchStudent(s.id, { subscription: activating });
+        if (shouldOpenWa && waUrl) {
+          openPreparedWa(waWin, waUrl);
+          markWaSent(s.phone);
+        }
+        if (activating && !waUrl) setError(t('admin.invalidWhatsapp'));
+        else if (waDuplicate) setSuccess(t('admin.waAlreadySent'));
+        else setSuccess(t('common.success'));
+      },
+      undefined,
+      { silent: true, onFail: () => waWin?.close() }
+    );
   };
 
   const deleteStudent = (s: Student) => {
@@ -383,27 +428,25 @@ export default function StudentsAdmin() {
       setDetail(d);
     });
 
-  const openWaForMessage = (phone: string, message: string) => {
-    const wa = toWhatsappNumber(phone);
-    if (!/^\d{10,15}$/.test(wa)) {
-      setError(t('admin.invalidWhatsapp'));
-      return;
-    }
-    if (wasWaSentRecently(phone)) {
-      setSuccess(t('admin.waAlreadySent'));
-      return;
-    }
-    window.open(`https://wa.me/${wa}?text=${encodeURIComponent(message)}`, '_blank');
-    markWaSent(phone);
-  };
-
-  const loadResetRequests = () =>
-    run(RESETS_ID, 'resets', async () => {
+  /**
+   * تحميل صامت لطلبات إعادة الضبط: بلا إشعار نجاح (كان كل 20 ثانية يُظهر
+   * "تم بنجاح" بلا سبب) وبلا تكرار متزامن.
+   */
+  const loadResetRequests = async () => {
+    const key = `${RESETS_ID}:resets`;
+    if (activeOpsRef.current.has(key)) return;
+    activeOpsRef.current.add(key);
+    setBusy((b) => ({ ...b, [key]: true }));
+    try {
       const d = await api<{ requests: PasswordRequest[] }>('/api/admin/password-resets');
-      return d.requests;
-    }, (requests) => {
-      setResetRequests(requests);
-    });
+      if (mountedRef.current) setResetRequests(d.requests);
+    } catch (e) {
+      if (mountedRef.current) setError((e as Error).message);
+    } finally {
+      if (mountedRef.current) setBusy((b) => ({ ...b, [key]: false }));
+      activeOpsRef.current.delete(key);
+    }
+  };
 
   const loadResetDiag = async () => {
     try {
@@ -416,38 +459,69 @@ export default function StudentsAdmin() {
 
   const approveReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetApproveConfirm'))) return;
-    run(r.id, 'reset-approve', async () => {
-      const d = await api<{ ok: boolean; fullName: string; phone: string; code?: string }>(`/api/admin/password-resets/${r.id}/approve`, { method: 'POST' });
-      const msg = t('admin.resetApproveWaMessage', { name: d.fullName || '', code: d.code || '' });
-      openWaForMessage(d.phone || r.phone, msg);
-      if (d.code) setSuccess(`${t('admin.resetApproveSuccess')} — ${t('admin.resetApproveCode', { code: d.code })}`);
-      else setSuccess(t('admin.resetApproveSuccess'));
-      return d;
-    }, async () => {
-      await loadResetRequests();
-    });
+    // نحجز النافذة الآن (قبل await) ثم نوجّهها لواتساب بعد وصول الكود.
+    const waWin = preOpenWa();
+    void run(
+      r.id,
+      'reset-approve',
+      async () => {
+        const d = await api<{ ok: boolean; fullName: string; phone: string; code?: string }>(`/api/admin/password-resets/${r.id}/approve`, { method: 'POST' });
+        const phone = d.phone || r.phone;
+        const msg = t('admin.resetApproveWaMessage', { name: d.fullName || '', code: d.code || '' });
+        const url = buildWaUrl(phone, msg);
+        if (url && !wasWaSentRecently(phone)) {
+          openPreparedWa(waWin, url);
+          markWaSent(phone);
+        } else {
+          waWin?.close();
+          if (!url) setError(t('admin.invalidWhatsapp'));
+        }
+        if (d.code) setSuccess(`${t('admin.resetApproveSuccess')} — ${t('admin.resetApproveCode', { code: d.code })}`);
+        else setSuccess(t('admin.resetApproveSuccess'));
+        return d;
+      },
+      async () => {
+        await loadResetRequests();
+      },
+      undefined,
+      { silent: true, onFail: () => waWin?.close() }
+    );
   };
 
   const rejectReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetRejectConfirm'))) return;
-    run(r.id, 'reset-reject', async () => {
-      await api(`/api/admin/password-resets/${r.id}/reject`, { method: 'POST' });
-      setSuccess(t('admin.resetRequestRejected'));
-    }, async () => {
-      await loadResetRequests();
-    });
+    void run(
+      r.id,
+      'reset-reject',
+      async () => {
+        await api(`/api/admin/password-resets/${r.id}/reject`, { method: 'POST' });
+        setSuccess(t('admin.resetRequestRejected'));
+      },
+      async () => {
+        await loadResetRequests();
+      },
+      undefined,
+      { silent: true }
+    );
   };
 
   /** حذف نهائي لطلب مكتمل/مرفوض — يحرّر المكان لعميل جديد يريد تغيير كلمة السر. */
   const deleteReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetDeleteConfirm', { name: r.fullName || r.phone }))) return;
-    run(r.id, 'reset-delete', async () => {
-      await api(`/api/admin/password-resets/${r.id}`, { method: 'DELETE' });
-      setSuccess(t('admin.resetDeleteSuccess'));
-      return true;
-    }, async () => {
-      await loadResetRequests();
-    });
+    void run(
+      r.id,
+      'reset-delete',
+      async () => {
+        await api(`/api/admin/password-resets/${r.id}`, { method: 'DELETE' });
+        setSuccess(t('admin.resetDeleteSuccess'));
+        return true;
+      },
+      async () => {
+        await loadResetRequests();
+      },
+      undefined,
+      { silent: true }
+    );
   };
 
   const changeQuery = (v: string) => {

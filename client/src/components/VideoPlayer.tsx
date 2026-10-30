@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useLang } from '../i18n';
 import { extractYouTubeId, buildYouTubeWatchUrlFrom, isYouTubeUrl } from '../lib/youtube';
 
@@ -32,20 +37,26 @@ interface VideoPlayerProps {
 /** معرّفات حالة مشغّل يوتيوب (YT.PlayerState). */
 const YT_STATE = { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 } as const;
 
-/** استضافة الـ iframe — النطاق القياسي المضمون العمل. */
 const YT_IFRAME_HOST = 'https://www.youtube.com';
-/** سكربت الـ API الرسمي؛ لازم يطابق نطاق الـ iframe وإلا onReady ما بي اشتغلش. */
 const YT_API_SRC = 'https://www.youtube.com/iframe_api';
 
-/** قراءة موضع التشغيل كل ثانية لتحديث الشريط، والإبلاغ للتقدّم كل ٤ ثوانٍ. */
-const TICK_MS = 1000;
-const EMIT_MS = 4000;
+/**
+ * مهلات قصيرة: المشغّل الآن لا يُحمَّل إلا بعد ضغط المستخدم،
+ * فانتظار 25 ثانية كان يعني شاشة تحميل طويلة بلا داعٍ.
+ */
+const API_TIMEOUT_MS = 8_000;
+const READY_TIMEOUT_MS = 8_000;
 
-const RATES = [1, 1.25, 1.5, 2];
+/** قراءة موضع التشغيل كل نصف ثانية (العرض يتحدّث عند تغيّر الثانية فقط). */
+const TICK_MS = 500;
+/** إبلاغ الصفحة بالتقدّم كل ١٠ ثوانٍ + إجباريًا عند الإيقاف/الخروج. */
+const EMIT_MS = 10_000;
+
+const RATES = [0.75, 1, 1.25, 1.5, 2];
 
 /**
  * يحمّل YouTube IFrame Player API مرة واحدة فقط ويشارك الوعد بين كل المشغّلات.
- * يرفض بعد ٢٥ ثانية، وعندها نرجع لـ iframe عادي بدل شاشة خطأ ميتة.
+ * يرفض سريعًا عند الحجب/الانقطاع، وعندها نرجع لـ iframe عادي بدل شاشة خطأ ميتة.
  */
 let apiPromise: Promise<void> | null = null;
 
@@ -64,12 +75,12 @@ function loadYouTubeApi(): Promise<void> {
       resolve();
     };
 
-    if (!document.getElementById('yt-iframe-api')) {
+    const script = document.getElementById('yt-iframe-api') as HTMLScriptElement | null;
+    if (!script) {
       const tag = document.createElement('script');
       tag.id = 'yt-iframe-api';
       tag.src = YT_API_SRC;
       tag.async = true;
-      // فشل تحميل السكربت (حجب/انقطاع) لازم يوصلنا كفشل سريع مش انتظار
       tag.onerror = () => {
         if (timer) clearTimeout(timer);
         apiPromise = null;
@@ -82,7 +93,7 @@ function loadYouTubeApi(): Promise<void> {
       // نسمح بإعادة المحاولة في المرة القادمة
       apiPromise = null;
       reject(new Error('iframe_api timeout'));
-    }, 25_000);
+    }, API_TIMEOUT_MS);
   });
 
   return apiPromise;
@@ -94,7 +105,7 @@ function loadYouTubeApi(): Promise<void> {
  *  - `upload` عنصر <video> أصلي (ملف مرفوع)
  *  - `invalid` النوع يوتيوب لكن الرابط غير قابل للاستخراج
  *
- * لو النوع مفقود entirely بنستنتجه من شكل الرابط (أكثر أمانًا للبيانات القديمة).
+ * لو النوع مفقود تمامًا نستنتجه من شكل الرابط (أكثر أمانًا للبيانات القديمة).
  */
 function resolveMode(
   videoType: string | undefined,
@@ -104,6 +115,37 @@ function resolveMode(
   if (videoType === 'upload') return 'upload';
   if (videoType === 'youtube') return id ? 'youtube' : 'invalid';
   return isYouTubeUrl(videoUrl) ? 'youtube' : 'upload';
+}
+
+/** صورة معاينة يوتيوب (نفس مصغّرات الموقع — بلا أي سكربت خارجي). */
+function youTubeThumb(id: string): string {
+  return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+}
+
+/** يكتشف أجهزة اللمس: عليها نستخدم أدوات يوتيوب/المتصفح الأصلية (أثبت وأسرع). */
+function useCoarsePointer(): boolean {
+  const [coarse, setCoarse] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia?.('(pointer: coarse)');
+    if (!mq) return;
+    const onChange = () => setCoarse(mq.matches);
+    mq.addEventListener?.('change', onChange);
+    return () => mq.removeEventListener?.('change', onChange);
+  }, []);
+  return coarse;
+}
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
 export default function VideoPlayer({
@@ -122,36 +164,44 @@ export default function VideoPlayer({
   onDuration,
 }: VideoPlayerProps) {
   const { t } = useLang();
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const ytHostRef = useRef<HTMLDivElement>(null);
-  const ytPlayerRef = useRef<any>(null);
-  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const maxWatchedRef = useRef(0);
-  const lastEmitRef = useRef(0);
-  const aliveRef = useRef(true);
-  const hideControlsTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const ytReadyRef = useRef(false);
-  const ytPlayPendingRef = useRef(false);
-  const readyWatchdogRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const coarse = useCoarsePointer();
+  const coarseRef = useRef(coarse);
+  coarseRef.current = coarse;
 
   const effectiveSrc = src || videoUrl || '';
   const mode = resolveMode(videoType, videoUrl ?? src ?? '');
   const isYouTube = mode === 'youtube';
   const ytId = extractYouTubeId(videoUrl ?? src ?? '');
 
-  const [loading, setLoading] = useState(true);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hostWrapRef = useRef<HTMLDivElement>(null);
+  const ytPlayerRef = useRef<any>(null);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const maxWatchedRef = useRef(0);
+  const lastEmitRef = useRef(0);
+  const lastDisplayRef = useRef(-1);
+  const liveTimeRef = useRef(0);
+  const ytReadyRef = useRef(false);
+  const pendingPlayRef = useRef(false);
+  const aliveRef = useRef(true);
+  const autoPlayRef = useRef(autoPlay);
+  const resumeRef = useRef(resumeAt || initialTime || 0);
+
+  const [started, setStarted] = useState(() => !isYouTube || autoPlay);
+  const [loading, setLoading] = useState(isYouTube ? true : true);
   const [error, setError] = useState<string | null>(null);
   const [errorLink, setErrorLink] = useState<string | null>(null);
-  /** فشل تحميل الـ API → نعرض iframe عادي بدل شاشة خطأ (الفيديو يشتغل، التقدّم لا). */
   const [iframeFallback, setIframeFallback] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
   const [rate, setRate] = useState(1);
   const [showControls, setShowControls] = useState(true);
-
-  // القيم الأولية تُقرأ مرة واحدة فقط (عند التركيب) — وإلا أُعيد بناء المشغّل مع كل رندر.
-  const bootRef = useRef({ resumeAt: resumeAt || initialTime || 0, autoPlay });
 
   // الاستدعاءات في ref حتى لا يُعاد بناء مشغّل يوتيوب عند كل رندر للصفحة.
   const cbRef = useRef({ onProgress, onDuration, onDurationChange, onTimeUpdate, onEnded, onError });
@@ -163,40 +213,99 @@ export default function VideoPlayer({
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      if (tickRef.current) {
-        clearInterval(tickRef.current);
-        tickRef.current = null;
-      }
+      if (tickRef.current) clearInterval(tickRef.current);
+      tickRef.current = null;
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     };
   }, []);
 
-  const stopTicking = () => {
+  const stopTicking = useCallback(() => {
     if (tickRef.current) {
       clearInterval(tickRef.current);
       tickRef.current = null;
     }
-  };
+  }, []);
+
+  /** تحديث واجهة الوقت عند تغيّر الثانية المعروضة فقط (بدل كل نبضة). */
+  const setDisplayTime = useCallback((seconds: number) => {
+    liveTimeRef.current = seconds;
+    const whole = Math.floor(seconds);
+    if (whole === lastDisplayRef.current) return;
+    lastDisplayRef.current = whole;
+    setCurrentTime(seconds);
+  }, []);
 
   /**
    * يبلّغ عن التقدّم مع خنق الكتابة: maxWatched يمنع التراجع عند الرجوع للخلف،
-   * والخنق يمنع الكتابة على localStorage كل ثانية (تقرير كل ٤ ثوانٍ + إجباري عند
+   * والخنق يمنع الكتابة على التخزين كل ثانية (تقرير كل ١٠ ثوانٍ + إجباري عند
    * الإيقاف/الانتهاء/إزالة المكوّن).
    */
-  const report = (seconds: number, force = false) => {
-    if (seconds > 0) setCurrentTime(seconds);
-    if (seconds <= 0) return;
-    maxWatchedRef.current = Math.max(maxWatchedRef.current, seconds);
-    const now = Date.now();
-    if (!force && now - lastEmitRef.current < EMIT_MS) return;
-    lastEmitRef.current = now;
-    cbRef.current.onProgress?.(Math.floor(maxWatchedRef.current));
-  };
+  const report = useCallback(
+    (seconds: number, force = false) => {
+      if (seconds > 0) {
+        maxWatchedRef.current = Math.max(maxWatchedRef.current, seconds);
+        setDisplayTime(seconds);
+      }
+      if (seconds <= 0) return;
+      const now = Date.now();
+      if (!force && now - lastEmitRef.current < EMIT_MS) return;
+      lastEmitRef.current = now;
+      cbRef.current.onProgress?.(Math.floor(maxWatchedRef.current));
+    },
+    [setDisplayTime],
+  );
 
-  /* ================= مشغّل يوتيوب المدمج ================= */
+  // عند تغيير الدرس/الرابط: نعيد ضبط كل شيء ونرجع لواجهة المعاينة.
   useEffect(() => {
-    if (!isYouTube) return;
-    const id = extractYouTubeId(videoUrl ?? '');
+    maxWatchedRef.current = 0;
+    lastEmitRef.current = 0;
+    lastDisplayRef.current = -1;
+    liveTimeRef.current = 0;
+    pendingPlayRef.current = false;
+    setCurrentTime(0);
+    setDuration(0);
+    setLoading(true);
+    setIsPlaying(false);
+    setError(null);
+    setErrorLink(null);
+    setIframeFallback(false);
+    setStarted(!isYouTube || autoPlay);
+  }, [videoUrl, src, isYouTube, autoPlay]);
+
+  // موضع الاستئناف قد يصل بعد التركيب (بيانات الدرس غير متزامنة).
+  useEffect(() => {
+    resumeRef.current = resumeAt || initialTime || 0;
+  }, [resumeAt, initialTime]);
+
+  // إبلاغ أخير عند إخفاء الصفحة/إغلاقها حتى لا يضيع تقدّم آخر دقائق.
+  useEffect(() => {
+    const flush = () => {
+      const seconds = isYouTube
+        ? ytPlayerRef.current?.getCurrentTime?.() || 0
+        : videoRef.current?.currentTime || 0;
+      const best = Math.max(seconds, maxWatchedRef.current);
+      if (best > 0) cbRef.current.onProgress?.(Math.floor(best));
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flush();
+    };
+  }, [isYouTube]);
+
+  /* ================= مشغّل يوتيوب المدمج (يُحمَّل بعد الضغط فقط) ================= */
+  useEffect(() => {
+    if (!isYouTube || !started) return;
+    const id = ytId;
     if (!id) return;
+    const wrap = hostWrapRef.current;
+    if (!wrap) return;
 
     let cancelled = false;
     setLoading(true);
@@ -204,11 +313,16 @@ export default function VideoPlayer({
     setErrorLink(null);
     setIframeFallback(false);
 
+    // YT.Player يستبدل عنصر الحاوية بـ iframe؛ ننشئه يدويًا داخل غلاف ثابت
+    // حتى يبقى الغلاف موجودًا بعد إعادة الإنشاء (تغيير الدرس).
+    wrap.innerHTML = '';
+    const host = document.createElement('div');
+    host.className = 'h-full w-full';
+    wrap.appendChild(host);
+
     loadYouTubeApi()
       .then(() => {
         if (cancelled || !aliveRef.current) return;
-        const host = ytHostRef.current;
-        if (!host) return;
 
         const fail = (message: string) => {
           if (cancelled) return;
@@ -222,19 +336,24 @@ export default function VideoPlayer({
         const player = new window.YT!.Player(host, {
           videoId: id,
           playerVars: {
-            autoplay: bootRef.current.autoPlay ? 1 : 0,
+            autoplay: autoPlayRef.current || pendingPlayRef.current ? 1 : 0,
             playsinline: 1,
             enablejsapi: 1,
             rel: 0,
             modestbranding: 1,
+            // على اللمس: أدوات يوتيوب الأصلية. على الديسكتوب: أدواتنا المخصّصة.
+            controls: coarseRef.current ? 1 : 0,
+            disablekb: coarseRef.current ? 0 : 1,
+            fs: coarseRef.current ? 1 : 0,
+            origin: window.location.origin,
           },
           events: {
             onReady: (e: any) => {
               if (cancelled) return;
               ytReadyRef.current = true;
-              if (readyWatchdogRef.current) {
-                clearTimeout(readyWatchdogRef.current);
-                readyWatchdogRef.current = undefined;
+              if (watchdogRef.current) {
+                clearTimeout(watchdogRef.current);
+                watchdogRef.current = undefined;
               }
               setLoading(false);
               const d = e.target.getDuration?.() || 0;
@@ -242,17 +361,16 @@ export default function VideoPlayer({
               cbRef.current.onDuration?.(d);
               cbRef.current.onDurationChange?.(d);
 
-              const resume = bootRef.current.resumeAt;
+              const resume = resumeRef.current;
               if (resume > 0 && d > 0 && resume < d - 2) e.target.seekTo(resume, true);
 
-              if (ytPlayPendingRef.current) {
-                // المستخدم ضغط تشغيل قبل ما المشغّل يجهز — نفّذ النية دلوقتي
-                ytPlayPendingRef.current = false;
-                try { e.target.playVideo(); } catch { /* autoplay prevented */ }
-              }
-
-              if (bootRef.current.autoPlay) {
-                try { e.target.playVideo(); } catch { /* autoplay prevented */ }
+              if (pendingPlayRef.current || autoPlayRef.current) {
+                pendingPlayRef.current = false;
+                try {
+                  e.target.playVideo();
+                } catch {
+                  /* autoplay prevented */
+                }
               }
             },
             onStateChange: (e: any) => {
@@ -287,12 +405,11 @@ export default function VideoPlayer({
 
         ytPlayerRef.current = player;
 
-        // حارس: لو onReady ما اشتعلش خلال ١٢ ثانية (فيديو محظور من embedding،
-        // أو تعارض في المضيف) بنوقف السحب ونعرض زر الفتح على يوتيوب بدل التعليق
-        readyWatchdogRef.current = setTimeout(() => {
+        // حارس: لو onReady لم يشتعل (منع تضمين/تعارض) نعرض زر الفتح بدل التعليق.
+        watchdogRef.current = setTimeout(() => {
           if (cancelled || ytReadyRef.current) return;
           fail(tRef.current('video.error'));
-        }, 12_000);
+        }, READY_TIMEOUT_MS);
 
         stopTicking();
         tickRef.current = setInterval(() => {
@@ -301,9 +418,9 @@ export default function VideoPlayer({
         }, TICK_MS);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (cancelled || !aliveRef.current) return;
         setLoading(false);
-        // الـ API ما تحميلش (حجب/انقطاع): iframe عادي بيشتغل من غيره، أحسن من شاشة ميتة.
+        // الـ API لم يُحمّل (حجب/انقطاع): iframe عادي يعمل من غيره، أفضل من شاشة ميتة.
         setIframeFallback(true);
       });
 
@@ -311,32 +428,40 @@ export default function VideoPlayer({
       cancelled = true;
       stopTicking();
       ytReadyRef.current = false;
-      ytPlayPendingRef.current = false;
-      if (readyWatchdogRef.current) {
-        clearTimeout(readyWatchdogRef.current);
-        readyWatchdogRef.current = undefined;
+      pendingPlayRef.current = false;
+      if (watchdogRef.current) {
+        clearTimeout(watchdogRef.current);
+        watchdogRef.current = undefined;
       }
-      try { ytPlayerRef.current?.destroy?.(); } catch { /* already destroyed */ }
+      try {
+        ytPlayerRef.current?.destroy?.();
+      } catch {
+        /* already destroyed */
+      }
       ytPlayerRef.current = null;
+      wrap.innerHTML = '';
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isYouTube, videoUrl]);
+  }, [isYouTube, started, ytId, report, stopTicking]);
 
-  // المشغّل المدمج لا يتكيّف مع تغيّر حجم الحاوية تلقائيًا (مهم على الموبايل)
+  // المشغّل المدمج لا يتكيّف مع تغيّر حجم الحاوية تلقائيًا (مهم على الموبايل).
   useEffect(() => {
-    if (!isYouTube) return;
-    const host = ytHostRef.current;
+    if (!isYouTube || !started) return;
+    const host = hostWrapRef.current;
     if (!host || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       const w = host.clientWidth;
       const h = host.clientHeight;
       if (w && h) {
-        try { ytPlayerRef.current?.setSize?.(w, h); } catch { /* not ready */ }
+        try {
+          ytPlayerRef.current?.setSize?.(w, h);
+        } catch {
+          /* not ready */
+        }
       }
     });
     ro.observe(host);
     return () => ro.disconnect();
-  }, [isYouTube]);
+  }, [isYouTube, started]);
 
   /* ================= مشغّل الملفات المرفوعة ================= */
   useEffect(() => {
@@ -348,12 +473,11 @@ export default function VideoPlayer({
       setDuration(video.duration);
       cbRef.current.onDurationChange?.(video.duration);
       cbRef.current.onDuration?.(video.duration);
-      const resume = bootRef.current.resumeAt;
-      if (resume > 0 && resume < video.duration) video.currentTime = resume;
+      const resume = resumeRef.current;
+      if (resume > 0 && resume < video.duration - 1) video.currentTime = resume;
     };
 
     const handleTimeUpdate = () => {
-      setCurrentTime(video.currentTime);
       cbRef.current.onTimeUpdate?.(video.currentTime);
       report(video.currentTime);
     };
@@ -379,6 +503,7 @@ export default function VideoPlayer({
       setLoading(false);
       cbRef.current.onError?.(err);
     };
+    const handleVolume = () => setMuted(video.muted);
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
     video.addEventListener('timeupdate', handleTimeUpdate);
@@ -388,8 +513,9 @@ export default function VideoPlayer({
     video.addEventListener('pause', handlePause);
     video.addEventListener('ended', handleEnded);
     video.addEventListener('error', handleError);
+    video.addEventListener('volumechange', handleVolume);
 
-    if (bootRef.current.autoPlay) {
+    if (autoPlayRef.current) {
       video.play().catch(() => {
         /* autoplay prevented */
       });
@@ -404,61 +530,99 @@ export default function VideoPlayer({
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('ended', handleEnded);
       video.removeEventListener('error', handleError);
+      video.removeEventListener('volumechange', handleVolume);
       report(video.currentTime, true);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isYouTube]);
+  }, [isYouTube, report, effectiveSrc]);
 
   /* ================= أدوات التشغيل ================= */
+  const startPlayback = () => {
+    pendingPlayRef.current = true;
+    setStarted(true);
+    setLoading(true);
+  };
+
   const play = () => {
     if (isYouTube) {
       if (!ytReadyRef.current) {
-        // لسه مش جاهز — نحفظ النية بدل ما تضيع، و onReady هينفّذها
-        ytPlayPendingRef.current = true;
+        pendingPlayRef.current = true;
         return;
       }
-      try { ytPlayerRef.current?.playVideo?.(); } catch { /* not ready */ }
+      try {
+        ytPlayerRef.current?.playVideo?.();
+      } catch {
+        /* not ready */
+      }
       return;
     }
-    const v = videoRef.current;
-    if (!v) return;
-    v.play().catch(() => {
+    videoRef.current?.play().catch(() => {
       /* autoplay prevented */
     });
   };
 
   const pause = () => {
     if (isYouTube) {
-      try { ytPlayerRef.current?.pauseVideo?.(); } catch { /* not ready */ }
+      try {
+        ytPlayerRef.current?.pauseVideo?.();
+      } catch {
+        /* not ready */
+      }
       return;
     }
     videoRef.current?.pause();
   };
 
-  const togglePlay = () => (isPlaying ? pause : play);
+  const togglePlay = () => (isPlaying ? pause() : play());
 
   const seek = (seconds: number) => {
+    const max = duration || 0;
+    const target = Math.max(0, max ? Math.min(seconds, max) : seconds);
+    setDisplayTime(target);
     if (isYouTube) {
-      try { ytPlayerRef.current?.seekTo?.(seconds, true); } catch { /* not ready */ }
+      try {
+        ytPlayerRef.current?.seekTo?.(target, true);
+      } catch {
+        /* not ready */
+      }
       return;
     }
     const v = videoRef.current;
-    if (!v) return;
-    v.currentTime = Math.max(0, Math.min(seconds, v.duration));
+    if (v) v.currentTime = target;
+  };
+
+  const seekBy = (delta: number) => seek(liveTimeRef.current + delta);
+
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    if (isYouTube) {
+      try {
+        if (next) ytPlayerRef.current?.mute?.();
+        else ytPlayerRef.current?.unMute?.();
+      } catch {
+        /* not ready */
+      }
+      return;
+    }
+    if (videoRef.current) videoRef.current.muted = next;
   };
 
   const cycleRate = () => {
     const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length];
     setRate(next);
     if (isYouTube) {
-      try { ytPlayerRef.current?.setPlaybackRate?.(next); } catch { /* not ready */ }
+      try {
+        ytPlayerRef.current?.setPlaybackRate?.(next);
+      } catch {
+        /* not ready */
+      }
       return;
     }
     if (videoRef.current) videoRef.current.playbackRate = next;
   };
 
   const fullscreen = () => {
-    const el = isYouTube ? ytHostRef.current : videoRef.current;
+    const el = containerRef.current;
     if (!el) return;
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
@@ -467,23 +631,41 @@ export default function VideoPlayer({
     (el.requestFullscreen?.() ?? Promise.reject(new Error('no fullscreen'))).catch(() => {});
   };
 
-  /* ================= واجهة ================= */
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.target instanceof HTMLInputElement) return;
+    switch (e.key) {
+      case ' ':
+      case 'k':
+        e.preventDefault();
+        togglePlay();
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        seekBy(10);
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        seekBy(-10);
+        break;
+      case 'm':
+        toggleMute();
+        break;
+      case 'f':
+        fullscreen();
+        break;
+      default:
+        break;
+    }
   };
 
-  const handleMouseMove = () => {
+  const showCustomControls = !coarse && !iframeFallback;
+  const controlsVisible = showControls || !isPlaying;
+  const revealControls = () => {
     setShowControls(true);
-    if (hideControlsTimeout.current) clearTimeout(hideControlsTimeout.current);
-    hideControlsTimeout.current = setTimeout(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => {
       if (!isPlaying) return;
-      if (isYouTube) {
-        if (ytPlayerRef.current?.getPlayerState?.() === YT_STATE.PLAYING) setShowControls(false);
-      } else if (!videoRef.current?.paused) {
-        setShowControls(false);
-      }
+      setShowControls(false);
     }, 3000);
   };
 
@@ -495,27 +677,54 @@ export default function VideoPlayer({
     return <PlayerError message={error} link={errorLink} linkLabel={t('video.openOnYoutube')} />;
   }
 
+  const posterSrc = poster || (ytId ? youTubeThumb(ytId) : '');
+
   return (
     <div
-      className="relative aspect-video rounded-2xl overflow-hidden bg-ink-900"
-      onMouseEnter={() => setShowControls(true)}
+      ref={containerRef}
+      tabIndex={showCustomControls ? 0 : -1}
+      onKeyDown={showCustomControls ? onKeyDown : undefined}
+      onMouseEnter={revealControls}
+      onMouseMove={revealControls}
       onMouseLeave={() => {
         if (!isPlaying) return;
-        if (isYouTube) {
-          if (ytPlayerRef.current?.getPlayerState?.() === YT_STATE.PLAYING) setShowControls(false);
-        } else if (!videoRef.current?.paused) {
-          setShowControls(false);
-        }
+        setShowControls(false);
       }}
-      onMouseMove={handleMouseMove}
+      className="group relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900 outline-none ring-fire-500/60 focus-visible:ring-2"
     >
       {isYouTube ? (
-        iframeFallback ? (
+        !started ? (
+          <button
+            type="button"
+            onClick={startPlayback}
+            className="absolute inset-0 flex flex-col items-center justify-center bg-ink-900"
+            aria-label={t('video.play')}
+          >
+            {posterSrc && (
+              <img
+                src={posterSrc}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+                loading="eager"
+                decoding="async"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            )}
+            <span className="absolute inset-0 bg-gradient-to-t from-ink-950/90 via-ink-950/25 to-ink-950/40" />
+            <span className="relative flex h-16 w-16 items-center justify-center rounded-full bg-fire-600 text-white shadow-[0_10px_30px_-8px_rgba(244,63,79,0.75)] transition-transform duration-200 group-hover:scale-105">
+              <svg className="ms-0.5 h-7 w-7" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </span>
+            <span className="relative mt-3 rounded-full bg-ink-950/70 px-4 py-1.5 text-sm font-bold text-white">
+              {t('video.play')}
+            </span>
+          </button>
+        ) : iframeFallback ? (
           <>
             <iframe
-              ref={(el) => {
-                if (el) ytHostRef.current = el as unknown as HTMLDivElement;
-              }}
               src={`${YT_IFRAME_HOST}/embed/${ytId}?playsinline=1&rel=0&modestbranding=1`}
               title={t('video.play')}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -527,7 +736,7 @@ export default function VideoPlayer({
             </p>
           </>
         ) : (
-          <div ref={ytHostRef} className="absolute inset-0 h-full w-full" />
+          <div ref={hostWrapRef} className="absolute inset-0 h-full w-full" />
         )
       ) : (
         <video
@@ -535,12 +744,13 @@ export default function VideoPlayer({
           src={effectiveSrc}
           poster={poster}
           playsInline
-          className="absolute inset-0 w-full h-full object-contain"
+          controls={coarse}
+          className="absolute inset-0 h-full w-full object-contain"
           preload="metadata"
         />
       )}
 
-      {loading && (
+      {loading && (!isYouTube || started) && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-ink-900/80">
           <div className="relative h-12 w-12">
             <div className="absolute inset-0 animate-spin rounded-full border-4 border-fire-500/25 border-t-fire-500" />
@@ -549,57 +759,100 @@ export default function VideoPlayer({
         </div>
       )}
 
-      <AnimatePresence mode="wait">
-        {showControls && !iframeFallback && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end bg-gradient-to-t from-ink-950/90 via-transparent to-transparent p-4"
-          >
-            <div className="pointer-events-auto flex items-center gap-3 text-white">
-              <button
-                onClick={togglePlay}
-                className="btn-ghost-fire rounded-lg p-2"
-                aria-label={isPlaying ? t('video.pause') : t('video.play')}
-              >
-                {isPlaying ? (
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
-                ) : (
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-                )}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={duration || 100}
-                value={currentTime}
-                onChange={(e) => seek(Number(e.target.value))}
-                className="flex-1 accent-fire-500"
-                aria-label={t('video.seek')}
-              />
-              <span className="w-20 text-right text-sm font-mono tabular-nums">
-                {formatTime(currentTime)} / {formatTime(duration)}
-              </span>
-              <button
-                onClick={cycleRate}
-                className="btn-ghost-fire rounded-lg px-2 py-1 text-xs font-bold"
-                aria-label={t('video.speed')}
-              >
-                {rate}x
-              </button>
-              <button
-                onClick={fullscreen}
-                className="btn-ghost-fire rounded-lg p-2"
-                aria-label={t('video.fullscreen')}
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {showCustomControls && (started || !isYouTube) && (
+        <div
+          className={`pointer-events-none absolute inset-0 z-10 flex flex-col justify-end bg-gradient-to-t from-ink-950/95 via-ink-950/20 to-transparent p-3 transition-opacity duration-200 ${
+            controlsVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          <div className="pointer-events-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 text-white">
+            <button
+              onClick={togglePlay}
+              className="btn-ghost-fire flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+              aria-label={isPlaying ? t('video.pause') : t('video.play')}
+            >
+              {isPlaying ? (
+                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={() => seekBy(-10)}
+              className="btn-ghost-fire flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+              aria-label={t('video.rewind')}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7M20 19l-7-7 7-7" />
+              </svg>
+            </button>
+
+            <button
+              onClick={() => seekBy(10)}
+              className="btn-ghost-fire flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+              aria-label={t('video.forward')}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M4 5l7 7-7 7" />
+              </svg>
+            </button>
+
+            <span className="shrink-0 font-mono text-xs tabular-nums text-gray-200">
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </span>
+
+            <input
+              type="range"
+              min={0}
+              max={duration || 100}
+              step={0.1}
+              value={Math.min(currentTime, duration || 100)}
+              onChange={(e) => seek(Number(e.target.value))}
+              className="h-1.5 min-w-24 flex-1 cursor-pointer accent-fire-500"
+              aria-label={t('video.seek')}
+            />
+
+            <button
+              onClick={toggleMute}
+              className="btn-ghost-fire flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+              aria-label={muted ? t('video.unmute') : t('video.mute')}
+            >
+              {muted ? (
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6m0-6l6 6" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 010 7M19 5a9 9 0 010 14" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={cycleRate}
+              className="btn-ghost-fire shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-bold tabular-nums"
+              aria-label={t('video.speed')}
+            >
+              {rate}x
+            </button>
+
+            <button
+              onClick={fullscreen}
+              className="btn-ghost-fire flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+              aria-label={t('video.fullscreen')}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

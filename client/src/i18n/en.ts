@@ -161,6 +161,10 @@ export const en: TranslationKeys = {
     progressUnavailable: 'Progress is not saved in this session',
     openOnYoutube: 'Open on YouTube',
     openLink: 'Open link',
+    mute: 'Mute',
+    unmute: 'Unmute',
+    rewind: 'Back 10 seconds',
+    forward: 'Forward 10 seconds',
   },
   exam: {
     title: 'Exams',
