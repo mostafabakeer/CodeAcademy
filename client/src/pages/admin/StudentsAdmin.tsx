@@ -435,7 +435,7 @@ export default function StudentsAdmin() {
    * "تم بنجاح" بلا سبب) وبلا تكرار متزامن.
    */
   const loadResetRequests = async () => {
-    const key = 'resets:resets';
+    const key = `${RESETS_ID}:resets`;
     if (activeOpsRef.current.has(key)) return;
     activeOpsRef.current.add(key);
     setBusy((b) => ({ ...b, [key]: true }));
@@ -464,7 +464,7 @@ export default function StudentsAdmin() {
     // نحجز النافذة الآن (قبل await) ثم نوجّهها لواتساب بعد وصول الكود.
     const waWin = preOpenWa();
     void run(
-      `reset-approve:${r.id}`,
+      r.id,
       'reset-approve',
       async () => {
         const d = await api<{ ok: boolean; fullName: string; phone: string; code?: string }>(`/api/admin/password-resets/${r.id}/approve`, { method: 'POST' });
@@ -493,7 +493,7 @@ export default function StudentsAdmin() {
   const rejectReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetRejectConfirm'))) return;
     void run(
-      `reset-reject:${r.id}`,
+      r.id,
       'reset-reject',
       async () => {
         await api(`/api/admin/password-resets/${r.id}/reject`, { method: 'POST' });
@@ -511,7 +511,7 @@ export default function StudentsAdmin() {
   const deleteReset = (r: PasswordRequest) => {
     if (!window.confirm(t('admin.resetDeleteConfirm', { name: r.fullName || r.phone }))) return;
     void run(
-      `reset-delete:${r.id}`,
+      r.id,
       'reset-delete',
       async () => {
         await api(`/api/admin/password-resets/${r.id}`, { method: 'DELETE' });

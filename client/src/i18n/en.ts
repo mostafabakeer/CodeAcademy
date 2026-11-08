@@ -173,6 +173,9 @@ export const en: TranslationKeys = {
     speedLabel: 'Speed: {{speed}}x',
     pip: 'Picture-in-Picture',
     mute: 'Mute',
+    unmute: 'Unmute',
+    rewind: 'Back 10 seconds',
+    forward: 'Forward 10 seconds',
     preloadNext: 'Load next lesson',
   },
   exam: {

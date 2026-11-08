@@ -171,6 +171,9 @@ export const ar = {
     speedLabel: 'السرعة: {{speed}}x',
     pip: 'صورة في صورة',
     mute: 'كتم الصوت',
+    unmute: 'تشغيل الصوت',
+    rewind: 'رجوع 10 ثوانٍ',
+    forward: 'تقديم 10 ثوانٍ',
     preloadNext: 'تحميل الدرس التالي',
   },
   exam: {
