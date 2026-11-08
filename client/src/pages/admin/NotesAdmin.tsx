@@ -61,7 +61,11 @@ export default function NotesAdmin() {
     if (!file) return;
     setUploading(true);
     try {
-      const url = await uploadFile('images', file);
+      const url = await uploadFile('images', file, {
+        grade: form.grade,
+        courseId: form.courseId || undefined,
+        noteId: editing?.id,
+      });
       setForm((f) => ({ ...f, image: url }));
     } catch (e) {
       setError((e as Error).message);
@@ -74,10 +78,18 @@ export default function NotesAdmin() {
     if (!file) return;
     setUploadingPdf(true);
     try {
-      const path = await uploadFile('notes', file);
+      console.log('[NotesAdmin] Uploading PDF:', { name: file.name, size: file.size, type: file.type });
+      const path = await uploadFile('notes', file, {
+        grade: form.grade,
+        courseId: form.courseId || undefined,
+        noteId: editing?.id,
+      });
+      console.log('[NotesAdmin] PDF upload success, path:', path);
       setForm((f) => ({ ...f, pdf: path }));
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      console.error('[NotesAdmin] PDF upload error:', message);
+      setError(message);
     } finally {
       setUploadingPdf(false);
     }

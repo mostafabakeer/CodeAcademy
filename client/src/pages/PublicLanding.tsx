@@ -65,7 +65,7 @@ export default function PublicLanding() {
       <HeroSection
         baseImage="/login-hero.webp"
         highlightImage="/hero-highlight.webp"
-        alt="Ù…Ù†ØµØ© Ø¯ÙƒØªÙˆØ± ÙƒÙˆØ¯ â€” Ù…Ù†ØµØ© ØªØ¹Ù„Ù… Ø§Ù„Ø¨Ø±Ù…Ø¬Ø© Ù„Ø·Ù„Ø§Ø¨ Ø§Ù„Ù…Ø±Ø­Ù„Ø© Ø§Ù„Ø«Ø§Ù†ÙˆÙŠØ©"
+        alt="منصة دكتور كود — منصة تعلم البرمجة لطلاب المرحلة الثانوية"
         eyebrow={t('public.heroEyebrow')}
         titleLines={[
           t('public.heroTitleLine1'),
@@ -78,7 +78,7 @@ export default function PublicLanding() {
         stats={heroStats}
       />
 
-      {/* Ù„Ù…Ø§Ø°Ø§ Ø¯ÙƒØªÙˆØ± ÙƒÙˆØ¯ */}
+      {/* لماذا دكتور كود */}
       <motion.section {...fadeUp} transition={{ duration: 0.5, ease: 'easeOut' }} className="space-y-6">
         <div className="text-center">
           <h2 className="text-2xl font-black sm:text-3xl">{t('public.featuresTitle')}</h2>
@@ -98,13 +98,13 @@ export default function PublicLanding() {
         </div>
       </motion.section>
 
-      {/* Ø§Ù„Ù…Ø¤Ø³Ø³ */}
+      {/* المؤسس */}
       <motion.section {...fadeUp} transition={{ duration: 0.5, ease: 'easeOut' }} className="card-fire grid items-center gap-8 rounded-3xl p-8 lg:grid-cols-[auto_1fr]">
         <div className="relative mx-auto">
           <div aria-hidden className="absolute -inset-2 rounded-full bg-gradient-to-br from-fire-500/40 to-ember-500/40 blur-xl" />
           <img
             src="/owner.webp"
-            alt={`${t('public.founderName')} â€” ${SITE_NAME_AR}`}
+            alt={`${t('public.founderName')} — ${SITE_NAME_AR}`}
             width={200}
             height={200}
             loading="lazy"
@@ -119,7 +119,7 @@ export default function PublicLanding() {
         </div>
       </motion.section>
 
-      {/* Ø¯Ø¹ÙˆØ© Ø£Ø®ÙŠØ±Ø© */}
+      {/* دعوة أخيرة */}
       <motion.section
         {...fadeUp}
         transition={{ duration: 0.5, ease: 'easeOut' }}

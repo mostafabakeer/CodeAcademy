@@ -8,6 +8,7 @@ import PageErrorBoundary from './components/PageErrorBoundary';
 import ErrorBoundary from './components/ErrorBoundary';
 import FloatingMascot from './components/FloatingMascot';
 import InstallPrompt from './components/InstallPrompt';
+import UploadNotifications from './components/UploadNotifications';
 import { useLang } from './i18n';
 import { useSession } from './store/authStore';
 
@@ -141,6 +142,7 @@ export default function App() {
       <Shell />
       <FloatingMascot />
       <InstallPrompt />
+      <UploadNotifications />
     </Suspense>
   );
 }

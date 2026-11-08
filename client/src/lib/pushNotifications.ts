@@ -1,12 +1,16 @@
 import { api } from '../api/client';
 
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY ?? '';
+/** المفتاح قد يُحقن وقت البناء (تحسين)، وإلا نجلبه من الخادم وقت التشغيل. */
+const BUILD_VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY ?? '';
+let runtimeVapidKey: string | null = null;
 
 interface PushSubscriptionData {
   endpoint: string;
   p256dh: string;
   auth: string;
 }
+
+export type PushType = 'lesson' | 'exam' | 'note' | 'test' | 'reset' | 'student';
 
 interface PushPayload {
   title: string;
@@ -15,7 +19,7 @@ interface PushPayload {
   badge?: string;
   data?: {
     url?: string;
-    type?: 'lesson' | 'exam' | 'note';
+    type?: PushType;
     id?: number;
   };
 }
@@ -35,10 +39,44 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 }
 
 /**
+ * المفتاح العام لـ Web Push.
+ *
+ * لا نعتمد على `VITE_VAPID_PUBLIC_KEY` وحده: لو نُسي عند البناء يفشل الاشتراك
+ * بصمت ولا يصل أي إشعار — وهي المشكلة التي جعلت الإشعارات لا تعمل. الخادم
+ * يعرض المفتاح على `/push/public-key` وقت التشغيل، فنظل يعملون في كل الحالات.
+ */
+export async function getVapidPublicKey(): Promise<string> {
+  if (BUILD_VAPID_PUBLIC_KEY) return BUILD_VAPID_PUBLIC_KEY;
+  if (runtimeVapidKey !== null) return runtimeVapidKey;
+  try {
+    const res = await api<{ key?: string; configured?: boolean }>('/push/public-key');
+    runtimeVapidKey = res?.key ?? '';
+  } catch {
+    runtimeVapidKey = '';
+  }
+  return runtimeVapidKey;
+}
+
+/**
  * Check if push notifications are supported
  */
 export function isPushSupported(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+/** هل نحن على iOS/iPadOS؟ (إشعارات الويب لا تعمل إلا بعد تثبيت PWA). */
+export function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  // iPadOS 13+ يقدّم نفسه كـ Macintosh — نتحقق من اللمس أيضاً.
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+/** هل الموقع مفتوح كتطبيق مثبّت على الشاشة الرئيسية؟ */
+export function isStandalonePwa(): boolean {
+  if (typeof window === 'undefined') return false;
+  const iosStandalone = (window.navigator as unknown as { standalone?: boolean }).standalone;
+  return window.matchMedia?.('(display-mode: standalone)')?.matches || iosStandalone === true;
 }
 
 /**
@@ -55,15 +93,71 @@ export async function getPushSubscription(): Promise<PushSubscription | null> {
   }
 }
 
+function subscriptionToData(sub: PushSubscription): PushSubscriptionData {
+  const p256dh = sub.getKey('p256dh');
+  const auth = sub.getKey('auth');
+  if (!p256dh || !auth) throw new Error('Push subscription keys missing');
+  return {
+    endpoint: sub.endpoint,
+    p256dh: btoa(String.fromCharCode(...new Uint8Array(p256dh))),
+    auth: btoa(String.fromCharCode(...new Uint8Array(auth))),
+  };
+}
+
+/** حفظ الاشتراك في الخادم — upsert بالـ endpoint، فتكراره آمن. */
+async function saveSubscription(sub: PushSubscription): Promise<PushSubscriptionData> {
+  const data = subscriptionToData(sub);
+  await api('/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return data;
+}
+
+/** هل الاشتراك الحالي مشترك بنفس مفتاح VAPID؟ (تغيير المفتاح يوجب إعادة الاشتراك). */
+function usesSameKey(sub: PushSubscription, vapidKey: string): boolean {
+  const raw = sub.options?.applicationServerKey;
+  if (!raw) return true;
+  const current = new Uint8Array(raw as ArrayBuffer);
+  const wanted = urlBase64ToUint8Array(vapidKey);
+  if (current.length !== wanted.length) return false;
+  for (let i = 0; i < current.length; i++) {
+    if (current[i] !== wanted[i]) return false;
+  }
+  return true;
+}
+
+/** يضمن وجود اشتراك صالح للجهاز ويعيده (بدون طلب إذن). */
+async function getOrCreateSubscription(vapidKey: string): Promise<PushSubscription> {
+  const registration = await navigator.serviceWorker.ready;
+  let subscription = await registration.pushManager.getSubscription();
+
+  if (subscription && !usesSameKey(subscription, vapidKey)) {
+    // مفتاح الخادم تغيّر ⇒ الاشتراك القديم لا يصلح.
+    await subscription.unsubscribe().catch(() => {});
+    subscription = null;
+  }
+
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidKey),
+    });
+  }
+
+  return subscription;
+}
+
 /**
- * Subscribe user to push notifications
+ * Subscribe user to push notifications (يطلب الإذن عند الحاجة).
  */
 export async function subscribeToPush(): Promise<PushSubscriptionData | null> {
   if (!isPushSupported()) {
     throw new Error('Push notifications not supported');
   }
 
-  if (!VAPID_PUBLIC_KEY) {
+  const vapidKey = await getVapidPublicKey();
+  if (!vapidKey) {
     throw new Error('VAPID public key not configured');
   }
 
@@ -74,29 +168,35 @@ export async function subscribeToPush(): Promise<PushSubscriptionData | null> {
   }
 
   try {
-    const registration = await navigator.serviceWorker.ready;
-
-    const subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-    });
-
-    // Send subscription to backend
-    const subData: PushSubscriptionData = {
-      endpoint: subscription.endpoint,
-      p256dh: btoa(String.fromCharCode(...new Uint8Array(subscription.getKey('p256dh')!))),
-      auth: btoa(String.fromCharCode(...new Uint8Array(subscription.getKey('auth')!))),
-    };
-
-    await api('/push/subscribe', {
-      method: 'POST',
-      body: JSON.stringify(subData),
-    });
-
-    return subData;
+    const subscription = await getOrCreateSubscription(vapidKey);
+    return await saveSubscription(subscription);
   } catch (error) {
     console.error('Push subscription failed:', error);
     throw error;
+  }
+}
+
+/**
+ * مزامنة صامتة عند كل إقلاع.
+ *
+ * الإذن الممنوح لا يكفي: المتصفح قد يجدد الـ endpoint أو يلغيه، فيصبح الاشتراك
+ * المحفوظ على الخادم ميتاً وتتوقف الإشعارات بصمت (خصوصاً والموقع مغلق). هنا:
+ *  - لو الإذن ممنوح ⇒ ننشئ/نستعيد الاشتراك ونرفعه للخادم (upsert).
+ *  - لو لم يُمنح ⇒ لا نفعل شيئاً ولا نزعج المستخدم بأي نافذة إذن.
+ */
+export async function ensurePushSubscription(): Promise<boolean> {
+  if (!isPushSupported()) return false;
+  if (Notification.permission !== 'granted') return false;
+
+  try {
+    const vapidKey = await getVapidPublicKey();
+    if (!vapidKey) return false;
+    const subscription = await getOrCreateSubscription(vapidKey);
+    await saveSubscription(subscription);
+    return true;
+  } catch (error) {
+    console.warn('[push] background sync skipped:', error);
+    return false;
   }
 }
 
@@ -131,6 +231,20 @@ export async function unsubscribeFromPush(): Promise<void> {
 export async function isSubscribedToPush(): Promise<boolean> {
   const subscription = await getPushSubscription();
   return !!subscription;
+}
+
+export interface PushStatus {
+  vapidConfigured: boolean;
+  subscriptions: number;
+}
+
+/** حالة الإشعارات على الخادم لهذا الحساب (تشخيص سبب عدم وصول الإشعارات). */
+export async function getPushStatus(): Promise<PushStatus | null> {
+  try {
+    return await api<PushStatus>('/push/status');
+  } catch {
+    return null;
+  }
 }
 
 /**

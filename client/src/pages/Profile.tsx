@@ -6,10 +6,14 @@ import { useUser, useProgress, useSession } from '../store/authStore';
 import { api } from '../api/client';
 import {
   isPushSupported,
+  isIOS,
+  isStandalonePwa,
   getPushSubscription,
+  getPushStatus,
   subscribeToPush,
   unsubscribeFromPush,
   sendTestPush,
+  type PushStatus,
 } from '../lib/pushNotifications';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
@@ -28,10 +32,17 @@ export default function Profile() {
   const [pushState, setPushState] = useState<PushState>('loading');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMsg, setPushMsg] = useState('');
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const showIosHint = isIOS() && !isStandalonePwa();
+
+  const refreshPushStatus = () => {
+    void getPushStatus().then(setPushStatus);
+  };
 
   useEffect(() => {
     let active = true;
     (async () => {
+      refreshPushStatus();
       if (!isPushSupported()) {
         if (active) setPushState('unsupported');
         return;
@@ -68,6 +79,7 @@ export default function Profile() {
       );
     } finally {
       setPushBusy(false);
+      refreshPushStatus();
     }
   };
 
@@ -149,6 +161,18 @@ export default function Profile() {
         <h2 className="mb-2 font-extrabold">🔔 {t('profile.pushTitle')}</h2>
         <p className="mb-4 text-sm text-gray-500">{t('profile.pushHint')}</p>
 
+        {showIosHint && (
+          <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
+            {t('profile.pushIosInstall')}
+          </p>
+        )}
+
+        {pushStatus && !pushStatus.vapidConfigured && (
+          <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
+            {t('profile.pushServerOff')}
+          </p>
+        )}
+
         {pushState === 'loading' && <p className="text-sm text-gray-400">{t('common.loading')}</p>}
 
         {pushState === 'unsupported' && (
@@ -187,6 +211,11 @@ export default function Profile() {
 
         {pushState === 'enabled' && (
           <p className="mt-2 text-xs font-bold text-emerald-400">{t('profile.pushEnabled')}</p>
+        )}
+        {pushStatus && pushStatus.subscriptions > 0 && (
+          <p className="mt-1 text-xs text-gray-400">
+            {t('profile.pushDevices', { count: pushStatus.subscriptions })}
+          </p>
         )}
         {pushMsg && <p className="mt-2 text-sm font-bold text-red-400">{pushMsg}</p>}
       </section>

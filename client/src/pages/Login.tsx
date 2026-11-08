@@ -12,8 +12,8 @@ import Seo from '../components/Seo';
 export default function Login() {
   const { t } = useLang();
   const login = useAuthStore((s) => s.login);
-  // Ù…Ø´ØªØ±ÙƒØ§Ù† Ù…Ù†ÙØµÙ„Ø§Ù† Ø¨Ø¯Ù„ selector ÙŠÙØ±Ø¬Ø¹ ÙƒØ§Ø¦Ù†Ø§Ù‹ Ø¬Ø¯ÙŠØ¯Ø§Ù‹ ÙƒÙ„ Ù…Ø±Ø© (Zustand 5 + React 19
-  // ÙŠØ±ÙØ¶Ø§Ù† Ø§Ù„Ù„Ù‚Ø·Ø© ØºÙŠØ± Ø§Ù„Ù…Ø³ØªÙ‚Ø±Ø© ÙˆÙŠØ³Ø¨Ù‘Ø¨Ø§Ù† Ø¥Ø¹Ø§Ø¯Ø© ØªØµÙŠÙŠØ± Ù„Ø§ Ù†Ù‡Ø§Ø¦ÙŠØ©).
+  // مشتركان منفصلان بدل selector يُرجع كائناً جديداً كل مرة (Zustand 5 + React 19
+  // يرفضان اللقطة غير المستقرة ويسبّبان إعادة تصيير لا نهائية).
   const user = useAuthStore((s) => s.user);
   const authLoading = useAuthStore((s) => s.loading);
   const navigate = useNavigate();
@@ -29,7 +29,9 @@ export default function Login() {
 
   const lastFail = getLastAuthFail();
   const lastFailMsg =
-    lastFail?.reason === 'expired'
+    lastFail?.reason === 'revoked'
+      ? t('auth.sessionRevoked')
+      : lastFail?.reason === 'expired'
       ? t('auth.diagExpired')
       : lastFail?.reason === 'invalid'
         ? t('auth.diagInvalid')
@@ -139,7 +141,7 @@ export default function Login() {
       </motion.div>
 
       {lastFailMsg && (
-        <p className="mt-3 max-w-sm text-center text-xs leading-relaxed text-gray-500">âš ï¸ {lastFailMsg}</p>
+        <p className="mt-3 max-w-sm text-center text-xs leading-relaxed text-gray-500">⚠️ {lastFailMsg}</p>
       )}
     </div>
   );

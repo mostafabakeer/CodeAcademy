@@ -101,7 +101,7 @@ export default function Navbar() {
   if (user) links.push({ to: '/profile', label: t('nav.profile') });
 
   const handleLogout = async () => {
-    // Ù†Ù†ØªØ¸Ø± Ù…Ø³Ø­ ÙƒÙˆÙƒÙŠ Ø§Ù„Ø¬Ù„Ø³Ø© Ù…Ù† Ø§Ù„Ø®Ø§Ø¯Ù… Ù‚Ø¨Ù„ Ø§Ù„Ø§Ù†ØªÙ‚Ø§Ù„ØŒ Ù…Ø¹ Ø¶Ù…Ø§Ù† Ø§Ù„Ø§Ù†ØªÙ‚Ø§Ù„ ÙÙŠ ÙƒÙ„ Ø§Ù„Ø£Ø­ÙˆØ§Ù„.
+    // ننتظر مسح كوكي الجلسة من الخادم قبل الانتقال، مع ضمان الانتقال في كل الأحوال.
     try {
       await logout();
     } finally {
@@ -113,7 +113,7 @@ export default function Navbar() {
     <header className="sticky top-0 z-40 border-b border-fire-900/30 bg-ink-950/85 backdrop-blur-xl print:hidden" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
       {offline && user && (
         <div className="border-b border-fire-900/30 bg-fire-950/50 px-4 py-1.5 text-center text-xs font-semibold text-fire-200">
-          âš¡ {t('app.reconnectBanner')}
+          ⚡ {t('app.reconnectBanner')}
         </div>
       )}
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -163,7 +163,7 @@ export default function Navbar() {
             className="btn-ghost-fire rounded-lg px-3 py-2 text-sm font-bold"
             title={t('nav.language') ?? ''}
           >
-            {lang === 'ar' ? 'EN' : 'Ø¹Ø±Ø¨ÙŠ'}
+            {lang === 'ar' ? 'EN' : 'عربي'}
           </button>
 
           {user ? (
@@ -269,7 +269,7 @@ export default function Navbar() {
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            aria-label={t('nav.home') + ' â€” mobile'}
+            aria-label={t('nav.home') + ' — mobile'}
             className="overflow-hidden border-t border-fire-900/20 bg-ink-900/95 lg:hidden"
           >
             <div className="space-y-1 px-4 py-3">

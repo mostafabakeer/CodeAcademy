@@ -7,9 +7,9 @@ import Sparkles from '../components/Sparkles';
 import Seo from '../components/Seo';
 
 const RANK_LABEL: Record<string, { ar: string; en: string }> = {
-  '1': { ar: 'Ø§Ù„Ø£ÙˆÙ„', en: '1st' },
-  '2': { ar: 'Ø§Ù„Ø«Ø§Ù†ÙŠ', en: '2nd' },
-  '3': { ar: 'Ø§Ù„Ø«Ø§Ù„Ø«', en: '3rd' },
+  '1': { ar: 'الأول', en: '1st' },
+  '2': { ar: 'الثاني', en: '2nd' },
+  '3': { ar: 'الثالث', en: '3rd' },
 };
 
 export default function TopStudentCertificate() {
@@ -33,13 +33,13 @@ export default function TopStudentCertificate() {
 
   const share = async () => {
     const url = window.location.href;
-    const text = `${t('top.certificate')} â€” ${student?.name} ðŸ† ${t('top.title')}`;
+    const text = `${t('top.certificate')} — ${student?.name} 🏆 ${t('top.title')}`;
     if (navigator.share) {
       try {
         await navigator.share({ title: t('top.certificate'), text, url });
         return;
       } catch {
-        /* Ø£ÙÙ„ØºÙŠØª Ø§Ù„Ù…Ø´Ø§Ø±ÙƒØ© */
+        /* أُلغيت المشاركة */
       }
     }
     try {
@@ -47,7 +47,7 @@ export default function TopStudentCertificate() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      /* ØªØ¬Ø§Ù‡Ù„ */
+      /* تجاهل */
     }
   };
 
@@ -59,7 +59,7 @@ export default function TopStudentCertificate() {
   return (
     <div className="relative mx-auto flex min-h-[80vh] max-w-3xl flex-col items-center justify-center py-10">
       <Seo
-        title={student ? `${t('top.certificate')} â€” ${student.name}` : t('top.certificate')}
+        title={student ? `${t('top.certificate')} — ${student.name}` : t('top.certificate')}
         path={id ? `/top-students/${id}` : '/top-students'}
         noindex
       />
@@ -68,13 +68,13 @@ export default function TopStudentCertificate() {
       <div className="relative z-10 flex w-full flex-col items-center">
         <div className="mb-6 flex flex-wrap items-center justify-center gap-3 print:hidden">
           <button onClick={() => window.print()} className="btn-fire rounded-xl px-5 py-2.5 text-sm font-bold text-white">
-            ðŸ–¨ {t('top.print')}
+            🖨 {t('top.print')}
           </button>
           <button onClick={share} className="btn-ghost-fire rounded-xl px-5 py-2.5 text-sm font-bold">
-            {copied ? `âœ… ${t('top.shareCopied')}` : `ðŸ”— ${t('top.share')}`}
+            {copied ? `✅ ${t('top.shareCopied')}` : `🔗 ${t('top.share')}`}
           </button>
           <Link to="/top-students" className="btn-ghost-fire rounded-xl px-5 py-2.5 text-sm font-bold">
-            â† {t('nav.topStudents')}
+            ← {t('nav.topStudents')}
           </Link>
         </div>
 
@@ -124,13 +124,13 @@ export default function TopStudentCertificate() {
                     <div className="absolute inset-0 rounded-full border-2 border-dashed border-amber-400/70" />
                     <div className="absolute inset-2 rounded-full border border-amber-400/60 bg-gradient-to-b from-amber-100 via-amber-200 to-amber-300 shadow-inner" />
                     <span className="relative text-4xl drop-shadow sm:text-5xl">
-                      {student.rank <= 3 ? (student.rank === 1 ? 'ðŸ¥‡' : student.rank === 2 ? 'ðŸ¥ˆ' : 'ðŸ¥‰') : 'ðŸ…'}
+                      {student.rank <= 3 ? (student.rank === 1 ? '🥇' : student.rank === 2 ? '🥈' : '🥉') : '🏅'}
                     </span>
                   </div>
 
                   <div className="mb-3 flex items-center justify-center gap-3">
                     <span className="h-px max-w-28 flex-1 bg-gradient-to-r from-transparent to-amber-500/70" />
-                    <span className="text-lg text-amber-500">âœ¦</span>
+                    <span className="text-lg text-amber-500">✦</span>
                     <span className="h-px max-w-28 flex-1 bg-gradient-to-l from-transparent to-amber-500/70" />
                   </div>
                   <h1 className="text-3xl font-black tracking-tight sm:text-[2.75rem]">
@@ -151,7 +151,7 @@ export default function TopStudentCertificate() {
                   <div className="mx-auto mt-12 flex items-end justify-between gap-6">
                     <div className="text-center">
                       <div className="w-40 border-t-2 border-gray-400 pt-2.5 text-base font-black text-gray-700 sm:w-44">
-                        {lang === 'ar' ? 'Ù…ØµØ·ÙÙ‰ Ø¨ÙƒÙŠØ±' : 'Mostafa Bakir'}
+                        {lang === 'ar' ? 'مصطفى بكير' : 'Mostafa Bakir'}
                       </div>
                       <div className="mt-1 text-xs text-gray-500">{t('top.founderTitle')}</div>
                     </div>

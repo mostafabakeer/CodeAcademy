@@ -20,6 +20,21 @@ jobs:
         working-directory: client
         run: npm ci
 
+      - name: Check text encoding (mojibake guard)
+        working-directory: client
+        run: npm run check:encoding
+
+      - name: Warn when VAPID public key is not configured
+        shell: bash
+        env:
+          VAPID_PUBLIC: ${{ secrets.VAPID_PUBLIC_KEY }}
+        run: |
+          # الواجهة تجلب المفتاح من الخادم وقت التشغيل (/push/public-key)، لكن
+          # حقنه وقت البناء يقلل طلباً واحداً. نكتفي بالتحذير حتى لا يتوقف النشر.
+          if [ -z "$VAPID_PUBLIC" ]; then
+            echo "::warning::Secret VAPID_PUBLIC_KEY is empty — the client will fetch it from /push/public-key at runtime. Make sure Supabase secrets VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT are set, otherwise no push will be delivered."
+          fi
+
       - name: Build client
         working-directory: client
         env:

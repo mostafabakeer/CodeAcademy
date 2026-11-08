@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import { api } from '../../api/client';
+import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import FormField from '../../components/FormField';
 import GradeSelect from '../../components/GradeSelect';
@@ -29,6 +30,7 @@ export default function CoursesAdmin() {
   const [editing, setEditing] = useState<Course | null>(null);
   const [form, setForm] = useState(empty);
   const [error, setError] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const load = useCallback(() => {
     api<{ courses: Course[] }>('/api/courses')
@@ -55,7 +57,23 @@ export default function CoursesAdmin() {
     setOpen(true);
   };
 
-  const submit = async (e: FormEvent) => {
+  const onImageUpload = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingImage(true);
+    setError('');
+    try {
+      const url = await uploadFile('images', file, {
+        grade: form.grade,
+      });
+      setForm((f) => ({ ...f, image: url }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     if (!form.title.trim()) return setError(t('errors.required'));
@@ -138,6 +156,13 @@ export default function CoursesAdmin() {
           <FormField label={t('admin.courseDescEn')}>
             <textarea className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" rows={3} value={form.descriptionEn} onChange={(e) => setForm({ ...form, descriptionEn: e.target.value })} />
           </FormField>
+          <div className="rounded-2xl border border-fire-500/30 bg-fire-950/20 p-4">
+            <label className="mb-1.5 block text-sm font-bold text-fire-200">{t('admin.imageUrl')} — {t('admin.uploadImage')}</label>
+            <input type="file" accept="image/*" onChange={(e) => onImageUpload(e.target.files?.[0])} className="input-fire w-full rounded-xl px-4 py-2.5 text-sm" />
+            {uploadingImage && <p className="mt-1 text-xs text-ember-400">{t('admin.uploading')}...</p>}
+            {form.image && !uploadingImage && <p className="mt-1 text-xs text-emerald-400">✓ {t('admin.uploaded')}</p>}
+            <p className="mt-1 text-xs text-gray-400">{t('admin.imageUrlHint')}</p>
+          </div>
           <FormField label={t('admin.grade')}>
             <GradeSelect value={form.grade} onChange={(v) => setForm({ ...form, grade: v })} />
           </FormField>

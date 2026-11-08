@@ -256,6 +256,9 @@ export default function VideoPlayer({
             if (queued.time > 0) p.seekTo(queued.time, true);
             p.setPlaybackRate(queued.rate);
             p.setVolume(queued.mute ? 0 : 100);
+            if (queued.action === 'play') {
+              p.playVideo();
+            }
           }
           if (!autoPlay) {
             setIsLoading(false);
@@ -307,7 +310,16 @@ export default function VideoPlayer({
   const togglePlay = async () => {
     if (isYouTube) {
       const player = ytPlayerRef.current;
-      if (!player) return;
+      if (!player) {
+        // اللاعب غير جاهز بعد — نضع الطلب في الطابور
+        ytQueueRef.current = {
+          time: ytQueueRef.current?.time ?? 0,
+          rate: ytQueueRef.current?.rate ?? rate,
+          mute: ytQueueRef.current?.mute ?? isMuted,
+          action: 'play'
+        };
+        return;
+      }
       if (isPlaying) player.pauseVideo();
       else player.playVideo();
     } else {

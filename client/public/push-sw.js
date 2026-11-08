@@ -66,3 +66,54 @@ self.addEventListener('notificationclick', (event) => {
     })(),
   );
 });
+
+/**
+ * المتصفح يجدّد اشتراك الـ push من تلقاء نفسه أحياناً (تحديث مفاتيح/إعادة تثبيت).
+ * بدون هذا المعالج يبقى الخادم يحتفظ بالـ endpoint القديم الميت، فلا يصل أي
+ * إشعار — حتى لو كان كل شيء آخر سليماً. نعيد الاشتراك ونرفع الجديد للخادم.
+ *
+ * ملاحظة: الـ service worker لا يملك حالة تسجيل الدخول في الذاكرة، لكن طلب
+ * fetch من نفس الأصل يرسل كوكي الجلسة HttpOnly تلقائياً مع credentials: include.
+ */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const old = event.oldSubscription;
+        const applicationServerKey =
+          (old && old.options && old.options.applicationServerKey) ||
+          (event.newSubscription && event.newSubscription.options && event.newSubscription.options.applicationServerKey);
+
+        let sub = event.newSubscription;
+        if (!sub && applicationServerKey) {
+          sub = await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey,
+          });
+        }
+        if (!sub) return;
+
+        const bufToBase64 = (buf) => {
+          let binary = '';
+          const bytes = new Uint8Array(buf);
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          return btoa(binary);
+        };
+
+        await fetch('/api/push/subscribe', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: sub.endpoint,
+            p256dh: bufToBase64(sub.getKey('p256dh')),
+            auth: bufToBase64(sub.getKey('auth')),
+          }),
+        });
+      } catch (err) {
+        // لا شيء نفعله هنا — المزامنة التالية عند فتح الموقع ستعيد المحاولة.
+        console.warn('[push-sw] resubscribe failed', err);
+      }
+    })(),
+  );
+});

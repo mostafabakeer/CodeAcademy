@@ -1,8 +1,33 @@
 import { SUPABASE_URL } from '../config';
 import { readStoredToken, writeStoredToken, clearStoredToken } from '../lib/sessionToken';
+import { clearSessionSnapshot } from '../lib/localStore';
 import { getContentVersion } from '../lib/content';
 
 const AUTH_FAIL_KEY = 'dr_code_lastAuthFail';
+
+/** حدث داخلي: الخادم أبطل الجلسة لأن نفس الحساب دخل من جهاز آخر. */
+export const SESSION_REVOKED_EVENT = 'dr:session-revoked';
+
+/**
+ * الخادم يبطل جلسات الأدمن القديمة عند الدخول من جهاز جديد. نسجّل السبب
+ * لتعرض صفحة الدخول رسالة واضحة، ونطلق حدثاً حتى يخرج الجهاز القديم فوراً.
+ */
+function markSessionRevoked(): void {
+  try {
+    localStorage.setItem(
+      AUTH_FAIL_KEY,
+      JSON.stringify({ at: Date.now(), status: 401, reason: 'revoked' } satisfies AuthFailRecord),
+    );
+  } catch {
+    /* ignore */
+  }
+  clearSessionSnapshot();
+  try {
+    window.dispatchEvent(new CustomEvent(SESSION_REVOKED_EVENT));
+  } catch {
+    /* ignore */
+  }
+}
 
 /* =================== تشخيص الجلسات =================== */
 
@@ -310,7 +335,19 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
 
     // 401 على مسار محمي: نحاول تجديد الجلسة مرة واحدة (كوكي أو Bearer احتياطي).
     if (res.status === 401) {
-      res.body?.cancel().catch(() => {});
+      // نقرأ الجسم قبل إلغائه: الخادم يميّز «جلسة أُبطلت من جهاز آخر»
+      // (code: session_revoked) عن انتهاء الصلاحية العادي.
+      const unauthorized = (await res.json().catch(() => null)) as
+        | { code?: string; error?: string }
+        | null;
+
+      if (unauthorized?.code === 'session_revoked') {
+        // لا نعيد المحاولة: تجديد الجلسة هنا يمنح الجهاز القديم توكناً جديداً
+        // ويلغي فكرة «الأدمن على جهاز واحد».
+        clearStoredToken();
+        markSessionRevoked();
+        throw new ApiError(unauthorized.error || 'تم تسجيل الدخول من جهاز آخر', 401);
+      }
 
       if (!shouldRetryOn401) {
         // مسار مصادقة ذاتي. 401 من /auth/me ⇒ النسخة المحلية لم تعد صالحة.

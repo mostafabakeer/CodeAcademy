@@ -10,7 +10,7 @@ import Seo from '../components/Seo';
 export default function Register() {
   const { t } = useLang();
   const register = useAuthStore((s) => s.register);
-  // Ù…Ø´ØªØ±ÙƒØ§Ù† Ù…Ù†ÙØµÙ„Ø§Ù† Ø¨Ø¯Ù„ selector ÙŠÙØ±Ø¬Ø¹ ÙƒØ§Ø¦Ù†Ø§Ù‹ Ø¬Ø¯ÙŠØ¯Ø§Ù‹ ÙƒÙ„ Ù…Ø±Ø© (Zustand 5 + React 19).
+  // مشتركان منفصلان بدل selector يُرجع كائناً جديداً كل مرة (Zustand 5 + React 19).
   const user = useAuthStore((s) => s.user);
   const authLoading = useAuthStore((s) => s.loading);
   const navigate = useNavigate();
@@ -83,7 +83,7 @@ export default function Register() {
                 name="fullName"
                 autoComplete="name"
                 className="input-fire w-full rounded-xl px-4 py-3"
-                placeholder="Ù…Ø«Ø§Ù„: Ø£Ø­Ù…Ø¯ Ù…Ø­Ù…Ø¯ Ø¹Ù„ÙŠ"
+                placeholder={t('auth.namePlaceholder')}
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
               />

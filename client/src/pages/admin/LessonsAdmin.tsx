@@ -74,7 +74,11 @@ export default function LessonsAdmin() {
     setUploading(true);
     setError('');
     try {
-      const url = await uploadFile('videos', file);
+      const course = courses.find(c => c.id === form.courseId);
+      const url = await uploadFile('videos', file, {
+        grade: form.grade,
+        courseId: form.courseId || undefined,
+      });
       setForm((f) => ({ ...f, videoType: 'upload', videoUrl: url }));
     } catch (e) {
       setError((e as Error).message);

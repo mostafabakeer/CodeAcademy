@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { onAuthBroadcast } from '../lib/sessionSync';
+import { SESSION_REVOKED_EVENT } from '../api/client';
+import { ensurePushSubscription } from '../lib/pushNotifications';
 
 interface AuthInitializerProps {
   children: React.ReactNode;
@@ -20,6 +22,7 @@ interface AuthInitializerProps {
 export function AuthInitializer({ children }: AuthInitializerProps) {
   const [authReady, setAuthReady] = useState(false);
   const runBoot = useAuthStore((s) => s.runBoot);
+  const userId = useAuthStore((s) => s.user?.id ?? null);
   const bootedRef = useRef(false);
 
   useEffect(() => {
@@ -75,6 +78,45 @@ export function AuthInitializer({ children }: AuthInitializerProps) {
     };
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
+  }, []);
+
+  // مزامنة اشتراك الإشعارات والاستماع للتنبيهات عند كل إقلاع/دخول
+  useEffect(() => {
+    if (!userId) return;
+    void ensurePushSubscription();
+
+    // الاستماع لإشعارات الرفع: عند نجاح رفع محتوى جديد، نبطل كاش bootstrap
+    // ليتم جلب البيانات الجديدة عند الطلب التالي (مثل فتح قائمة المذكرات/الدروس)
+    // دون إغلاق النوافذ المفتوحة (Modals).
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('upload-notifications');
+      channel.onmessage = (event) => {
+        if (event.data?.success) {
+          import('../lib/content').then(({ invalidateBootstrap }) => {
+            invalidateBootstrap(userId);
+          });
+        }
+      };
+      return () => {
+        channel.close();
+      };
+    }
+  }, [userId]);
+
+  // الجهاز القديم للأدمن: الخادم أبطل جلسته لأن الحساب دخل من جهاز آخر.
+  useEffect(() => {
+    const onRevoked = () => {
+      useAuthStore.setState({
+        user: null,
+        stats: null,
+        examResults: [],
+        levels: [],
+        offline: false,
+        loading: false,
+      });
+    };
+    window.addEventListener(SESSION_REVOKED_EVENT, onRevoked);
+    return () => window.removeEventListener(SESSION_REVOKED_EVENT, onRevoked);
   }, []);
 
   if (!authReady) {

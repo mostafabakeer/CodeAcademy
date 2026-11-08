@@ -61,6 +61,14 @@ export async function signToken(
 
 type DecodedToken = AuthUser & { iat?: number };
 
+/** سبب فشل المصادقة — يسمح للواجهة بتمييز «جلسة أُبطلت» عن «توكن غير صالح». */
+export type AuthFailureReason = 'missing' | 'invalid' | 'revoked';
+
+export interface AuthResolution {
+  user: AuthUser | null;
+  reason: AuthFailureReason | null;
+}
+
 function verifyToken(token: string): Promise<DecodedToken | null> {
   return jose
     .jwtVerify(token, key)
@@ -109,39 +117,58 @@ function bearerToken(req: Request): string | null {
  * يعيد المستخدم الطازج من قاعدة البيانات (فحص الحظر/الاشتراك فورياً).
  */
 export async function getAuthUser(req: Request): Promise<AuthUser | null> {
+  const { user } = await getAuthState(req);
+  return user;
+}
+
+/**
+ * نسخة مفصّلة: ترجع سبب الفشل أيضاً حتى نرد بكود `session_revoked` عندما
+ * يكون التوكن صحيحاً لكن أُبطل (تسجيل دخول من جهاز آخر / خروج من كل الأجهزة).
+ */
+export async function getAuthState(req: Request): Promise<AuthResolution> {
+  let reason: AuthFailureReason | null = null;
+
   const bearer = bearerToken(req);
   if (bearer) {
-    const user = await resolveUser(bearer);
-    if (user) return user;
+    const res = await resolveUser(bearer);
+    if (res.user) return res;
+    reason = res.reason;
   }
 
   const cookie = parseCookie(req, AUTH_COOKIE);
   if (cookie) {
-    const user = await resolveUser(cookie);
-    if (user) return user;
+    const res = await resolveUser(cookie);
+    if (res.user) return res;
+    if (res.reason === 'revoked' || reason === null) reason = res.reason;
   }
 
-  return null;
+  return { user: null, reason: reason ?? 'missing' };
 }
 
-async function resolveUser(token: string): Promise<AuthUser | null> {
+async function resolveUser(token: string): Promise<AuthResolution> {
   const decoded = await verifyToken(token);
-  if (!decoded) return null;
+  if (!decoded) return { user: null, reason: 'invalid' };
 
   const epoch = await getSessionEpoch();
-  if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) return null;
+  if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) {
+    return { user: null, reason: 'revoked' };
+  }
 
   const cached = getCachedUser(decoded.id);
   if (cached) {
-    // توكن صادر قبل آخر "خروج من كل الأجهزة" ⇒ مرفوض حتى لو كاش المستخدم موجود.
-    return (cached.tokenVersion ?? 0) === (decoded.tokenVersion ?? 0) ? cached : null;
+    // توكن صادر قبل آخر إبطال (خروج من كل الأجهزة / جهاز واحد للأدمن) ⇒ مرفوض.
+    return (cached.tokenVersion ?? 0) === (decoded.tokenVersion ?? 0)
+      ? { user: cached, reason: null }
+      : { user: null, reason: 'revoked' };
   }
 
   // findAuthUserById يرمي خطأً حقيقياً عند فشل قاعدة البيانات (يرتد كـ 500 مؤقت
   // بدلاً من 401)، ويرجع null فقط عند عدم وجود المستخدم → 401 حقيقي.
   const user: DbUser | null = await findAuthUserById(decoded.id);
-  if (!user) return null;
-  if ((user.tokenVersion ?? 0) !== (decoded.tokenVersion ?? 0)) return null;
+  if (!user) return { user: null, reason: 'invalid' };
+  if ((user.tokenVersion ?? 0) !== (decoded.tokenVersion ?? 0)) {
+    return { user: null, reason: 'revoked' };
+  }
 
   const authUser: AuthUser = {
     id: user.id,
@@ -154,7 +181,7 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
     tokenVersion: user.tokenVersion ?? 0,
   };
   setCachedUser(authUser);
-  return authUser;
+  return { user: authUser, reason: null };
 }
 
 /**
@@ -188,8 +215,15 @@ export function clearAuthCookieHeader(host?: string): string {
 /* =================== وسائط Hono =================== */
 
 export async function requireAuth(c: Context, next: Next): Promise<Response | void> {
-  const user = await getAuthUser(c.req.raw);
-  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+  const { user, reason } = await getAuthState(c.req.raw);
+  if (!user) {
+    // جلسة أُبطلت (دخول من جهاز آخر أو «خروج من كل الأجهزة») ⇒ كود مميّز
+    // حتى تعرض الواجهة سبباً واضحاً بدل «انتهت الجلسة» المبهم.
+    if (reason === 'revoked') {
+      return c.json({ error: 'تم تسجيل الدخول من جهاز آخر', code: 'session_revoked' }, 401);
+    }
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
   if (user.blocked) return c.json({ error: 'تم حظر حسابك من قبل إدارة الموقع' }, 403);
   c.set('user', user);
   await next();

@@ -231,6 +231,13 @@ app.post('/auth/register', async (c) => {
   });
 
   recordRegister(clientIp);
+  // إشعار الأدمن بحساب جديد (بدون أي بيانات حساسة).
+  void sendPushToAdmins({
+    title: '👤 طالب جديد سجّل',
+    body: `${user.fullName} — ${GRADES[user.grade] || user.grade || 'بدون صف'}`,
+    url: '/admin/students',
+    type: 'student',
+  });
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
@@ -262,7 +269,20 @@ app.post('/auth/login', async (c) => {
   }
 
   clearLoginFailures(loginKey);
-  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
+
+  // الأدمن على جهاز واحد فقط: نُبطل كل الجلسات السابقة (أي جهاز آخر) لحظة الدخول.
+  // الطلاب غير متأثرين — يمكنهم الدخول من أكثر من جهاز كالسابق.
+  let tokenVersion = user.tokenVersion ?? 0;
+  if (user.role === 'admin') {
+    try {
+      tokenVersion = await bumpTokenVersion(user.id);
+      invalidateUserCache(user.id);
+    } catch (e) {
+      console.error('[api] login bumpTokenVersion:', (e as Error).message);
+    }
+  }
+
+  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, tokenVersion);
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
 
@@ -327,6 +347,13 @@ app.post('/auth/forgot-password', async (c) => {
   }
   try {
     const reset = await createPasswordReset(user.id);
+    // إشعار الأدمن فوراً — الطلب ينتظر موافقة يدوية، فالتأخير يعني طالباً عالقاً.
+    void sendPushToAdmins({
+      title: '🔑 طلب استعادة كلمة سر',
+      body: `${user.fullName || user.phone} — ${GRADES[user.grade] || user.grade || 'بدون صف'}`,
+      url: '/admin/students',
+      type: 'reset',
+    });
     return c.json({ ok: true, requestId: reset.id });
   } catch (e) {
     console.error('[api] forgot-password createPasswordReset:', (e as Error).message);
@@ -1520,6 +1547,29 @@ interface PushSubscriptionRow {
   created_at: number;
 }
 
+/**
+ * المفتاح العام لـ Web Push — عام بطبيعته (يُرسل لكل متصفح يشترك).
+ * نُرجعه من الخادم وقت التشغيل حتى لا تتوقف الإشعارات على متغيّر وقت البناء
+ * (لو نُسي عند البناء يفشل الاشتراك بصمت ولا يصل أي إشعار).
+ */
+app.get('/push/public-key', (c) => {
+  const key = Deno.env.get('VAPID_PUBLIC_KEY') ?? '';
+  return c.json({ key, configured: !!key }, 200, { 'Cache-Control': 'public, max-age=3600' });
+});
+
+/** تشخيص حالة الإشعارات للمستخدم الحالي + جاهزية الخادم. */
+app.get('/push/status', requireAuth, async (c) => {
+  const user = getUser(c);
+  const { count, error } = await sb
+    .from('push_subscriptions')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', user.id);
+  return c.json({
+    vapidConfigured: !!Deno.env.get('VAPID_PUBLIC_KEY') && !!Deno.env.get('VAPID_PRIVATE_KEY'),
+    subscriptions: error ? -1 : (count ?? 0),
+  });
+});
+
 /** حفظ اشتراك push للمستخدم (يحل محل أي اشتراك سابق لنفس الـ endpoint). */
 app.post('/push/subscribe', requireAuth, requireSubscriber, async (c) => {
   const user = getUser(c);
@@ -1577,7 +1627,7 @@ interface PushPayloadServer {
   title: string;
   body: string;
   url?: string;
-  type?: 'lesson' | 'exam' | 'note' | 'test';
+  type?: 'lesson' | 'exam' | 'note' | 'test' | 'reset' | 'student';
   id?: number;
   icon?: string;
   badge?: string;
@@ -1679,7 +1729,25 @@ export async function sendPushToGrade(grade: string, payload: PushPayloadServer)
   } catch (e) {
     console.error('[push] sendPushToGrade error:', (e as Error).message);
   }
-});
+}
+
+/** إرسال تنبيه إداري لكل أجهزة الأدمن (حساب جديد / طلب استعادة كلمة سر). */
+export async function sendPushToAdmins(payload: PushPayloadServer): Promise<void> {
+  try {
+    const { data, error } = await sb
+      .from('push_subscriptions')
+      .select('endpoint, p256dh, auth, users!inner(id, role)')
+      .eq('users.role', 'admin')
+      .limit(50);
+    if (error) {
+      console.error('[push] load admin subscriptions:', error.message);
+      return;
+    }
+    await deliverPush((data ?? []) as PushSubRow[], payload);
+  } catch (e) {
+    console.error('[push] sendPushToAdmins error:', (e as Error).message);
+  }
+}
 
 // رابط رفع مباشر إلى Storage (تجاوز حد الحجم في الدوال) — يوقّع URL ثم يرفع المتصفح مباشرة
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -1735,7 +1803,8 @@ app.post('/admin/upload-url', requireAuth, requireAdmin, async (c) => {
     ? { public: false, fileSizeLimit: MAX_NOTE_PDF_BYTES, allowedMimeTypes: ['application/pdf'] }
     : { public: true };
   await ensureBucket(bucket, bucketOptions);
-  const safeName = fileName.replace(/[^\w\u0600-\u06FF.-]+/g, '-');
+  // Supabase Storage \u064A\u062A\u0637\u0644\u0628 \u0623\u0633\u0645\u0627\u0621 \u0645\u0644\u0641\u0627\u062A \u0628\u0640 ASCII \u0641\u0642\u0637 (\u0628\u062F\u0648\u0646 \u062D\u0631\u0648\u0641 \u0639\u0631\u0628\u064A\u0629)
+  const safeName = fileName.replace(/[^a-zA-Z0-9.-]+/g, '-');
   const safePath = isPdf
     ? `${Date.now()}-${safeName.replace(/\.pdf$/i, '').slice(0, 36) || 'note'}.pdf`
     : `${Date.now()}-${safeName.slice(0, 40)}`;

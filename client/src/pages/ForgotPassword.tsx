@@ -104,7 +104,7 @@ export default function ForgotPassword() {
     }
   };
 
-  // Auto-poll status while pending â€” updates UI when admin approves/rejects
+  // Auto-poll status while pending — updates UI when admin approves/rejects
   useEffect(() => {
     if (status !== 'pending' || !phone.trim() || done) return;
     const timer = setInterval(() => {
@@ -198,7 +198,7 @@ export default function ForgotPassword() {
         rel="noopener noreferrer"
         className="btn-fire flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-white"
       >
-        ðŸ’¬ {t('auth.contactReadmin')}
+        💬 {t('auth.contactReadmin')}
       </a>
       <button
         onClick={checkStatus}
@@ -270,7 +270,7 @@ export default function ForgotPassword() {
     if (requested || status === 'pending') {
       return renderPending;
     }
-    // Ø§Ù„Ø­Ø§Ù„Ø© Ø§Ù„Ø£ÙˆÙ„ÙŠØ©: Ø¥Ø¯Ø®Ø§Ù„ Ø§Ù„Ø±Ù‚Ù…
+    // الحالة الأولية: إدخال الرقم
     return (
       <form onSubmit={submitRequest} className="space-y-4">
         <div>
