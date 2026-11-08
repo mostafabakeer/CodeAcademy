@@ -14,7 +14,7 @@ const ExamScores: FC<ExamScoresProps> = ({ scores, emptyLabel }) => {
     <div className="flex flex-wrap items-center gap-1.5">
       {sorted.map((s) => (
         <span
-          key={s.examId}
+          key={`${s.examId}-${s.at}`}
           className={`inline-block rounded-md px-2 py-0.5 text-xs font-bold ${
             s.score >= 50 ? 'bg-fire-400/15 text-fire-300' : 'bg-red-500/15 text-red-400'
           }`}

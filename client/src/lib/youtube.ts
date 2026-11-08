@@ -93,3 +93,13 @@ export function canonicalizeYouTubeUrl(input: string | null | undefined): string
   const id = extractYouTubeId(input);
   return id ? buildYouTubeWatchUrl(id) : null;
 }
+
+/**
+ * يرجع رابط الصورة المصغّرة للفيديو (عالية الدقة مع جودة افتراضية بديلة).
+ */
+export function getYouTubeThumbnail(input: string | null | undefined): string | null {
+  const id = extractYouTubeId(input);
+  if (!id) return null;
+  return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+}
+

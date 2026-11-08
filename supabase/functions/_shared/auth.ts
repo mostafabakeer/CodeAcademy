@@ -14,6 +14,8 @@ export interface AuthUser {
   grade: string;
   blocked?: boolean;
   subscription?: boolean;
+  /** نسخة جلسات الحساب — تُقارن مع `tv` داخل التوكن لإبطال الجلسات القديمة. */
+  tokenVersion?: number;
 }
 
 const encoder = new TextEncoder();
@@ -39,13 +41,17 @@ export function invalidateUserCache(userId: number): void {
 }
 
 /** نفس تنسيق التوكن القديم (jsonwebtoken HS256) حتى تبقى الجلسات سارية بعد الترحيل. */
-export async function signToken(user: Pick<AuthUser, 'id' | 'role' | 'fullName' | 'phone' | 'grade'>): Promise<string> {
+export async function signToken(
+  user: Pick<AuthUser, 'id' | 'role' | 'fullName' | 'phone' | 'grade'>,
+  tokenVersion = 0,
+): Promise<string> {
   return await new jose.SignJWT({
     id: user.id,
     role: user.role,
     fullName: user.fullName,
     phone: user.phone,
     grade: user.grade,
+    tv: tokenVersion,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
@@ -64,6 +70,7 @@ function verifyToken(token: string): Promise<DecodedToken | null> {
       fullName: String(payload.fullName ?? ''),
       phone: String(payload.phone ?? ''),
       grade: String(payload.grade ?? ''),
+      tokenVersion: Number(payload.tv ?? 0) || 0,
       iat: typeof payload.iat === 'number' ? payload.iat : undefined,
     }))
     .catch(() => null);
@@ -125,12 +132,16 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
   if (epoch > 0 && (!decoded.iat || decoded.iat * 1000 < epoch)) return null;
 
   const cached = getCachedUser(decoded.id);
-  if (cached) return cached;
+  if (cached) {
+    // توكن صادر قبل آخر "خروج من كل الأجهزة" ⇒ مرفوض حتى لو كاش المستخدم موجود.
+    return (cached.tokenVersion ?? 0) === (decoded.tokenVersion ?? 0) ? cached : null;
+  }
 
   // findAuthUserById يرمي خطأً حقيقياً عند فشل قاعدة البيانات (يرتد كـ 500 مؤقت
   // بدلاً من 401)، ويرجع null فقط عند عدم وجود المستخدم → 401 حقيقي.
   const user: DbUser | null = await findAuthUserById(decoded.id);
   if (!user) return null;
+  if ((user.tokenVersion ?? 0) !== (decoded.tokenVersion ?? 0)) return null;
 
   const authUser: AuthUser = {
     id: user.id,
@@ -140,6 +151,7 @@ async function resolveUser(token: string): Promise<AuthUser | null> {
     grade: user.grade ?? decoded.grade,
     blocked: !!user.blocked,
     subscription: !!user.subscription,
+    tokenVersion: user.tokenVersion ?? 0,
   };
   setCachedUser(authUser);
   return authUser;

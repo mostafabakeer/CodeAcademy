@@ -1,6 +1,9 @@
 /sw.js
   Cache-Control: no-cache
 
+/push-sw.js
+  Cache-Control: no-cache
+
 /workbox-*.js
   Cache-Control: no-cache
 
@@ -10,8 +13,17 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# Pyodide (Python in browser): أصول كبيرة لا تتغيّر — كاش طويل يقلّل التحميل المتكرر
+/pyodide/*
+  Cache-Control: public, max-age=2592000
+  Cross-Origin-Resource-Policy: same-origin
+
 /logo.png
   Cache-Control: public, max-age=86400
+
+# صور WebP المضغوطة (بديل PNG/JPG الثقيل) — كاش طويل
+/*.webp
+  Cache-Control: public, max-age=2592000
 
 /login-hero.png
   Cache-Control: public, max-age=86400

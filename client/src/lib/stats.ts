@@ -1,6 +1,9 @@
 import type { VideoProgressLocal } from './localStore';
 
-// ===== حساب إحصائيات الطالب في المتصفح (نفس معادلة الباك اند) =====
+// ===== حساب إحصائيات الطالب — المرجع الوحيد للمعادلة =====
+// هذه الدالة هي المصدر الوحيد لحساب الإحصائيات.
+// الـ Backend (supabase/functions/_shared/db.ts) يطبق نفس المنطق في computeStudentStats.
+// أي تغيير في المعادلة يجب تحديثه في المكانين لضمان تطابق النتائج.
 
 export interface LevelTier {
   min: number;

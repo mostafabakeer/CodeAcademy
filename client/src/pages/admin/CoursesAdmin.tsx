@@ -84,9 +84,9 @@ export default function CoursesAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-black">📚 {t('admin.courses')}</h1>
-        <button onClick={openNew} className="btn-fire rounded-xl px-4 py-2 text-sm font-bold text-white">
+        <button onClick={openNew} className="btn-fire shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold text-white">
           + {t('admin.addCourse')}
         </button>
       </div>
@@ -112,10 +112,10 @@ export default function CoursesAdmin() {
                 </div>
               </div>
               <div className="mt-3 flex gap-2">
-                <button onClick={() => openEdit(c)} className="btn-ghost-fire rounded-lg px-4 py-1.5 text-sm font-bold">
+                <button onClick={() => openEdit(c)} className="btn-ghost-fire flex-1 rounded-lg px-4 py-2.5 text-sm font-bold sm:flex-none sm:py-1.5">
                   {t('common.edit')}
                 </button>
-                <button onClick={() => remove(c.id)} className="rounded-lg border border-fire-500/40 px-4 py-1.5 text-sm font-bold text-fire-300 hover:bg-fire-500/10">
+                <button onClick={() => remove(c.id)} className="flex-1 rounded-lg border border-fire-500/40 px-4 py-2.5 text-sm font-bold text-fire-300 hover:bg-fire-500/10 sm:flex-none sm:py-1.5">
                   {t('common.delete')}
                 </button>
               </div>

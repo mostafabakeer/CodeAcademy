@@ -105,8 +105,44 @@ export default function TopStudentsAdmin() {
       ) : students.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.topEmpty')}</p>
       ) : (
-        <div className="card-fire overflow-x-auto rounded-2xl">
-          <table className="w-full min-w-[640px] text-sm">
+        <>
+          {/* موبايل: بطاقات */}
+          <div className="space-y-2 md:hidden">
+            {students.map((s) => (
+              <article key={s.id} className="card-fire rounded-2xl p-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full bg-ink-800 ring-2 ring-fire-500/30">
+                    {s.image ? (
+                      <img src={s.image} alt={s.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-gray-500">🎓</div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-bold text-gray-100">{s.name}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-fire-500/15 px-2.5 py-0.5 text-xs font-black text-fire-300">#{s.rank}</span>
+                      <GradeBadge grade={s.grade} />
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-ink-800 pt-3">
+                  <button onClick={() => openEdit(s)} className="btn-ghost-fire rounded-lg px-3 py-2.5 text-sm font-bold">
+                    {t('common.edit')}
+                  </button>
+                  <button
+                    onClick={() => remove(s.id)}
+                    className="rounded-lg border border-fire-500/40 px-3 py-2.5 text-sm font-bold text-fire-300"
+                  >
+                    {t('common.delete')}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="card-fire hidden overflow-x-auto rounded-2xl md:block">
+            <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-ink-600 text-start text-gray-400">
                 <th className="px-4 py-3 text-start">{t('admin.topName')}</th>
@@ -150,7 +186,8 @@ export default function TopStudentsAdmin() {
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       )}
 
       <Modal open={open} onClose={() => setOpen(false)} title={editing ? t('admin.editTopStudent') : t('admin.addTopStudent')}>

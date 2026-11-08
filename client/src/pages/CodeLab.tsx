@@ -4,6 +4,7 @@ import { useLang } from "../i18n";
 import { api } from "../api/client";
 import CodeEditor from "../components/CodeEditor";
 import { getCodeDraft, setCodeDraft, clearCodeDraft } from "../lib/localStore";
+import { runPython, isPythonReady, warmUpPython } from "../lib/pythonRunner";
 
 interface CodeFile {
   id: number;
@@ -59,10 +60,12 @@ async function runJavaScript(code: string): Promise<string> {
 
   return new Promise<string>((resolve) => {
     let worker: Worker | null = null;
+    let blobUrl: string | null = null;
     let settled = false;
     const finish = (text: string) => {
       if (settled) return;
       settled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
       try {
         worker?.terminate();
       } catch {}
@@ -71,7 +74,8 @@ async function runJavaScript(code: string): Promise<string> {
 
     try {
       const blob = new Blob([workerSource], { type: "text/javascript" });
-      worker = new Worker(URL.createObjectURL(blob));
+      blobUrl = URL.createObjectURL(blob);
+      worker = new Worker(blobUrl);
     } catch {
       finish("❌ تعذر تشغيل العامل — تحقق من دعم المتصفح");
       return;
@@ -93,6 +97,11 @@ async function runJavaScript(code: string): Promise<string> {
     worker.postMessage({ code });
   });
 }
+
+/**
+ * تهيئة Pyodide وتشغيل Python انتقلت إلى `lib/pythonRunner.ts` داخل Web Worker
+ * معزول: الحلقات اللانهائية تُقتل بـ terminate دون تجميد الصفحة.
+ */
 
 function resolveLocalRefs(
   html: string,
@@ -213,13 +222,14 @@ export default function CodeLab() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef("");
   const currentIdRef = useRef<number | null>(null);
+  const runningRef = useRef(false); // منع التشغيل المتزامن
   // كاش محلي لكود كل ملف (يُحدَّث عند الفتح/الإنشاء/الحفظ) — يعتمد عليه تشغيل
   // المعاينة HTML/CSS دون إعادة جلب من السيرفر مع كل ضغطة Run.
   const fileCacheRef = useRef<Map<number, CodeFile>>(new Map());
 
   useEffect(() => {
     currentIdRef.current = current?.id ?? null;
-  }, [current]);
+  }, [current?.id]); // الاعتماد على id فقط لتجنب إعادة التشغيل عند تغيير updatedAt/versions
 
   // مسودة محلية فورية — تُكتب مع كل تغيير وتُمسح عند الحفظ في السيرفر
   useEffect(() => {
@@ -248,37 +258,47 @@ export default function CodeLab() {
 
   useEffect(() => {
     loadFiles();
+    // Pre-warm Pyodide when CodeLab opens
+    warmUpPython();
   }, [loadFiles]);
 
+  // Auto-save draft — لا نستخدم current في التبعيات لتجنب الحلقات اللانهائية
+  // نستخدم currentIdRef للـ ID الحالي
+  // Auto-save draft — نستخدم currentIdRef للـ ID الحالي، ونفصل الحفظ عن تحديث current
+  // لتجنب الحلقات اللانهائية (Maximum update depth)
   useEffect(() => {
-    if (!current) return;
-    if (code === lastSaved.current) return;
+    const cid = currentIdRef.current;
+    if (cid === null || code === lastSaved.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        const d = await api<{ file: CodeFile }>(`/api/code/${current.id}`, {
+        const d = await api<{ file: CodeFile }>(`/api/code/${cid}`, {
           method: "PUT",
           body: JSON.stringify({ code }),
         });
         lastSaved.current = code;
-        clearCodeDraft(current.id);
-        fileCacheRef.current.set(current.id, d.file);
+        clearCodeDraft(cid);
+        fileCacheRef.current.set(cid, d.file);
+        // تحديث قائمة الملفات فقط (لا نحدث current هنا لتجنب الحلقات)
         setFiles((prev) =>
           prev.map((f) =>
-            f.id === current.id ? { ...f, updatedAt: d.file.updatedAt } : f,
+            f.id === cid ? { ...f, updatedAt: d.file.updatedAt } : f,
           ),
         );
-        setCurrent((prev) =>
-          prev && prev.id === current.id
-            ? {
-                ...prev,
-                versions: d.file.versions,
-                updatedAt: d.file.updatedAt,
-              }
-            : prev,
-        );
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        // تحديث current مؤجل للفرام التالي لتجنب Maximum update depth
+        setTimeout(() => {
+          setCurrent((prev) =>
+            prev && prev.id === cid
+              ? {
+                  ...prev,
+                  versions: d.file.versions,
+                  updatedAt: d.file.updatedAt,
+                }
+              : prev,
+          );
+          setSaved(true);
+          setTimeout(() => setSaved(false), 2000);
+        }, 0);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -286,7 +306,7 @@ export default function CodeLab() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [code, current]);
+  }, [code]); // current ليس في التبعيات
 
   const selectFile = async (id: number) => {
     setError("");
@@ -294,9 +314,10 @@ export default function CodeLab() {
       const d = await api<{ file: CodeFile }>(`/api/code/${id}`);
       const localDraft = getCodeDraft(id);
       fileCacheRef.current.set(id, d.file);
+      // تعيين lastSaved قبل تحديث current لمنع الحفظ التلقائي الفوري
+      lastSaved.current = d.file.code;
       setCurrent(d.file);
       setCode(localDraft ?? d.file.code);
-      lastSaved.current = d.file.code;
     } catch (e) {
       setError((e as Error).message);
     }
@@ -367,7 +388,10 @@ export default function CodeLab() {
         body: JSON.stringify({ code: v.code }),
       });
       fileCacheRef.current.set(current.id, d.file);
-      setCurrent(d.file);
+      // تأخير تعيين current للفرام القادم لمنع Maximum update depth
+      setTimeout(() => {
+        setCurrent(d.file);
+      }, 0);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -377,6 +401,8 @@ export default function CodeLab() {
 
   const runCode = async () => {
     if (!current) return;
+    if (runningRef.current) return; // منع التشغيل المتزامن
+    runningRef.current = true;
     setRunning(true);
     setError("");
     setPreview(null);
@@ -419,7 +445,10 @@ export default function CodeLab() {
         }
         setPreview(result);
       } else if (current.language === "python") {
-        setOutput(t("code.pythonNotSupported"));
+        // أول تشغيل ينزّل محرك Python (~10 ميجا) — نطمئن المستخدم بدل شاشة صامتة.
+        if (!isPythonReady()) setOutput(t("code.pythonLoading"));
+        const pythonResult = await runPython(code);
+        setOutput(pythonResult.output);
       } else {
         setOutput(await runJavaScript(code));
       }
@@ -427,6 +456,7 @@ export default function CodeLab() {
       setOutput("❌ " + (e as Error).message);
     } finally {
       setRunning(false);
+      runningRef.current = false;
     }
   };
 
@@ -619,7 +649,7 @@ export default function CodeLab() {
                 </div>
                 {preview !== null ? (
                   <iframe
-                    sandbox="allow-scripts  allow-modals allow-forms allow-popups"
+                    sandbox="allow-scripts allow-modals allow-forms allow-popups allow-popups-to-escape-sandbox"
                     srcDoc={preview}
                     title="preview"
                     className="h-64 w-full rounded-xl border border-ink-600 bg-white"
@@ -696,7 +726,7 @@ export default function CodeLab() {
           <div className="flex-1 overflow-hidden">
             {fullPreviewType === "html" ? (
               <iframe
-                sandbox="allow-scripts  allow-modals allow-forms allow-popups"
+                sandbox="allow-scripts allow-modals allow-forms allow-popups allow-popups-to-escape-sandbox"
                 srcDoc={fullPreview}
                 title="full preview"
                 className="h-full w-full border-0 bg-white"

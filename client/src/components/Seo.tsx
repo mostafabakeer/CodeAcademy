@@ -43,15 +43,17 @@ function upsertMeta(attr: 'name' | 'property', key: string, content: string): vo
   el.setAttribute('content', content);
 }
 
-function upsertLink(rel: string, href: string): void {
-  let el = document.head.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+function upsertLink(rel: string, href: string, hreflang?: string): void {
+  let el = document.head.querySelector<HTMLLinkElement>(`link[rel="${rel}"]${hreflang ? `[hreflang="${hreflang}"]` : ''}`);
   if (!el) {
     el = document.createElement('link');
     el.setAttribute('rel', rel);
+    if (hreflang) el.setAttribute('hreflang', hreflang);
     el.setAttribute('data-seo', '1');
     document.head.appendChild(el);
   }
   el.setAttribute('href', href);
+  if (hreflang) el.setAttribute('hreflang', hreflang);
 }
 
 /** كل العناصر التي يديرها هذا المكوّن تحمل data-seo، فنزيلها قبل كل تطبيق. */
@@ -84,6 +86,11 @@ export function Seo({
     document.title = resolvedTitle;
     document.documentElement.lang = 'ar';
     document.documentElement.dir = 'rtl';
+
+    // hreflang for Arabic/English
+    upsertLink('alternate', absoluteUrl(path), 'ar');
+    upsertLink('alternate', absoluteUrl(path), 'en');
+    upsertLink('alternate', absoluteUrl(path), 'x-default');
 
     upsertMeta('name', 'description', description);
     upsertMeta('name', 'robots', noindex ? 'noindex, nofollow' : 'index, follow');

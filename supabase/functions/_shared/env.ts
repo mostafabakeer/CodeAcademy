@@ -19,6 +19,7 @@ export const JWT_SECRET = jwtSecretRaw;
 export const CORS_ORIGIN = env('CORS_ORIGIN');
 export const BUCKET_VIDEOS = env('BUCKET_VIDEOS', 'videos');
 export const BUCKET_IMAGES = env('BUCKET_IMAGES', 'images');
+export const BUCKET_NOTES = env('BUCKET_NOTES', 'notes-pdf');
 export const BUCKET_BACKUPS = env('BUCKET_BACKUPS', 'backups');
 /** رقم تليفون حساب المدير الرئيسي (يُقارن بعد توحيد الصيغة في التسجيل).
  *  غيابه يعني ألا يصبح أي مسجّل جديد admin تلقائياً (سلوك آمن افتراضياً). */

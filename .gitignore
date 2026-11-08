@@ -5,6 +5,9 @@ node_modules/
 dist/
 build/
 
+# أصول Python (Pyodide) تُنسخ وقت البناء من node_modules — لا تُحفظ في git
+client/public/pyodide/
+
 # env
 .env
 .env.local

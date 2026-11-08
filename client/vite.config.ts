@@ -48,11 +48,33 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // أحداث Web Push تُحقن داخل sw.js المولَّد (generateSW لا يدعمها مباشرة).
+        importScripts: ['push-sw.js'],
         // لا نُخزّن مسبقاً مجموعات الخطوط غير المستخدمة (لغة عربية + لاتينية فقط).
-        globIgnores: ['**/inter-cyrillic*.woff2', '**/inter-greek*.woff2', '**/inter-vietnamese*.woff2'],
+        // ولا أصول Pyodide (10MB): تُخزَّن عند أول استخدام فقط بدل تحميلها لكل زائر.
+        globIgnores: [
+          '**/inter-cyrillic*.woff2',
+          '**/inter-greek*.woff2',
+          '**/inter-vietnamese*.woff2',
+          '**/pyodide/**',
+          // مكتبات ثقيلة تُحمَّل عند الحاجة فقط (hls لمشغل الدروس، CodeMirror لمحرر
+          // الأكواد). تخزينها المسبق كان يُنزّل ~1.2MB لكل زائر جديد بلا فائدة.
+          // بديلها runtimeCaching أدناه: تُخزَّن بعد أول استخدام وتبقى متاحة offline.
+          '**/hls-*.js',
+          '**/vendor-codemirror-*.js',
+        ],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
+          {
+            // محرك Python: كبير (10MB) ويُحمَّل مرة واحدة عند فتح محرر الأكواد.
+            urlPattern: /^\/pyodide\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'dr-pyodide',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 30 },
+            },
+          },
           {
             urlPattern: /^\/assets\/.*\.(js|css|woff2?|ttf|otf)$/i,
             handler: 'CacheFirst',

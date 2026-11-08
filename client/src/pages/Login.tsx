@@ -1,3 +1,4 @@
+﻿import { useEffect } from 'react';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
@@ -11,11 +12,20 @@ import Seo from '../components/Seo';
 export default function Login() {
   const { t } = useLang();
   const login = useAuthStore((s) => s.login);
+  // Ù…Ø´ØªØ±ÙƒØ§Ù† Ù…Ù†ÙØµÙ„Ø§Ù† Ø¨Ø¯Ù„ selector ÙŠÙØ±Ø¬Ø¹ ÙƒØ§Ø¦Ù†Ø§Ù‹ Ø¬Ø¯ÙŠØ¯Ø§Ù‹ ÙƒÙ„ Ù…Ø±Ø© (Zustand 5 + React 19
+  // ÙŠØ±ÙØ¶Ø§Ù† Ø§Ù„Ù„Ù‚Ø·Ø© ØºÙŠØ± Ø§Ù„Ù…Ø³ØªÙ‚Ø±Ø© ÙˆÙŠØ³Ø¨Ù‘Ø¨Ø§Ù† Ø¥Ø¹Ø§Ø¯Ø© ØªØµÙŠÙŠØ± Ù„Ø§ Ù†Ù‡Ø§Ø¦ÙŠØ©).
+  const user = useAuthStore((s) => s.user);
+  const authLoading = useAuthStore((s) => s.loading);
   const navigate = useNavigate();
+
+  // Redirect logged-in users to home
+  useEffect(() => {
+    if (!authLoading && user) navigate('/');
+  }, [user, authLoading, navigate]);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [formLoading, setFormLoading] = useState(false);
 
   const lastFail = getLastAuthFail();
   const lastFailMsg =
@@ -37,14 +47,14 @@ export default function Login() {
     e.preventDefault();
     setError('');
     if (!identifier || !password) return setError(t('errors.required'));
-    setLoading(true);
+    setFormLoading(true);
     try {
       await login(identifier, password);
       navigate('/');
     } catch (err) {
       setError((err as Error).message || t('errors.generic'));
     } finally {
-      setLoading(false);
+      setFormLoading(false);
     }
   };
 
@@ -59,7 +69,7 @@ export default function Login() {
         className="card-fire relative w-full overflow-hidden rounded-3xl"
       >
         <img
-          src="/login-hero.png"
+          src="/login-hero.webp"
           alt=""
           fetchPriority="high"
           className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
@@ -71,7 +81,7 @@ export default function Login() {
         <div className="relative z-10 p-8">
           <div className="mb-6 text-center">
             {/* <DoctorCode size="sm" className="mx-auto -top-2" /> */}
-            <img src="/logo.png" alt="DR Code" className="mx-auto -mt-4 mb-2 h-16 w-16 rounded-2xl object-contain drop-shadow-lg" />
+            <img src="/logo.webp" alt="DR Code" className="mx-auto -mt-4 mb-2 h-16 w-16 rounded-2xl object-contain drop-shadow-lg" />
             <h1 className="text-2xl font-black">{t('auth.loginTitle')}</h1>
             <p className="mt-1 flex items-center justify-center gap-1 text-sm text-gray-400">
               {t('auth.loginWithPhone')}
@@ -109,8 +119,8 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-            <button type="submit" disabled={loading} className="btn-fire w-full rounded-xl px-4 py-3 font-bold text-white disabled:opacity-60">
-              {loading ? t('common.loading') : t('auth.loginBtn')}
+            <button type="submit" disabled={formLoading} className="btn-fire w-full rounded-xl px-4 py-3 font-bold text-white disabled:opacity-60">
+              {formLoading ? t('common.loading') : t('auth.loginBtn')}
             </button>
             <div className="text-center">
               <Link to="/forgot-password" className="text-sm font-bold text-fire-400 hover:text-fire-300">
@@ -129,7 +139,7 @@ export default function Login() {
       </motion.div>
 
       {lastFailMsg && (
-        <p className="mt-3 max-w-sm text-center text-xs leading-relaxed text-gray-500">⚠️ {lastFailMsg}</p>
+        <p className="mt-3 max-w-sm text-center text-xs leading-relaxed text-gray-500">âš ï¸ {lastFailMsg}</p>
       )}
     </div>
   );

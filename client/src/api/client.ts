@@ -1,4 +1,6 @@
 import { SUPABASE_URL } from '../config';
+import { readStoredToken, writeStoredToken, clearStoredToken } from '../lib/sessionToken';
+import { getContentVersion } from '../lib/content';
 
 const AUTH_FAIL_KEY = 'dr_code_lastAuthFail';
 
@@ -196,12 +198,47 @@ function isAuthPathNoRetry(route: string): boolean {
   return AUTH_PATHS_NO_RETRY.has(route);
 }
 
+/** مسارات تُصدر توكناً جديداً في جسم الاستجابة — يُحفظ فوراً كنسخة احتياطية. */
+const TOKEN_ISSUING_PATHS = new Set(['/auth/login', '/auth/register', '/auth/me', '/auth/refresh']);
+
+/** يضيف نسخة التوكن الاحتياطية (localStorage) إن وُجدت — الكوكي يبقى الأساس. */
+function authHeaders(base: Record<string, string>): Record<string, string> {
+  const token = readStoredToken();
+  return token ? { ...base, Authorization: `Bearer ${token}` } : { ...base };
+}
+
+/**
+ * تجديد الجلسة عبر `/auth/me`:
+ * - الكوكي موجود ⇒ الخادم يجدّده ويعيد إصداره.
+ * - الكوكي ضاع (Safari/ITP، مسح بيانات الموقع) ⇒ التوكن الاحتياطي ينجح ويُعاد الكوكي.
+ * نستخدم fetch خاماً (لا `api`) لتجنّب أي حلقة أو تكرار.
+ */
+async function refreshSession(base: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/auth/me`, {
+      method: 'GET',
+      headers: authHeaders({ 'x-path': '/auth/me' }),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      res.body?.cancel().catch(() => {});
+      return false;
+    }
+    const data = (await res.json().catch(() => null)) as { token?: unknown } | null;
+    writeStoredToken(data?.token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function api<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, headers, signal } = options;
   const route = path.startsWith('/api') ? path.slice(4) || '/' : path || '/';
 
   const requestHeaders: Record<string, string> = { 'x-path': route, ...headers };
-  // لا نحتاج لإرسال التوكن يدوياً - الكوكي HttpOnly يُرسل تلقائياً مع credentials: 'include'
+  // الكوكي HttpOnly يُرسل تلقائياً مع credentials: 'include'، ونضيف نسخة
+  // التوكن الاحتياطية (لو وُجدت) كـ Bearer حتى لا يطرد المستخدم لو ضاع الكوكي.
 
   let payload: BodyInit | undefined;
   if (body !== undefined) {
@@ -228,7 +265,7 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       `${base}${route}`,
       {
         method,
-        headers: requestHeaders,
+        headers: authHeaders(requestHeaders),
         credentials: 'include', // مهم: يرسل الكوكي HttpOnly تلقائياً
         body: payload,
       },
@@ -271,6 +308,49 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
 
     if (res.status === 204) return undefined as T;
 
+    // 401 على مسار محمي: نحاول تجديد الجلسة مرة واحدة (كوكي أو Bearer احتياطي).
+    if (res.status === 401) {
+      res.body?.cancel().catch(() => {});
+
+      if (!shouldRetryOn401) {
+        // مسار مصادقة ذاتي. 401 من /auth/me ⇒ النسخة المحلية لم تعد صالحة.
+        if (route === '/auth/me') clearStoredToken();
+        throw new ApiError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+      }
+
+      if (!(await refreshSession(base))) {
+        // الخادم رفض الكوكي والتوكن الاحتياطي معاً ⇒ لا فائدة من إرسالهما مجدداً.
+        clearStoredToken();
+        throw new ApiError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+      }
+
+      // أعد المحاولة مرة واحدة فقط بعد التجديد.
+      const { promise: retryPromise } = fetchWithTimeout(
+        `${base}${route}`,
+        { method, headers: authHeaders(requestHeaders), credentials: 'include', body: payload },
+        signal,
+      );
+      let retryRes: Response;
+      try {
+        retryRes = await retryPromise;
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        if (err instanceof DOMException && err.name === 'AbortError') throw err;
+        throw new ApiError('فشل تحديث الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+      }
+      if (retryRes.status === 204) return undefined as T;
+      const retryParsed = await retryRes.json().catch(() => ({}));
+      if (!retryRes.ok) {
+        if (retryRes.status === 401) clearStoredToken();
+        throw new ApiError(apiErrorMessage(retryParsed, retryRes.status), retryRes.status);
+      }
+      if (TOKEN_ISSUING_PATHS.has(route)) {
+        writeStoredToken((retryParsed as { token?: unknown } | null)?.token);
+      }
+      if (route === '/auth/logout') clearStoredToken();
+      return retryParsed as T;
+    }
+
     let parsed: unknown;
     try {
       parsed = await res.json();
@@ -281,57 +361,43 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       continue;
     }
 
-    // معالجة 401 مع إعادة محاولة واحدة للطلبات المحمية
-    if (res.status === 401 && shouldRetryOn401) {
-      // محاولة تحديث الكوكي عبر نداء صامت للمسار /auth/me (الذي يُحدث الكوكي)
-      try {
-        await new Promise((r) => setTimeout(r, 300)); // انتظار قصير لتحديث الكوكي من جانب الخادم
-        const refreshRes = await fetch(`${base}/auth/me`, {
-          method: 'GET',
-          headers: { 'x-path': '/auth/me' },
-          credentials: 'include',
-        });
-        if (refreshRes.ok) {
-          // الكوكي تم تحديثه، أعد المحاولة للطلب الأصلي
-          const { promise: retryPromise, didTimeout: retryTimeout } = fetchWithTimeout(
-            `${base}${route}`,
-            {
-              method,
-              headers: requestHeaders,
-              credentials: 'include',
-              body: payload,
-            },
-            signal,
-          );
-          let retryRes: Response;
-          try {
-            retryRes = await retryPromise;
-          } catch (err) {
-            if (signal?.aborted) throw err;
-            if (err instanceof DOMException && err.name === 'AbortError') throw err;
-            throw new ApiError('فشل تحديث الجلسة، يرجى تسجيل الدخول مجدداً', 401);
-          }
-          if (retryRes.ok) {
-            const retryParsed = await retryRes.json();
-            return retryParsed as T;
-          }
-          // إذا فشل بعد التحديث، نرمي الخطأ الأصلي
-          const retryParsed = await retryRes.json().catch(() => ({}));
-          throw new ApiError(apiErrorMessage(retryParsed, retryRes.status), retryRes.status);
-        }
-      } catch (refreshErr) {
-        // فشل التحديث - نرمي الخطأ الأصلي
-      }
-      // وصلنا هنا = فشل التحديث أو لا يوجد توكن صالح
-      throw new ApiError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً', 401);
-    }
-
     if (!res.ok) {
       throw new ApiError(apiErrorMessage(parsed, res.status), res.status);
+    }
+    // احفظ أي توكن جديد يصدره الخادم (login/register/me) كنسخة احتياطية.
+    if (TOKEN_ISSUING_PATHS.has(route)) {
+      writeStoredToken((parsed as { token?: unknown } | null)?.token);
+    }
+    if (route === '/auth/logout') clearStoredToken();
+    // Invalidate bootstrap cache after admin mutations that change content
+    const adminMutationPaths = [
+      '/api/lessons', '/api/exams', '/api/notes', '/api/courses',
+      '/api/admin/users',
+    ];
+    const isAdminMutation = adminMutationPaths.some(p => route.startsWith(p)) &&
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+    if (isAdminMutation) {
+      try {
+        localStorage.removeItem(`bootstrap:v${getContentVersion()}:${getCurrentUserId()}`);
+      } catch {}
     }
     return parsed as T;
   }
 
   throw lastFailure ?? new ApiError('تعذّر الاتصال بالخادم، حاول مجدداً', 0);
 }
+
+// Helper to get current user ID from session
+function getCurrentUserId(): number {
+  try {
+    const token = localStorage.getItem('dr_code_token_v1');
+    if (token) {
+      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      return payload.id || 0;
+    }
+  } catch {}
+  return 0;
+}
+
+// getContentVersion imported from content.ts
 

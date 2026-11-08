@@ -2,17 +2,83 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { useUser, useProgress } from '../store/authStore';
+import { useUser, useProgress, useSession } from '../store/authStore';
 import { api } from '../api/client';
+import {
+  isPushSupported,
+  getPushSubscription,
+  subscribeToPush,
+  unsubscribeFromPush,
+  sendTestPush,
+} from '../lib/pushNotifications';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
 import ProgressBar from '../components/ProgressBar';
+
+type PushState = 'loading' | 'unsupported' | 'enabled' | 'disabled' | 'denied';
 
 export default function Profile() {
   const { t, lang } = useLang();
   const user = useUser();
   const { stats } = useProgress();
+  const { logoutAll } = useSession();
   const [codeFiles, setCodeFiles] = useState<{ id: number; name: string; language: string; updatedAt: number }[]>([]);
+  const [secBusy, setSecBusy] = useState(false);
+  const [secError, setSecError] = useState('');
+  const [pushState, setPushState] = useState<PushState>('loading');
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMsg, setPushMsg] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!isPushSupported()) {
+        if (active) setPushState('unsupported');
+        return;
+      }
+      if (Notification.permission === 'denied') {
+        if (active) setPushState('denied');
+        return;
+      }
+      const sub = await getPushSubscription();
+      if (active) setPushState(sub ? 'enabled' : 'disabled');
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const togglePush = async () => {
+    setPushMsg('');
+    setPushBusy(true);
+    try {
+      if (pushState === 'enabled') {
+        await unsubscribeFromPush();
+        setPushState('disabled');
+      } else {
+        const sub = await subscribeToPush();
+        setPushState(sub ? 'enabled' : 'disabled');
+        if (!sub) setPushMsg(t('profile.pushMissingKey'));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('denied')) setPushState('denied');
+      setPushMsg(
+        msg.includes('not configured') ? t('profile.pushMissingKey') : t('profile.pushError'),
+      );
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const testPush = async () => {
+    setPushMsg('');
+    try {
+      await sendTestPush();
+    } catch {
+      setPushMsg(t('profile.pushError'));
+    }
+  };
 
   useEffect(() => {
     api<{ files: { id: number; name: string; language: string; updatedAt: number }[] }>('/api/code')
@@ -78,6 +144,76 @@ export default function Profile() {
           <p className="mt-3 text-sm text-gray-500">{t('profile.levelHint')}</p>
         </div>
       )}
+
+      <section className="card-fire rounded-2xl p-6">
+        <h2 className="mb-2 font-extrabold">🔔 {t('profile.pushTitle')}</h2>
+        <p className="mb-4 text-sm text-gray-500">{t('profile.pushHint')}</p>
+
+        {pushState === 'loading' && <p className="text-sm text-gray-400">{t('common.loading')}</p>}
+
+        {pushState === 'unsupported' && (
+          <p className="text-sm text-amber-300">{t('profile.pushUnsupported')}</p>
+        )}
+
+        {pushState === 'denied' && (
+          <p className="text-sm text-amber-300">{t('profile.pushDenied')}</p>
+        )}
+
+        {(pushState === 'disabled' || pushState === 'enabled') && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={pushBusy}
+              onClick={togglePush}
+              className="rounded-xl border border-fire-500/40 bg-fire-500/10 px-4 py-2 text-sm font-bold text-fire-200 transition hover:bg-fire-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pushBusy
+                ? t('common.loading')
+                : pushState === 'enabled'
+                  ? t('profile.pushDisable')
+                  : t('profile.pushEnable')}
+            </button>
+            {pushState === 'enabled' && (
+              <button
+                type="button"
+                onClick={testPush}
+                className="rounded-xl border border-ink-600 bg-ink-900 px-4 py-2 text-sm font-bold text-gray-300 transition hover:bg-ink-800"
+              >
+                {t('profile.pushTest')}
+              </button>
+            )}
+          </div>
+        )}
+
+        {pushState === 'enabled' && (
+          <p className="mt-2 text-xs font-bold text-emerald-400">{t('profile.pushEnabled')}</p>
+        )}
+        {pushMsg && <p className="mt-2 text-sm font-bold text-red-400">{pushMsg}</p>}
+      </section>
+
+      <section className="card-fire rounded-2xl p-6">
+        <h2 className="mb-2 font-extrabold">🔒 {t('profile.security')}</h2>
+        <p className="mb-4 text-sm text-gray-500">{t('profile.securityHint')}</p>
+        {secError && <p className="mb-3 text-sm font-bold text-red-400">{secError}</p>}
+        <button
+          type="button"
+          disabled={secBusy}
+          onClick={async () => {
+            setSecError('');
+            if (!window.confirm(t('profile.logoutAllConfirm'))) return;
+            setSecBusy(true);
+            try {
+              await logoutAll();
+            } catch {
+              setSecError(t('profile.logoutAllError'));
+              setSecBusy(false);
+            }
+          }}
+          className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-bold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {secBusy ? t('profile.logoutAllWorking') : t('profile.logoutAll')}
+        </button>
+      </section>
 
       <section className="card-fire rounded-2xl p-6">
         <h2 className="mb-4 font-extrabold">💻 {t('profile.savedCode')}</h2>

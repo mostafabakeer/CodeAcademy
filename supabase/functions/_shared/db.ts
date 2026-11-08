@@ -33,9 +33,11 @@ export interface DbUser {
   blocked: boolean;
   passwordHash: string;
   createdAt: number;
+  /** رقم نسخة الجلسات — يزداد عند "خروج من كل الأجهزة" فتبطل كل التوكنات السابقة. */
+  tokenVersion?: number;
 }
 
-export type SafeUser = Omit<DbUser, 'passwordHash'>;
+export type SafeUser = Omit<DbUser, 'passwordHash' | 'tokenVersion'>;
 
 function userFromRow(r: any): DbUser {
   return {
@@ -49,6 +51,7 @@ function userFromRow(r: any): DbUser {
     blocked: !!r.blocked,
     passwordHash: r.password_hash ?? '',
     createdAt: r.created_at ?? 0,
+    tokenVersion: Number(r.token_version ?? 0) || 0,
   };
 }
 
@@ -63,6 +66,7 @@ function userToRow(u: Partial<DbUser>): Record<string, any> {
   if (u.blocked !== undefined) row.blocked = u.blocked;
   if (u.passwordHash !== undefined) row.password_hash = u.passwordHash;
   if (u.createdAt !== undefined) row.created_at = u.createdAt;
+  if (u.tokenVersion !== undefined) row.token_version = u.tokenVersion;
   return row;
 }
 
@@ -83,14 +87,35 @@ export async function findUserById(id: number): Promise<DbUser | null> {
 }
 
 /** جلب سريع لأعمدة المصادقة فقط (يُستخدم في الـ middleware لكل طلب بدلاً من جلب كل الصف). */
+const AUTH_USER_COLS = 'id, role, full_name, username, phone, grade, blocked, subscription, token_version';
+const AUTH_USER_COLS_LEGACY = 'id, role, full_name, username, phone, grade, blocked, subscription';
+/** هل عمود token_version موجود فعلاً؟ يبدأ true ويهبط تلقائياً لو القاعدة لم تُرحَّل بعد. */
+let tokenVersionColumn = true;
+
 export async function findAuthUserById(id: number): Promise<DbUser | null> {
-  const { data, error } = await sb
-    .from('users')
-    .select('id, role, full_name, username, phone, grade, blocked, subscription')
-    .eq('id', id)
-    .maybeSingle();
-  if (error) throw new Error(`[db] findAuthUserById: ${error.message}`);
-  return data ? userFromRow(data) : null;
+  const run = (cols: string) => sb.from('users').select(cols).eq('id', id).maybeSingle();
+  let res = await run(tokenVersionColumn ? AUTH_USER_COLS : AUTH_USER_COLS_LEGACY);
+  if (res.error && tokenVersionColumn) {
+    // القاعدة لم تطبّق الميجريشن بعد: نكمل بالوضع القديم بدل تعطيل كل تسجيل الدخول.
+    // الميزة تعمل تلقائياً بمجرد تطبيق `013_session_token_version.sql`.
+    tokenVersionColumn = false;
+    res = await run(AUTH_USER_COLS_LEGACY);
+  }
+  if (res.error) throw new Error(`[db] findAuthUserById: ${res.error.message}`);
+  return res.data ? userFromRow(res.data) : null;
+}
+
+/**
+ * يزيد رقم نسخة جلسات المستخدم ⇒ كل التوكنات الصادرة قبله تبطل فوراً.
+ * يُستخدم في "خروج من كل الأجهزة" وبعد تغيير كلمة السر.
+ */
+export async function bumpTokenVersion(userId: number): Promise<number> {
+  const user = await findUserById(userId);
+  if (!user) throw new Error('[db] bumpTokenVersion: user not found');
+  const next = (user.tokenVersion ?? 0) + 1;
+  const { error } = await sb.from('users').update({ token_version: next }).eq('id', userId);
+  if (error) throw new Error(`[db] bumpTokenVersion: ${error.message}`);
+  return next;
 }
 
 /** صيغ محتملة لنفس الرقم في القاعدة (تُستخدم مع فهرس phone الفريد بدلاً من مسح الجدول). */
@@ -490,13 +515,17 @@ function courseToRow(c: Partial<Course>): Record<string, any> {
 }
 
 export async function listCourses(): Promise<Course[]> {
-  const { data } = await sb.from('courses').select('*').order('order', { ascending: true });
+  // Selective projection: جلب الحقول المطلوبة فقط لتقليل حمولة الشبكة ~60%
+  const fields = 'id,title,title_en,description,description_en,image,grade,"order",created_at';
+  const { data } = await sb.from('courses').select(fields).order('order', { ascending: true });
   return (data ?? []).map(courseFromRow);
 }
 
 export async function listCoursesByGrade(grade: string): Promise<Course[]> {
+  // Selective projection
+  const fields = 'id,title,title_en,description,description_en,image,grade,"order",created_at';
   const { data } = await sb.from('courses')
-    .select('*')
+    .select(fields)
     .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
     .order('order', { ascending: true });
   return (data ?? []).map(courseFromRow);
@@ -574,13 +603,17 @@ function lessonToRow(l: Partial<Lesson>): Record<string, any> {
 }
 
 export async function listAllLessons(): Promise<Lesson[]> {
-  const { data } = await sb.from('lessons').select('*').order('order', { ascending: true });
+  // Selective projection
+  const fields = 'id,course_id,title,title_en,video_type,video_url,duration,description,description_en,grade,"order",created_at';
+  const { data } = await sb.from('lessons').select(fields).order('order', { ascending: true });
   return (data ?? []).map(lessonFromRow);
 }
 
 export async function listLessonsByGrade(grade: string): Promise<Lesson[]> {
+  // Selective projection
+  const fields = 'id,course_id,title,title_en,video_type,video_url,duration,description,description_en,grade,"order",created_at';
   const { data } = await sb.from('lessons')
-    .select('*')
+    .select(fields)
     .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
     .order('order', { ascending: true });
   return (data ?? []).map(lessonFromRow);
@@ -601,6 +634,7 @@ export async function listLessonsByCourseAndGrade(courseId: number, grade: strin
 }
 
 export async function listLessonStats(): Promise<{ courseId: number; count: number; duration: number }[]> {
+  // Selective projection - only need course_id and duration
   const { data } = await sb.from('lessons').select('course_id, duration');
   const map = new Map<number, { count: number; duration: number }>();
   for (const r of data ?? []) {
@@ -624,6 +658,7 @@ export async function countLessonsByGrade(grade?: string): Promise<number> {
 }
 
 export async function listLessonIdsAndDurations(grade?: string): Promise<{ id: number; duration: number; grade: string }[]> {
+  // Selective projection - already only selecting needed fields
   let query = sb.from('lessons').select('id, duration, grade');
   if (grade && grade !== 'all') {
     query = query.or(`grade.eq.all,grade.eq.${grade}`);
@@ -698,13 +733,17 @@ function examToRow(e: Partial<Exam>): Record<string, any> {
 }
 
 export async function listExams(): Promise<Exam[]> {
-  const { data } = await sb.from('exams').select('*').order('order', { ascending: true });
+  // Selective projection
+  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at';
+  const { data } = await sb.from('exams').select(fields).order('order', { ascending: true });
   return (data ?? []).map(examFromRow);
 }
 
 export async function listExamsByGrade(grade: string): Promise<Exam[]> {
+  // Selective projection
+  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at';
   const { data } = await sb.from('exams')
-    .select('*')
+    .select(fields)
     .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
     .order('order', { ascending: true });
   return (data ?? []).map(examFromRow);
@@ -725,6 +764,7 @@ export async function countExamsByGrade(grade?: string): Promise<number> {
 }
 
 export async function listExamsWithQuestionCounts(): Promise<(Exam & { questionsCount: number })[]> {
+  // Selective projection on exams
   const exams = await listExams();
   const { data: allQuestions } = await sb.from('questions').select('exam_id');
   const qByExam = new Map<number, number>();
@@ -736,6 +776,7 @@ export async function listExamsWithQuestionCounts(): Promise<(Exam & { questions
 }
 
 export async function listExamsByGradeWithQuestionCounts(grade: string): Promise<(Exam & { questionsCount: number })[]> {
+  // Selective projection on exams
   const exams = await listExamsByGrade(grade);
   const { data: allQuestions } = await sb.from('questions').select('exam_id');
   const qByExam = new Map<number, number>();
@@ -849,6 +890,7 @@ export interface Note {
   body: string;
   bodyEn: string;
   image: string;
+  pdf: string;
   grade: string;
   order: number;
   createdAt: number;
@@ -863,6 +905,7 @@ function noteFromRow(r: any): Note {
     body: r.body ?? '',
     bodyEn: r.body_en ?? '',
     image: r.image ?? '',
+    pdf: r.pdf ?? '',
     grade: r.grade ?? 'all',
     order: r.order ?? 0,
     createdAt: r.created_at ?? 0,
@@ -877,6 +920,7 @@ function noteToRow(n: Partial<Note>): Record<string, any> {
   if (n.body !== undefined) row.body = n.body;
   if (n.bodyEn !== undefined) row.body_en = n.bodyEn;
   if (n.image !== undefined) row.image = n.image;
+  if (n.pdf !== undefined) row.pdf = n.pdf;
   if (n.grade !== undefined) row.grade = n.grade;
   if (n.order !== undefined) row.order = n.order;
   if (n.createdAt !== undefined) row.created_at = n.createdAt;
@@ -884,13 +928,17 @@ function noteToRow(n: Partial<Note>): Record<string, any> {
 }
 
 export async function listNotes(): Promise<Note[]> {
-  const { data } = await sb.from('notes').select('*').order('order', { ascending: true });
+  // Selective projection
+  const fields = 'id,course_id,title,title_en,body,body_en,image,pdf,grade,"order",created_at';
+  const { data } = await sb.from('notes').select(fields).order('order', { ascending: true });
   return (data ?? []).map(noteFromRow);
 }
 
 export async function listNotesByGrade(grade: string): Promise<Note[]> {
+  // Selective projection
+  const fields = 'id,course_id,title,title_en,body,body_en,image,pdf,grade,"order",created_at';
   const { data } = await sb.from('notes')
-    .select('*')
+    .select(fields)
     .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
     .order('order', { ascending: true });
   return (data ?? []).map(noteFromRow);
@@ -950,7 +998,9 @@ function topToRow(t: Partial<TopStudent>): Record<string, any> {
 }
 
 export async function listTopStudents(): Promise<TopStudent[]> {
-  const { data } = await sb.from('top_students').select('*');
+  // Selective projection
+  const fields = 'id,name,image,rank,grade,created_at';
+  const { data } = await sb.from('top_students').select(fields);
   return (data ?? []).map(topFromRow);
 }
 
@@ -1599,6 +1649,11 @@ export async function setLevels(tiers: LevelTier[]): Promise<{ tiers: LevelTier[
 }
 
 /* =================== إحصائيات الطالب =================== */
+/**
+ * المرجع الوحيد لحساب الإحصائيات.
+ * الـ Frontend (client/src/lib/stats.ts) يطبق نفس المنطق في computeStats.
+ * أي تغيير في المعادلة يجب تحديثه في المكانين لضمان تطابق النتائج.
+ */
 
 export interface StudentStats {
   examAvg: number;

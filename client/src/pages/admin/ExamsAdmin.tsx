@@ -148,15 +148,24 @@ export default function ExamsAdmin() {
     setQError('');
     if (!qmExam) return;
     if (!qForm.text.trim()) return setQError(t('errors.required'));
-    const options = qForm.options.slice(0, 4).filter((o) => o.trim() !== '');
-    const optionsEn = qForm.optionsEn.slice(0, 4);
-    if (options.length < 2) return setQError(t('errors.required'));
+    // نربط كل خيار عربي بنظيره الإنجليزي *قبل* حذف الخيارات الفارغة،
+    // ثم نعيد حساب موضع الإجابة الصحيحة بعد الحذف. سابقًا كانت `optionsEn`
+    // تُقتطع بمؤشرها الأصلي فتنزاح الترجمات، و`correctIndex` قد يشير لخيار محذوف.
+    const pairs = qForm.options.slice(0, 4).map((text, index) => ({
+      text: text.trim(),
+      textEn: (qForm.optionsEn[index] ?? '').trim(),
+      sourceIndex: index,
+    }));
+    const kept = pairs.filter((p) => p.text !== '');
+    if (kept.length < 2) return setQError(t('errors.required'));
+    const mappedCorrect = kept.findIndex((p) => p.sourceIndex === qForm.correctIndex);
     try {
       const body = {
         text: qForm.text,
         textEn: qForm.textEn,
-        options: options.map((text, i) => ({ text, textEn: optionsEn[i] ?? '' })),
-        correctIndex: qForm.correctIndex,
+        options: kept.map(({ text, textEn }) => ({ text, textEn })),
+        // -1 = لا توجد إجابة صحيحة (الخيار الصحيح كان فارغًا وحُذف) بدل تخمين خاطئ.
+        correctIndex: mappedCorrect >= 0 ? mappedCorrect : -1,
         explanation: qForm.explanation,
         explanationEn: qForm.explanationEn,
       };
@@ -186,9 +195,9 @@ export default function ExamsAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-black">📝 {t('admin.exams')}</h1>
-        <button onClick={openExam} className="btn-fire rounded-xl px-4 py-2 text-sm font-bold text-white">
+        <button onClick={openExam} className="btn-fire shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold text-white">
           + {t('admin.addExam')}
         </button>
       </div>
@@ -203,7 +212,7 @@ export default function ExamsAdmin() {
         <div className="grid gap-3 md:grid-cols-2">
           {exams.map((e, i) => (
             <motion.div key={e.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="card-fire rounded-2xl p-4">
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="truncate font-bold">{lang === 'ar' ? e.title : e.titleEn}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
@@ -214,14 +223,14 @@ export default function ExamsAdmin() {
                     {!!e.allowRetake && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">↻ {t('admin.allowRetake')}</span>}
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1.5">
-                  <button onClick={() => openQuestions(e)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                <div className="grid grid-cols-3 gap-2 sm:flex sm:shrink-0">
+                  <button onClick={() => openQuestions(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1">
                     {t('admin.questions')}
                   </button>
-                  <button onClick={() => editExam(e)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                  <button onClick={() => editExam(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => removeExam(e.id)} className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300">
+                  <button onClick={() => removeExam(e.id)} className="rounded-lg border border-fire-500/40 px-2 py-2.5 text-xs font-bold text-fire-300 sm:px-3 sm:py-1">
                     {t('common.delete')}
                   </button>
                 </div>
@@ -298,7 +307,7 @@ export default function ExamsAdmin() {
           <div className="space-y-3">
             {questions.map((q, i) => (
               <div key={q.id} className="rounded-xl border border-ink-600 bg-ink-900 p-4">
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <p className="font-bold">
                       {i + 1}. {q.text}
@@ -316,11 +325,11 @@ export default function ExamsAdmin() {
                       ))}
                     </div>
                   </div>
-                  <div className="flex shrink-0 gap-1.5">
-                    <button onClick={() => editQ(q)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                  <div className="flex gap-2 sm:shrink-0">
+                    <button onClick={() => editQ(q)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1">
                       {t('common.edit')}
                     </button>
-                    <button onClick={() => removeQ(q.id)} className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300">
+                    <button onClick={() => removeQ(q.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1">
                       {t('common.delete')}
                     </button>
                   </div>

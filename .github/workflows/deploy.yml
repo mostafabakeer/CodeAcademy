@@ -25,6 +25,8 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SITE_URL: ${{ secrets.SITE_URL || 'https://codeacademy2.drcode.workers.dev' }}
+          # مفتاح VAPID العام مطلوب في الواجهة لتفعيل Web Push (نفس القيمة في Supabase secrets)
+          VITE_VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
         run: npm run build
 
       - name: Verify SEO artifacts
@@ -39,6 +41,11 @@ jobs:
       - name: Verify build output (wrangler.toml expects client/dist)
         shell: bash
         run: |
+          # محرك Python في المتصفح: أصول Pyodide تُنسخ قبل البناء من node_modules
+          test -f client/dist/pyodide/pyodide.js \
+            || { echo "::error::client/dist/pyodide/pyodide.js is missing — copy-pyodide.mjs did not run"; exit 1; }
+          test -f client/dist/pyodide/pyodide.asm.wasm \
+            || { echo "::error::client/dist/pyodide/pyodide.asm.wasm is missing — Python in CodeLab would break"; exit 1; }
           test -f client/dist/index.html \
             || { echo "::error::client/dist/index.html is missing — Vite output is not at client/dist (wrangler.toml [assets] directory = ./client/dist)"; exit 1; }
 
@@ -72,3 +79,26 @@ jobs:
           export CLOUDFLARE_API_TOKEN="$(cat "$RUNNER_TEMP/cf-token")"
           export CLOUDFLARE_ACCOUNT_ID="$(cat "$RUNNER_TEMP/cf-account")"
           npx --yes wrangler@4.137.0 deploy
+
+      # كشف انحراف الواجهة عن الباك اند: الـ API يُنشر يدوياً، فقد تتقدّم الواجهة
+      # بميزة (مثل Python) بينما الخادم قديم. تحذير واضح بدل فشل صامت للمستخدم.
+      - name: Check deployed API version (drift warning)
+        shell: bash
+        env:
+          SITE_URL: ${{ secrets.SITE_URL || 'https://codeacademy2.drcode.workers.dev' }}
+        run: |
+          expected="$(sed -n "s/.*API_VERSION = '\([^']*\)'.*/\1/p" supabase/functions/_shared/version.ts | head -n1)"
+          echo "Expected API_VERSION from repo: ${expected:-<unknown>}"
+          actual=""
+          for i in 1 2 3 4 5; do
+            actual="$(curl -fsS --max-time 10 "${SITE_URL%/}/api/version" 2>/dev/null | sed -n 's/.*"apiVersion":"\([^"]*\)".*/\1/p' || true)"
+            [ -n "$actual" ] && break
+            sleep 3
+          done
+          if [ -z "$actual" ]; then
+            echo "::warning::Could not read ${SITE_URL%/}/version — backend may be down or /version not deployed yet."
+          elif [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+            echo "::warning::Backend drift: deployed apiVersion=$actual but repo expects $expected. Run the 'Deploy Backend' workflow (Actions -> Deploy Backend) to deploy Supabase functions/migrations."
+          else
+            echo "Backend version matches: $actual"
+          fi

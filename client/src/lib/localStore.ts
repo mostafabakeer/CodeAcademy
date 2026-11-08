@@ -130,3 +130,52 @@ export function saveSessionSnapshot(
 export function clearSessionSnapshot(): void {
   removeLocal(SESSION_KEY);
 }
+
+// ===== Offline Queue for mutations =====
+
+const OFFLINE_QUEUE_KEY = 'dr_code_offline_queue';
+
+export interface OfflineQueueItem {
+  id: string;
+  type: 'exam_submit' | 'code_save' | 'video_progress';
+  payload: unknown;
+  createdAt: number;
+  retries: number;
+}
+
+export function getOfflineQueue(): OfflineQueueItem[] {
+  const raw = getLocal(OFFLINE_QUEUE_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as OfflineQueueItem[];
+  } catch {
+    return [];
+  }
+}
+
+export function addToOfflineQueue(item: Omit<OfflineQueueItem, 'id' | 'createdAt' | 'retries'>): void {
+  const queue = getOfflineQueue();
+  queue.push({
+    ...item,
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+    retries: 0,
+  });
+  setLocal(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+}
+
+export function removeFromOfflineQueue(id: string): void {
+  const queue = getOfflineQueue().filter((item) => item.id !== id);
+  setLocal(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+}
+
+export function incrementOfflineRetry(id: string): void {
+  const queue = getOfflineQueue().map((item) =>
+    item.id === id ? { ...item, retries: item.retries + 1 } : item
+  );
+  setLocal(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+}
+
+export function clearOfflineQueue(): void {
+  removeLocal(OFFLINE_QUEUE_KEY);
+}

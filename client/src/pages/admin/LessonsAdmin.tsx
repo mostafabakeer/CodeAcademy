@@ -120,9 +120,9 @@ export default function LessonsAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-black">🎬 {t('admin.lessons')}</h1>
-        <button onClick={openNew} disabled={courses.length === 0} className="btn-fire rounded-xl px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+        <button onClick={openNew} disabled={courses.length === 0} className="btn-fire shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
           + {t('admin.addLesson')}
         </button>
       </div>
@@ -137,7 +137,7 @@ export default function LessonsAdmin() {
         <div className="grid gap-3 md:grid-cols-2">
           {lessons.map((l, i) => (
             <motion.div key={l.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="card-fire rounded-2xl p-4">
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="truncate font-bold">{lang === 'ar' ? l.title : l.titleEn}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
@@ -145,11 +145,11 @@ export default function LessonsAdmin() {
                     <span>{courseName(l.courseId)} · {l.videoType === 'youtube' ? '▶ YouTube' : '📁 ملف'} · {Math.round(l.duration / 60)} {t('admin.minutes')}</span>
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1.5">
-                  <button onClick={() => openEdit(l)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                <div className="flex gap-2 sm:shrink-0">
+                  <button onClick={() => openEdit(l)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => remove(l.id)} className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300">
+                  <button onClick={() => remove(l.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1">
                     {t('common.delete')}
                   </button>
                 </div>

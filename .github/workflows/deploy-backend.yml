@@ -1,0 +1,118 @@
+name: Deploy Backend (Supabase)
+
+# الباك اند (Edge Functions + الميجريشنز) لا يُنشر تلقائياً مع الواجهة لأن
+# تغيير القاعدة يحتاج مراجعة. هذا workflow يدوي لتطبيق الميجريشنز ونشر الدوال
+# من نفس الفرع، ثم يتحقق من نسخة الـ API المنشورة.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: 'تطبيق ميجريشنز القاعدة أولاً (supabase db push)'
+        type: boolean
+        default: true
+      functions:
+        description: 'الدوال المطلوب نشرها (مسافة بين كل اسم)'
+        type: string
+        default: 'api backup cleanup'
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Verify Supabase secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+        run: |
+          test -n "$SUPABASE_ACCESS_TOKEN" \
+            || { echo "::error::Secret SUPABASE_ACCESS_TOKEN is missing (Supabase Dashboard -> Account -> Access Tokens)"; exit 1; }
+          test -n "$SUPABASE_PROJECT_ID" \
+            || { echo "::error::Secret SUPABASE_PROJECT_ID is missing (Project Settings -> General -> Reference ID)"; exit 1; }
+
+      - name: Link project
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Apply database migrations
+        if: ${{ inputs.run_migrations }}
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: supabase db push
+
+      - name: Verify Web Push secrets (warning only)
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+        run: |
+          list="$(supabase secrets list --project-ref "$SUPABASE_PROJECT_ID" 2>/dev/null || true)"
+          for key in VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT; do
+            if echo "$list" | grep -q "$key"; then
+              echo "✓ $key is set"
+            else
+              echo "::warning::Supabase secret $key is missing — Web Push notifications will be disabled. Generate keys with: npx web-push generate-vapid-keys"
+            fi
+          done
+
+      - name: Deploy Edge Functions
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          for fn in ${{ inputs.functions }}; do
+            echo "Deploying function: $fn"
+            supabase functions deploy "$fn" --no-verify-jwt
+          done
+
+      - name: Verify deployed API version
+        shell: bash
+        env:
+          API_URL: https://${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co/functions/v1/api
+        run: |
+          expected="$(sed -n "s/.*API_VERSION = '\([^']*\)'.*/\1/p" supabase/functions/_shared/version.ts | head -n1)"
+          echo "Expected API_VERSION: ${expected:-<unknown>}"
+          actual=""
+          for i in 1 2 3 4 5 6; do
+            actual="$(curl -fsS --max-time 10 "${API_URL}/version" 2>/dev/null | sed -n 's/.*"apiVersion":"\([^"]*\)".*/\1/p' || true)"
+            [ -n "$actual" ] && break
+            sleep 5
+          done
+          if [ -z "$actual" ]; then
+            echo "::error::Could not read ${API_URL}/version after deploy"
+            exit 1
+          fi
+          if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+            echo "::error::Deployed apiVersion=$actual but repo expects $expected."
+            exit 1
+          fi
+          echo "Backend deployed and verified: $actual"
+
+      - name: Health check
+        shell: bash
+        env:
+          API_URL: https://${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co/functions/v1/api
+        run: |
+          curl -fsS --max-time 15 "${API_URL}/health" | tee /tmp/health.json
+          grep -q '"db":"up"' /tmp/health.json \
+            || { echo "::error::Database health check failed"; exit 1; }

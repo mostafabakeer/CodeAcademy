@@ -15,11 +15,12 @@ interface Note {
   body: string;
   bodyEn: string;
   image?: string;
+  pdf?: string;
   order?: number;
   grade?: string;
 }
 
-const empty = { courseId: 0, title: '', titleEn: '', body: '', bodyEn: '', image: '', order: 0, grade: 'all' };
+const empty = { courseId: 0, title: '', titleEn: '', body: '', bodyEn: '', image: '', pdf: '', order: 0, grade: 'all' };
 
 export default function NotesAdmin() {
   const { t } = useLang();
@@ -30,6 +31,7 @@ export default function NotesAdmin() {
   const [editing, setEditing] = useState<Note | null>(null);
   const [form, setForm] = useState(empty);
   const [uploading, setUploading] = useState(false);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
 
   const load = useCallback(() => {
     api<{ notes: Note[] }>('/api/notes')
@@ -50,7 +52,7 @@ export default function NotesAdmin() {
   };
   const openEdit = (n: Note) => {
     setEditing(n);
-    setForm({ courseId: n.courseId ?? 0, title: n.title, titleEn: n.titleEn || '', body: n.body || '', bodyEn: n.bodyEn || '', image: n.image || '', order: n.order ?? 0, grade: n.grade || 'all' });
+    setForm({ courseId: n.courseId ?? 0, title: n.title, titleEn: n.titleEn || '', body: n.body || '', bodyEn: n.bodyEn || '', image: n.image || '', pdf: n.pdf || '', order: n.order ?? 0, grade: n.grade || 'all' });
     setError('');
     setOpen(true);
   };
@@ -65,6 +67,19 @@ export default function NotesAdmin() {
       setError((e as Error).message);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const onPdfUpload = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingPdf(true);
+    try {
+      const path = await uploadFile('notes', file);
+      setForm((f) => ({ ...f, pdf: path }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploadingPdf(false);
     }
   };
 
@@ -95,9 +110,9 @@ export default function NotesAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-black">📖 {t('admin.notes')}</h1>
-        <button onClick={openNew} className="btn-fire rounded-xl px-4 py-2 text-sm font-bold text-white">
+        <button onClick={openNew} className="btn-fire shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold text-white">
           + {t('admin.addNote')}
         </button>
       </div>
@@ -112,7 +127,7 @@ export default function NotesAdmin() {
         <div className="grid gap-3 md:grid-cols-2">
           {notes.map((n, i) => (
             <motion.div key={n.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="card-fire rounded-2xl p-4">
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="truncate font-bold">{n.title}</div>
                   <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
@@ -120,11 +135,11 @@ export default function NotesAdmin() {
                     <span className="line-clamp-1">{n.body.slice(0, 120)}</span>
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1.5">
-                  <button onClick={() => openEdit(n)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                <div className="flex gap-2 sm:shrink-0">
+                  <button onClick={() => openEdit(n)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => remove(n.id)} className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300">
+                  <button onClick={() => remove(n.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1">
                     {t('common.delete')}
                   </button>
                 </div>
@@ -150,6 +165,13 @@ export default function NotesAdmin() {
               <input className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" value={form.titleEn} onChange={(e) => setForm({ ...form, titleEn: e.target.value })} />
             </div>
           </div>
+          <div className="rounded-2xl border border-fire-500/30 bg-fire-950/20 p-4">
+            <label className="mb-1.5 block text-sm font-bold text-fire-200">{t('admin.pdfUrl')} — {t('admin.uploadPdf')}</label>
+            <input type="file" accept="application/pdf,.pdf" onChange={(e) => onPdfUpload(e.target.files?.[0])} className="input-fire w-full rounded-xl px-4 py-2.5 text-sm" />
+            {uploadingPdf && <p className="mt-1 text-xs text-ember-400">{t('admin.uploading')}...</p>}
+            {form.pdf && !uploadingPdf && <p className="mt-1 text-xs text-emerald-400">✓ {t('admin.uploaded')}</p>}
+            <p className="mt-1 text-xs text-gray-400">{t('admin.pdfViewerOnly')}</p>
+          </div>
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.noteBody')}</label>
             <textarea className="input-fire w-full rounded-xl px-4 py-2.5 font-mono text-sm" rows={6} placeholder="## Markdown" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
@@ -166,7 +188,7 @@ export default function NotesAdmin() {
             {form.image && !uploading && <p className="mt-1 text-xs text-emerald-400">✓ {t('admin.uploaded')}</p>}
           </div>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
-          <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
+          <button type="submit" disabled={uploading || uploadingPdf} className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white disabled:opacity-60">
             {t('common.save')}
           </button>
         </form>

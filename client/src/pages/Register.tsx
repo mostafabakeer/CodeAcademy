@@ -1,3 +1,4 @@
+﻿import { useEffect } from 'react';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
@@ -9,13 +10,21 @@ import Seo from '../components/Seo';
 export default function Register() {
   const { t } = useLang();
   const register = useAuthStore((s) => s.register);
+  // Ù…Ø´ØªØ±ÙƒØ§Ù† Ù…Ù†ÙØµÙ„Ø§Ù† Ø¨Ø¯Ù„ selector ÙŠÙØ±Ø¬Ø¹ ÙƒØ§Ø¦Ù†Ø§Ù‹ Ø¬Ø¯ÙŠØ¯Ø§Ù‹ ÙƒÙ„ Ù…Ø±Ø© (Zustand 5 + React 19).
+  const user = useAuthStore((s) => s.user);
+  const authLoading = useAuthStore((s) => s.loading);
   const navigate = useNavigate();
+
+  // Redirect logged-in users to home
+  useEffect(() => {
+    if (!authLoading && user) navigate('/');
+  }, [user, authLoading, navigate]);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [grade, setGrade] = useState('bac1');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [formLoading, setFormLoading] = useState(false);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -23,14 +32,14 @@ export default function Register() {
     if (!fullName.trim() || fullName.trim().length < 3) return setError(t('errors.required'));
     if (!/^[0-9+\s-]{8,15}$/.test(phone)) return setError(t('errors.invalidPhone'));
     if (password.length < 6) return setError(t('errors.passwordShort'));
-    setLoading(true);
+    setFormLoading(true);
     try {
       await register(fullName.trim(), phone, grade, password);
       navigate('/');
     } catch (err) {
       setError((err as Error).message || t('errors.generic'));
     } finally {
-      setLoading(false);
+      setFormLoading(false);
     }
   };
 
@@ -45,7 +54,7 @@ export default function Register() {
         className="card-fire relative w-full overflow-hidden rounded-3xl"
       >
         <img
-          src="/login-hero.png"
+          src="/login-hero.webp"
           alt=""
           fetchPriority="high"
           className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
@@ -56,7 +65,7 @@ export default function Register() {
 
         <div className="relative z-10 p-8">
           <div className="mb-6 text-center">
-            <img src="/logo.png" alt="DR Code" className="mx-auto mb-4 h-20 w-20 rounded-2xl object-contain drop-shadow-lg" />
+            <img src="/logo.webp" alt="DR Code" className="mx-auto mb-4 h-20 w-20 rounded-2xl object-contain drop-shadow-lg" />
             <h1 className="text-2xl font-black">{t('auth.registerTitle')}</h1>
           </div>
 
@@ -74,7 +83,7 @@ export default function Register() {
                 name="fullName"
                 autoComplete="name"
                 className="input-fire w-full rounded-xl px-4 py-3"
-                placeholder="مثال: أحمد محمد علي"
+                placeholder="Ù…Ø«Ø§Ù„: Ø£Ø­Ù…Ø¯ Ù…Ø­Ù…Ø¯ Ø¹Ù„ÙŠ"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
               />
@@ -110,8 +119,8 @@ export default function Register() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-            <button type="submit" disabled={loading} className="btn-fire w-full rounded-xl px-4 py-3 font-bold text-white disabled:opacity-60">
-              {loading ? t('common.loading') : t('auth.registerBtn')}
+            <button type="submit" disabled={formLoading} className="btn-fire w-full rounded-xl px-4 py-3 font-bold text-white disabled:opacity-60">
+              {formLoading ? t('common.loading') : t('auth.registerBtn')}
             </button>
           </form>
 

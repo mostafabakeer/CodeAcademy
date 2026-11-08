@@ -2,7 +2,14 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, ApiError, recordAuthFailure, clearAuthFail } from '../api/client';
 import { getBootstrapSync, loadBootstrap, clearBootstrapCache } from '../lib/content';
-import { getAllVideoProgressLocal } from '../lib/localStore';
+import {
+  getAllVideoProgressLocal,
+  getSessionSnapshot,
+  saveSessionSnapshot,
+  clearSessionSnapshot,
+} from '../lib/localStore';
+import { clearStoredToken, readStoredToken } from '../lib/sessionToken';
+import { broadcastAuth } from '../lib/sessionSync';
 import { computeStats, emptyStats, type LevelTier, type StudentStats } from '../lib/stats';
 
 export interface User {
@@ -56,6 +63,28 @@ function cleanupExamReviews(): void {
   }
 }
 
+/**
+ * يستعيد آخر جلسة مؤكدة من اللقطة المحلية عند تعذّر الوصول للخادم.
+ * الهدف: انقطاع الشبكة لا يعني تسجيل خروج — المستخدم يبقى داخل حسابه
+ * ويقرأ المحتوى المخزّن، وتُعاد المزامنة تلقائياً عند عودة الاتصال.
+ */
+function hydrateFromSnapshot(): Partial<AuthState> | null {
+  const snap = getSessionSnapshot();
+  if (!snap) return null;
+  const user = snap.user as User;
+  const levels = Array.isArray(snap.levels) ? (snap.levels as LevelTier[]) : [];
+  const examResults = Array.isArray(snap.examResults) ? (snap.examResults as ExamResultSummary[]) : [];
+  const isActive = user.role === 'admin' || !!user.subscription;
+  return {
+    user,
+    levels,
+    examResults,
+    stats: isActive ? statsFor(user, levels, examResults) : emptyStats(levels),
+    loading: false,
+    offline: true,
+  };
+}
+
 interface AuthState {
   user: User | null;
   levels: LevelTier[];
@@ -72,6 +101,8 @@ interface AuthState {
   login: (identifier: string, password: string) => Promise<void>;
   register: (fullName: string, phone: string, grade: string, password: string) => Promise<{ user: User }>;
   logout: () => Promise<void>;
+  /** يبطل كل جلسات الحساب على كل الأجهزة (بعد سرقة جهاز/تسريب كلمة سر). */
+  logoutAll: () => Promise<void>;
   /** يُحدِّث نتيجة امتحان محلياً (بعد التسليم) ويعيد حساب الإحصائيات فوراً. */
   applyExamResult: (r: ExamResultSummary) => void;
 }
@@ -92,7 +123,15 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
    */
   applyMe: async (me) => {
     clearAuthFail();
-    set({ offline: false, user: me.user, levels: me.levels, examResults: me.examResults, loading: false });
+    // لقطة الهوية تُحفظ عند كل إقلاع ناجح حتى نستعيد الجلسة بلا شبكة لاحقاً.
+    const prevSnap = getSessionSnapshot();
+    const levels: LevelTier[] = me.levels.length
+      ? me.levels
+      : prevSnap && Array.isArray(prevSnap.levels)
+        ? (prevSnap.levels as LevelTier[])
+        : [];
+    saveSessionSnapshot(me.user, levels, me.examResults);
+    set({ offline: false, user: me.user, levels, examResults: me.examResults, loading: false });
     void (async () => {
       try {
         await loadBootstrap(me.user.id);
@@ -103,14 +142,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       if (useAuthStore.getState().user?.id !== me.user.id) return;
       const stats =
         me.user.role === 'admin' || me.user.subscription
-          ? statsFor(me.user, me.levels, me.examResults)
-          : emptyStats(me.levels);
+          ? statsFor(me.user, levels, me.examResults)
+          : emptyStats(levels);
       set({ stats });
     })();
   },
 
   runBoot: async () => {
-    // الجلسة كلها في كوكي HttpOnly (dr_code_token) يصدره الـ Edge function — لا نحتاج أي توكن محلي.
+    // الجلسة الأساسية كوكي HttpOnly (dr_code_token) + نسخة احتياطية محلية.
     set({ loading: true });
     try {
       const me = await api<MeResponse>('/api/auth/me');
@@ -118,28 +157,28 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
 
-      // خطأ شبكة/خادم مؤقت (0 أو 5xx) - نظهر حالة إعادة اتصال
+      // خطأ شبكة/خادم مؤقت (0 أو 5xx): لا نطرد المستخدم.
+      // نسترجع آخر جلسة مؤكدة من اللقطة المحلية ونكمل بالبيانات المخزّنة.
       if (status === 0 || status >= 500) {
-        recordAuthFailure(status, null);
-        set({ offline: true, loading: false });
+        recordAuthFailure(status, readStoredToken());
+        const hydrated = hydrateFromSnapshot();
+        if (hydrated) set(hydrated);
+        else set({ offline: true, loading: false });
         return;
       }
 
       // جلسة مرفوضة نهائياً (401 منتهي/غير صالح، 403 محظور، 404 محذوف).
-      // لكن: 401 على /auth/me أثناء الإقلاع يعني فقط "لا توجد جلسة" — ليس فشلاً.
-      const isBootAuthCheck = status === 401; // runBoot يستدعي /auth/me فقط
-      
+      // 401 على /auth/me أثناء الإقلاع يعني فقط "لا توجد جلسة" — ليس فشلاً.
       if (status === 401 || status === 403 || status === 404) {
-        // لا نسجل 401 كـ "فشل" أثناء الإقلاع — هو مجرد "لا جلسة"
-        if (!isBootAuthCheck) {
-          recordAuthFailure(status, null);
-        }
+        if (status !== 401) recordAuthFailure(status, null);
+        clearSessionSnapshot();
+        clearStoredToken();
         set({ offline: false, user: null, stats: null, examResults: [], levels: [], loading: false });
         return;
       }
 
       // حالات أخرى غير متوقعة
-      recordAuthFailure(status, null);
+      recordAuthFailure(status, readStoredToken());
       set({ offline: false, loading: false });
     }
   },
@@ -174,21 +213,15 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       body: JSON.stringify({ identifier, password }),
     });
     clearAuthFail();
+    // نكمل بـ /auth/me للحصول على المستويات ونتائج الامتحانات (تحسب الإحصائيات بدقة).
+    let me: MeResponse = { user: data.user, levels: [], examResults: [] };
     try {
-      const me = await api<MeResponse>('/api/auth/me');
-      await get().applyMe(me);
-    } catch (err) {
-      const status = err instanceof ApiError ? err.status : 0;
-      if (status === 401 || status === 403 || status === 404) {
-        // الجلسة مُرفوضة حقيقةً رغم نجاح الدخول → نعيد الخطأ.
-        recordAuthFailure(status, null);
-        throw err;
-      }
-      // انقطاع مؤقت بعد نجاح الدخول: لا نطرد المستخدم
-      recordAuthFailure(status, null);
-      set({ offline: status >= 500 || status === 0 });
-      await get().applyMe({ user: data.user, levels: [], examResults: [] } as MeResponse);
+      me = await api<MeResponse>('/api/auth/me');
+    } catch {
+      /* نكمل ببيانات الدخول — تُحدَّث في أول إقلاع تالٍ */
     }
+    await get().applyMe(me);
+    broadcastAuth('login');
   },
 
   register: async (fullName, phone, grade, password) => {
@@ -197,7 +230,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       body: JSON.stringify({ fullName, phone, grade, password }),
     });
     clearAuthFail();
-    set({ user: data.user, stats: null, loading: false });
+    let me: MeResponse = { user: data.user, levels: [], examResults: [] };
+    try {
+      me = await api<MeResponse>('/api/auth/me');
+    } catch {
+      /* نكمل ببيانات التسجيل */
+    }
+    await get().applyMe(me);
+    broadcastAuth('login');
     return { user: data.user };
   },
 
@@ -207,12 +247,32 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api('/api/auth/logout', { method: 'POST' });
     } catch {
-      /* الكوكي قد يبقى صالحاً — نمسح الحالة المحلية على أي حال */
+      /* الكوكي قد يبقى صالحاً على الخادم — نمسح كل ما نملكه محلياً */
     }
+    clearStoredToken();
     clearAuthFail();
     cleanupExamReviews();
+    clearSessionSnapshot();
     clearBootstrapCache(get().user?.id ?? null);
     set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });
+    broadcastAuth('logout');
+  },
+
+  logoutAll: async () => {
+    // يرفع token_version على الخادم ⇒ كل التوكنات القديمة (حتى المسروقة) تبطل.
+    try {
+      await api('/api/auth/logout-all', { method: 'POST' });
+    } catch (e) {
+      // نرمي الخطأ للمستخدم: هذا الإجراء أمني ولا يصح أن يبدو ناجحاً وهو لم ينفّذ.
+      throw e;
+    }
+    clearStoredToken();
+    clearAuthFail();
+    cleanupExamReviews();
+    clearSessionSnapshot();
+    clearBootstrapCache(get().user?.id ?? null);
+    set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });
+    broadcastAuth('logout');
   },
 
   applyExamResult: (r) => {
@@ -220,7 +280,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     const next = [...prev.filter((x) => x.examId !== r.examId), r].sort((a, b) => a.examId - b.examId);
     set({ examResults: next });
     const u = get().user;
-    if (u) set({ stats: statsFor(u, get().levels, next) });
+    if (u) {
+      set({ stats: statsFor(u, get().levels, next) });
+      saveSessionSnapshot(u, get().levels, next);
+    }
   },
 }));
 
@@ -238,6 +301,7 @@ export function useSession(): {
   login: (identifier: string, password: string) => Promise<void>;
   register: (fullName: string, phone: string, grade: string, password: string) => Promise<{ user: User }>;
   logout: () => Promise<void>;
+  logoutAll: () => Promise<void>;
 } {
   return useAuthStore(
     useShallow((s) => ({
@@ -248,6 +312,7 @@ export function useSession(): {
       login: s.login,
       register: s.register,
       logout: s.logout,
+      logoutAll: s.logoutAll,
     }))
   );
 }

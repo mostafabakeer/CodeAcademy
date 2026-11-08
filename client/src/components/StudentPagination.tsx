@@ -19,18 +19,18 @@ const StudentPagination: FC<StudentPaginationProps> = ({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-sm text-gray-400">{t('admin.pageInfo', { page, totalPages })}</span>
-      <div className="flex items-center gap-2">
+      <div className="flex w-full items-center gap-2 sm:w-auto">
         <button
           onClick={() => onPageChange(Math.max(1, page - 1))}
           disabled={page <= 1}
-          className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none sm:py-1.5"
         >
           {t('admin.pagePrev')}
         </button>
         <button
           onClick={() => onPageChange(Math.min(totalPages, page + 1))}
           disabled={page >= totalPages}
-          className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none sm:py-1.5"
         >
           {t('admin.pageNext')}
         </button>

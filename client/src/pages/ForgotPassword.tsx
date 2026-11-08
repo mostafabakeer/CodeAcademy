@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+﻿import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
@@ -104,7 +104,7 @@ export default function ForgotPassword() {
     }
   };
 
-  // Auto-poll status while pending — updates UI when admin approves/rejects
+  // Auto-poll status while pending â€” updates UI when admin approves/rejects
   useEffect(() => {
     if (status !== 'pending' || !phone.trim() || done) return;
     const timer = setInterval(() => {
@@ -198,7 +198,7 @@ export default function ForgotPassword() {
         rel="noopener noreferrer"
         className="btn-fire flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-white"
       >
-        💬 {t('auth.contactReadmin')}
+        ðŸ’¬ {t('auth.contactReadmin')}
       </a>
       <button
         onClick={checkStatus}
@@ -270,7 +270,7 @@ export default function ForgotPassword() {
     if (requested || status === 'pending') {
       return renderPending;
     }
-    // الحالة الأولية: إدخال الرقم
+    // Ø§Ù„Ø­Ø§Ù„Ø© Ø§Ù„Ø£ÙˆÙ„ÙŠØ©: Ø¥Ø¯Ø®Ø§Ù„ Ø§Ù„Ø±Ù‚Ù…
     return (
       <form onSubmit={submitRequest} className="space-y-4">
         <div>
@@ -313,7 +313,7 @@ export default function ForgotPassword() {
       >
         <div className="relative z-10 p-8">
           <div className="mb-6 text-center">
-            <img src="/logo.png" alt="DR Code" className="mx-auto mb-4 h-20 w-20 rounded-2xl object-contain drop-shadow-lg" />
+            <img src="/logo.webp" alt="DR Code" className="mx-auto mb-4 h-20 w-20 rounded-2xl object-contain drop-shadow-lg" />
             <h1 className="text-2xl font-black">{t('auth.forgotPasswordTitle')}</h1>
             <p className="mt-1 text-sm text-gray-400">{t('auth.forgotStepRequest')}</p>
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { getInstallDismissed, setInstallDismissed } from '../lib/localStore';
@@ -23,10 +23,10 @@ function alreadyInstalled(): boolean {
 }
 
 /**
- * بطاقة تثبيت PWA تظهر مرة واحدة فقط:
- * - أندرويد/كروم/ايدج: زر تثبيت بنقرة واحدة عبر beforeinstallprompt.
- * - أيفون/أيباد: إرشادات "أضف للشاشة الرئيسية".
- * - "لا، شكراً" أو الإغلاق ✕ = رفض دائم (لا تظهر مجدداً بعدها أبداً).
+ * Ø¨Ø·Ø§Ù‚Ø© ØªØ«Ø¨ÙŠØª PWA ØªØ¸Ù‡Ø± Ù…Ø±Ø© ÙˆØ§Ø­Ø¯Ø© ÙÙ‚Ø·:
+ * - Ø£Ù†Ø¯Ø±ÙˆÙŠØ¯/ÙƒØ±ÙˆÙ…/Ø§ÙŠØ¯Ø¬: Ø²Ø± ØªØ«Ø¨ÙŠØª Ø¨Ù†Ù‚Ø±Ø© ÙˆØ§Ø­Ø¯Ø© Ø¹Ø¨Ø± beforeinstallprompt.
+ * - Ø£ÙŠÙÙˆÙ†/Ø£ÙŠØ¨Ø§Ø¯: Ø¥Ø±Ø´Ø§Ø¯Ø§Øª "Ø£Ø¶Ù Ù„Ù„Ø´Ø§Ø´Ø© Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠØ©".
+ * - "Ù„Ø§ØŒ Ø´ÙƒØ±Ø§Ù‹" Ø£Ùˆ Ø§Ù„Ø¥ØºÙ„Ø§Ù‚ âœ• = Ø±ÙØ¶ Ø¯Ø§Ø¦Ù… (Ù„Ø§ ØªØ¸Ù‡Ø± Ù…Ø¬Ø¯Ø¯Ø§Ù‹ Ø¨Ø¹Ø¯Ù‡Ø§ Ø£Ø¨Ø¯Ø§Ù‹).
  */
 export default function InstallPrompt() {
   const { t } = useLang();
@@ -58,8 +58,8 @@ export default function InstallPrompt() {
       setDeferred(null);
     };
 
-    // ملاحظة: نستمع للحدث من أول لحظة، لكن البطاقة تُجدول للظهور أول الدخول على أي جهاز
-    // (موبايل أو ديسكتوب) — وليست مشروطة بوصول beforeinstallprompt (قد لا يصله بعض المتصفحات).
+    // Ù…Ù„Ø§Ø­Ø¸Ø©: Ù†Ø³ØªÙ…Ø¹ Ù„Ù„Ø­Ø¯Ø« Ù…Ù† Ø£ÙˆÙ„ Ù„Ø­Ø¸Ø©ØŒ Ù„ÙƒÙ† Ø§Ù„Ø¨Ø·Ø§Ù‚Ø© ØªÙØ¬Ø¯ÙˆÙ„ Ù„Ù„Ø¸Ù‡ÙˆØ± Ø£ÙˆÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ø¹Ù„Ù‰ Ø£ÙŠ Ø¬Ù‡Ø§Ø²
+    // (Ù…ÙˆØ¨Ø§ÙŠÙ„ Ø£Ùˆ Ø¯ÙŠØ³ÙƒØªÙˆØ¨) â€” ÙˆÙ„ÙŠØ³Øª Ù…Ø´Ø±ÙˆØ·Ø© Ø¨ÙˆØµÙˆÙ„ beforeinstallprompt (Ù‚Ø¯ Ù„Ø§ ÙŠØµÙ„Ù‡ Ø¨Ø¹Ø¶ Ø§Ù„Ù…ØªØµÙØ­Ø§Øª).
     window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
     window.addEventListener('appinstalled', onAppInstalled);
     schedule();
@@ -85,10 +85,10 @@ export default function InstallPrompt() {
     try {
       await ev.prompt();
       const choice = await ev.userChoice;
-      // الرفض من نافذة المتصفح نفسها ≠ رفض نهائي: تُعرض الزيارة القادمة لكن ليس الآن.
+      // Ø§Ù„Ø±ÙØ¶ Ù…Ù† Ù†Ø§ÙØ°Ø© Ø§Ù„Ù…ØªØµÙØ­ Ù†ÙØ³Ù‡Ø§ â‰  Ø±ÙØ¶ Ù†Ù‡Ø§Ø¦ÙŠ: ØªÙØ¹Ø±Ø¶ Ø§Ù„Ø²ÙŠØ§Ø±Ø© Ø§Ù„Ù‚Ø§Ø¯Ù…Ø© Ù„ÙƒÙ† Ù„ÙŠØ³ Ø§Ù„Ø¢Ù†.
       if (choice.outcome !== 'accepted') return;
     } catch {
-      /* تُغلق البطاقة وننتهي */
+      /* ØªÙØºÙ„Ù‚ Ø§Ù„Ø¨Ø·Ø§Ù‚Ø© ÙˆÙ†Ù†ØªÙ‡ÙŠ */
     }
   };
 
@@ -110,11 +110,11 @@ export default function InstallPrompt() {
               onClick={close}
               className="absolute left-2.5 top-2.5 flex h-10 w-10 items-center justify-center rounded-full text-xl leading-none text-gray-400 transition hover:bg-white/10 hover:text-white"
             >
-              ✕
+              âœ•
             </button>
 
             <div className="flex items-start gap-3">
-              <img src="/logo.png" alt="" className="h-12 w-12 shrink-0 rounded-xl object-contain" />
+              <img src="/logo.webp" alt="" className="h-12 w-12 shrink-0 rounded-xl object-contain" />
               <div className="min-w-0 space-y-0.5">
                 <p className="text-sm font-bold text-white">{t('install.title')}</p>
                 <p className="text-xs leading-relaxed text-gray-400">

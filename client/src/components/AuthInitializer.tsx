@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
+import { onAuthBroadcast } from '../lib/sessionSync';
 
 interface AuthInitializerProps {
   children: React.ReactNode;
@@ -46,6 +47,35 @@ export function AuthInitializer({ children }: AuthInitializerProps) {
       clearTimeout(failsafe);
     };
   }, [runBoot]);
+
+  // مزامنة بين التبويبات: تسجيل خروج في تبويب ⇒ بقية التبويبات تخرج فوراً،
+  // وتسجيل دخول في تبويب ⇒ بقية التبويبات تستعيد الجلسة بدون إعادة تحميل.
+  useEffect(() => {
+    return onAuthBroadcast((event) => {
+      if (event === 'logout') {
+        useAuthStore.setState({
+          user: null,
+          stats: null,
+          examResults: [],
+          levels: [],
+          offline: false,
+          loading: false,
+        });
+      } else {
+        void useAuthStore.getState().runBoot();
+      }
+    });
+  }, []);
+
+  // عودة الشبكة: إعادة محاولة صامتة بدل بقاء المستخدم على شاشة "تعذّر الاتصال".
+  useEffect(() => {
+    const onOnline = () => {
+      const state = useAuthStore.getState();
+      if (state.offline) void state.reconnect();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
 
   if (!authReady) {
     return (

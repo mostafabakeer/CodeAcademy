@@ -85,14 +85,26 @@ export default function LeaderboardAdmin() {
     load();
   }, [load]);
 
-  useEffect(() => {
+  // تحميل قائمة الامتحانات. مهم: إطفاء `loading` في كل المسارات، وإلا بقي
+  // الهيكل العظمي (skeleton) ظاهرًا للأبد عند فشل الطلب أو عدم وجود امتحانات.
+  const loadExams = useCallback(() => {
+    setLoading(true);
+    setError('');
     api<{ exams: ExamOption[] }>('/api/admin/exams/select')
       .then((d) => {
         setExams(d.exams);
         if (d.exams.length > 0) setExamId(d.exams[0].id);
+        else setLoading(false);
       })
-      .catch((e) => setError((e as Error).message));
+      .catch((e) => {
+        setError((e as Error).message);
+        setLoading(false);
+      });
   }, []);
+
+  useEffect(() => {
+    loadExams();
+  }, [loadExams]);
 
   const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const showTop3 = page === 1 && !debounced.trim();
@@ -118,7 +130,16 @@ export default function LeaderboardAdmin() {
         </select>
       </div>
 
-      {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
+      {error && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">
+          <span>{error}</span>
+          {exams.length === 0 && (
+            <button onClick={loadExams} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+              {t('exam.retry')}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="relative">
         <input
@@ -162,7 +183,35 @@ export default function LeaderboardAdmin() {
             </div>
           )}
 
-          <div className="card-fire overflow-x-auto rounded-2xl">
+          {/* موبايل: بطاقات مختصرة بدل جدول بعرض 680px */}
+          <div className="space-y-2 md:hidden">
+            {table.map((r) => (
+              <article key={r.userId} className="card-fire rounded-2xl p-3.5">
+                <div className="flex items-center gap-3">
+                  <span className="rounded-full bg-fire-500/15 px-2.5 py-0.5 text-sm font-black text-fire-300">#{r.rank}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-bold text-gray-100">{r.fullName || '—'}</div>
+                    <div className="text-xs text-gray-500" dir="ltr">
+                      {r.phone || '—'}
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-md bg-emerald-500/15 px-2 py-0.5 text-sm font-black text-emerald-300">{r.best}%</span>
+                </div>
+                <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-400">
+                  <GradeBadge grade={r.grade} />
+                  <span>
+                    {t('admin.resultCorrect')}: <b className="text-gray-200">{r.correct}/{r.total}</b>
+                  </span>
+                  <span>
+                    {t('admin.resultAttempts')}: <b className="text-gray-200">{r.attempts}</b>
+                  </span>
+                  <span className="ms-auto">{fmtDate(r.at, lang)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="card-fire hidden overflow-x-auto rounded-2xl md:block">
             <table className="w-full min-w-[680px] text-sm">
               <thead>
                 <tr className="border-b border-ink-600 text-start text-gray-400">

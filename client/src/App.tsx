@@ -5,6 +5,7 @@ import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
 import SubscriberGate from './components/SubscriberGate';
 import PageErrorBoundary from './components/PageErrorBoundary';
+import ErrorBoundary from './components/ErrorBoundary';
 import FloatingMascot from './components/FloatingMascot';
 import InstallPrompt from './components/InstallPrompt';
 import { useLang } from './i18n';
@@ -71,15 +72,17 @@ function VisitorRoute({ children, publicPage }: { children: ReactNode; publicPag
 function Shell() {
   const { t } = useLang();
   return (
-    <div className="flex min-h-screen flex-col">
-      <Navbar />
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
-        <AnimatedRoutes />
-      </main>
-      <footer className="border-t border-fire-900/20 py-6 text-center text-sm text-gray-500 print:hidden">
-        ⚡ DR Code — {t('footer.rights')} © {new Date().getFullYear()}
-      </footer>
-    </div>
+    <ErrorBoundary>
+      <div className="flex min-h-screen flex-col">
+        <Navbar />
+        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
+          <AnimatedRoutes />
+        </main>
+        <footer className="border-t border-fire-900/20 py-6 text-center text-sm text-gray-500 print:hidden">
+          ⚡ DR Code — {t('footer.rights')} © {new Date().getFullYear()}
+        </footer>
+      </div>
+    </ErrorBoundary>
   );
 }
 

@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'npm:hono@^4.6.3';
 import { cors } from 'npm:hono@^4.6.3/cors';
-import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES } from '../_shared/env.ts';
+import { CORS_ORIGIN, BUCKET_VIDEOS, BUCKET_IMAGES, BUCKET_NOTES } from '../_shared/env.ts';
+import { API_VERSION, MIN_CLIENT_VERSION } from '../_shared/version.ts';
 import { sb } from '../_shared/supabase.ts';
 import { requireAuth, requireAdmin, requireSubscriber, signToken, authCookieHeader, clearAuthCookieHeader, type AuthUser, invalidateUserCache } from '../_shared/auth.ts';
 import { hashPassword, verifyPassword } from '../_shared/password.ts';
@@ -16,6 +17,7 @@ import {
   createUser,
   updateUser,
   deleteUser,
+  bumpTokenVersion,
   safeUser,
   normalizePhone,
   listUsers,
@@ -138,6 +140,25 @@ app.onError((err, c) => {
   return c.json({ error: 'خطأ داخلي في الخادم' }, 500);
 });
 
+/**
+ * أي تعديل ناجح من الأدمن على المحتوى يُبطل كاش bootstrap في نسخة الدالة الحالية
+ * حتى يرى الطلاب التحديث فوراً بدل انتظار انتهاء الـ TTL (نسخ أخرى تنتهي تلقائياً).
+ */
+const CONTENT_MUTATION_PATH = /^\/(courses|lessons|exams|notes)(\/|$)/;
+app.use('*', async (c, next) => {
+  await next();
+  if (
+    c.res.status < 400 &&
+    c.req.method !== 'GET' &&
+    c.req.method !== 'HEAD' &&
+    CONTENT_MUTATION_PATH.test(c.req.path) &&
+    // الأدمن فقط يعدّل المحتوى؛ تسليم امتحان الطالب لا يُبطل الكاش.
+    c.get('user')?.role === 'admin'
+  ) {
+    clearBootstrapCache();
+  }
+});
+
 function bodyText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
@@ -152,11 +173,22 @@ app.get('/health', async (c) => {
   try {
     const { error } = await sb.from('app_config').select('key').limit(1);
     if (error) throw error;
-    return c.json({ ok: true, db: 'up' });
+    return c.json({
+      ok: true,
+      db: 'up',
+      apiVersion: API_VERSION,
+      minClientVersion: MIN_CLIENT_VERSION,
+      time: Date.now(),
+    });
   } catch (e) {
-    return c.json({ ok: false, db: 'down', error: (e as Error).message }, 503);
+    return c.json({ ok: false, db: 'down', apiVersion: API_VERSION, error: (e as Error).message }, 503);
   }
 });
+
+/** فحص نسخة سريع بلا أي استعلام قاعدة — يستخدمه CI بعد كل نشر. */
+app.get('/version', (c) =>
+  c.json({ apiVersion: API_VERSION, minClientVersion: MIN_CLIENT_VERSION }),
+);
 
 /* =================== المصادقة =================== */
 
@@ -199,7 +231,7 @@ app.post('/auth/register', async (c) => {
   });
 
   recordRegister(clientIp);
-  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
+  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
 
@@ -230,7 +262,7 @@ app.post('/auth/login', async (c) => {
   }
 
   clearLoginFailures(loginKey);
-  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
+  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
 
@@ -246,16 +278,27 @@ app.get('/auth/me', requireAuth, async (c) => {
     total: r.total,
     attempts: r.attempts,
   }));
-  // إذا تمت المصادقة عبر الكوكي فقط (لأن localStorage فاضي في المتصفح) — نُصدر توكين جديداً
-  // ليعيد العميل تخزينه وتستمرّ الجلسة بعد أي مسح للتخزين المحلي.
-  const authz = c.req.header('authorization') ?? '';
-  if (!authz.startsWith('Bearer ')) {
-    const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade });
-    return c.json({ user: safeUser(user), levels: levels.tiers, examResults, token }, 200, {
-      'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? ''),
-    });
+
+  // تجديد دائم (sliding): كل إقلاع ناجح يُصدر توكناً جديداً ويعيد ضبط الكوكي،
+  // ويُعاد التوكن في الجسم ليحفظه العميل كنسخة احتياطية. بهذا لا تنتهي جلسة
+  // مستخدم نشط أبداً، وتعود الجلسة كاملة لو ضاع الكوكي أو التخزين المحلي.
+  const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
+  return c.json({ user: safeUser(user), levels: levels.tiers, examResults, token }, 200, {
+    'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? ''),
+  });
+});
+
+app.post('/auth/logout-all', requireAuth, async (c) => {
+  const me = getUser(c);
+  try {
+    await bumpTokenVersion(me.id);
+    // الكاش في الذاكرة كان يحمل النسخة القديمة — نُبطله فوراً وإلا بقي التوكن صالحاً 30 ثانية.
+    invalidateUserCache(me.id);
+    return c.json({ ok: true }, 200, { 'Set-Cookie': clearAuthCookieHeader(c.req.header('host') ?? '') });
+  } catch (e) {
+    console.error('[api] logout-all:', (e as Error).message);
+    return c.json({ error: 'تعذّر إبطال الجلسات الآن، حاول لاحقاً' }, 500);
   }
-  return c.json({ user: safeUser(user), levels: levels.tiers, examResults });
 });
 
 app.post('/auth/logout', async (c) => {
@@ -368,6 +411,8 @@ app.post('/auth/forgot-password/complete', async (c) => {
   const passwordHash = await hashPassword(String(password));
   await updateUser(user.id, { passwordHash });
   invalidateUserCache(user.id);
+  // تغيير كلمة السر يُبطل أي جلسة قديمة (ربما مسروقة) على كل الأجهزة.
+  await bumpTokenVersion(user.id).catch(() => {});
   await completePasswordReset(reset.id);
 
   return c.json({ ok: true });
@@ -376,9 +421,44 @@ app.post('/auth/forgot-password/complete', async (c) => {
 /* =================== المحتوى الكامل (bootstrap) =================== */
 
 /**
+ * كاش قصير العمر (45 ثانية) لكل (دور + مرحلة). يخدم عشرات الطلاب المتزامنين
+ * من نسخة واحدة بدل إعادة الاستعلام من القاعدة لكل واحد — مع بقاء المحتوى
+ * محدّثاً خلال أقل من دقيقة. الأدمن لا يستخدم الكاش ليرى تعديلاته فوراً.
+ */
+const BOOTSTRAP_CACHE_TTL = 45_000;
+const bootstrapCache = new Map<string, { at: number; etag: string; json: string }>();
+
+/** بصمة سريعة (FNV-1a) لتمييز نسخة المحتوى بلا تكلفة تشفير. */
+function contentFingerprint(str: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${hash.toString(36)}.${str.length.toString(36)}`;
+}
+
+/** إبطال كاش المحتوى فور أي تعديل من الأدمن (دروس/امتحانات/مذكرات/كورسات). */
+export function clearBootstrapCache(): void {
+  bootstrapCache.clear();
+}
+
+function bootstrapJson(json: string, etag: string, c: Context) {
+  return c.body(json, 200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'private, no-store',
+    ETag: etag,
+    'X-Content-Version': etag,
+  });
+}
+
+/**
  * يعيد كل المحتوى الثابت في طلب واحد (كورسات، دروس، امتحانات بعدد الأسئلة،
  * مذكرات، أوائل الطلبة، مستويات، مراحل) بعد الفلترة حسب دور/مرحلة المستخدم.
  * تُحفظ النتيجة مؤقتاً في المتصفح لتقليل استعلامات الباك اند بشكل كبير.
+ *
+ * يدعم أيضاً `?v=<البصمة>`: لو لم يتغير المحتوى نرد بجسم صغير
+ * `{ notModified: true }` بدل إعادة تنزيل كل المحتوى على الموبايل.
  */
 app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
@@ -386,6 +466,20 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
     return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
   }
   const isAdmin = reqUser.role === 'admin';
+  const knownVersion = c.req.query('v') ?? '';
+  const cacheKey = isAdmin ? '' : `grade:${reqUser.grade}`;
+
+  // 1. نسخة مخزّنة حديثة: لا استعلامات إطلاقاً.
+  const cachedEntry = cacheKey ? bootstrapCache.get(cacheKey) : undefined;
+  if (cachedEntry && Date.now() - cachedEntry.at < BOOTSTRAP_CACHE_TTL) {
+    if (knownVersion && knownVersion === cachedEntry.etag) {
+      return c.json({ notModified: true, contentVersion: cachedEntry.etag }, 200, {
+        'Cache-Control': 'private, no-store',
+      });
+    }
+    return bootstrapJson(cachedEntry.json, cachedEntry.etag, c);
+  }
+
   const [courses, lessons, exams, notes, topItems, levels] = await Promise.all([
     isAdmin ? listCourses() : listCoursesByGrade(reqUser.grade),
     isAdmin ? listAllLessons() : listLessonsByGrade(reqUser.grade),
@@ -395,11 +489,17 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
     getLevels(),
   ]);
 
-  const { data: allQuestions } = await sb.from('questions').select('exam_id');
+  const examIds = exams.map((exam) => exam.id);
+  const { data: questionCounts, error: questionCountsError } = examIds.length
+    ? await sb.rpc('question_counts_for_exams', { p_exam_ids: examIds })
+    : { data: [], error: null };
+  if (questionCountsError) {
+    console.error('[api] bootstrap question counts:', questionCountsError.message);
+    return c.json({ error: 'تعذّر تحميل الامتحانات الآن' }, 503);
+  }
   const qByExam = new Map<number, number>();
-  for (const q of allQuestions ?? []) {
-    const ex = Number(q.exam_id);
-    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
+  for (const row of questionCounts ?? []) {
+    qByExam.set(Number(row.exam_id), Number(row.questions_count) || 0);
   }
 
   const students = topItems
@@ -414,7 +514,7 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
       gradeName: GRADES[s.grade]?.name ?? s.grade,
     }));
 
-  return c.json({
+  const json = JSON.stringify({
     courses,
     lessons,
     exams: exams.map((e) => ({ ...e, questionsCount: qByExam.get(e.id) ?? 0 })),
@@ -423,6 +523,17 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
     levels: levels.tiers,
     grades: GRADES,
   });
+  const etag = contentFingerprint(json) || '0';
+
+  // 2. لم يتغير شيء منذ آخر زيارة ⇒ جسم صغير جداً.
+  if (knownVersion && knownVersion === etag) {
+    if (cacheKey) bootstrapCache.set(cacheKey, { at: Date.now(), etag, json });
+    return c.json({ notModified: true, contentVersion: etag }, 200, { 'Cache-Control': 'private, no-store' });
+  }
+
+  // 3. محتوى جديد ⇒ خزّنه للطلاب المشاركين في نفس المرحلة.
+  if (cacheKey) bootstrapCache.set(cacheKey, { at: Date.now(), etag, json });
+  return bootstrapJson(json, etag, c);
 });
 
 /* =================== الكورسات والدروس =================== */
@@ -563,6 +674,15 @@ app.post('/lessons', requireAuth, requireAdmin, async (c) => {
     order: Number(b.order) || 0,
     createdAt: Date.now(),
   });
+  // Trigger push notification for this grade (or everyone when grade = all)
+  const lessonGrade = isContentGrade(b.grade) ? b.grade : 'all';
+  sendPushToGrade(lessonGrade, {
+    title: '📚 درس جديد',
+    body: bodyText(b.title),
+    url: `/lessons/${lesson.id}`,
+    type: 'lesson',
+    id: lesson.id,
+  }).catch(() => {});
   return c.json({ lesson });
 });
 
@@ -675,6 +795,15 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
     createdAt: Date.now(),
   });
   clearLatestExamTopCache();
+  // Trigger push notification for this grade (or everyone when grade = all)
+  const examGrade = isContentGrade(b.grade) ? b.grade : 'all';
+  sendPushToGrade(examGrade, {
+    title: '📝 امتحان جديد',
+    body: bodyText(b.title),
+    url: `/exams/${exam.id}`,
+    type: 'exam',
+    id: exam.id,
+  }).catch(() => {});
   return c.json({ exam });
 });
 
@@ -771,12 +900,46 @@ app.get('/notes', requireAuth, requireSubscriber, async (c) => {
 
 app.get('/notes/:id', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  const note = await findNoteById(Number(c.req.param('id')));
+  const noteId = Number(c.req.param('id'));
+  if (!Number.isSafeInteger(noteId) || noteId <= 0) return c.json({ error: 'المذكرة غير موجودة' }, 404);
+  const note = await findNoteById(noteId);
   if (!note) return c.json({ error: 'المذكرة غير موجودة' }, 404);
   if (reqUser.role === 'student' && !gradeAllowed(note.grade, reqUser.grade)) {
     return c.json({ error: 'المذكرة غير موجودة' }, 404);
   }
   return c.json({ note });
+});
+
+app.get('/notes/:id/pdf', requireAuth, requireSubscriber, async (c) => {
+  const reqUser = getUser(c);
+  if (!genericRateLimit(`note-pdf:${reqUser.id}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+
+  const noteId = Number(c.req.param('id'));
+  if (!Number.isSafeInteger(noteId) || noteId <= 0) {
+    return c.json({ error: 'المذكرة غير موجودة' }, 404);
+  }
+  const note = await findNoteById(noteId);
+  if (!note || (reqUser.role === 'student' && !gradeAllowed(note.grade, reqUser.grade))) {
+    return c.json({ error: 'المذكرة غير موجودة' }, 404);
+  }
+
+  const path = note.pdf.trim();
+  if (!/^\d+-[\w\u0600-\u06FF.-]+\.pdf$/i.test(path)) {
+    return c.json({ error: 'ملف PDF غير متاح للعرض' }, 404);
+  }
+
+  const { data, error } = await sb.storage.from(BUCKET_NOTES).createSignedUrl(path, 60 * 60);
+  if (error || !data?.signedUrl) {
+    console.error('[api] notes/pdf signed URL:', error?.message ?? 'empty URL');
+    return c.json({ error: 'تعذّر فتح ملف PDF الآن' }, 503);
+  }
+
+  return c.json({ url: data.signedUrl }, 200, {
+    'Cache-Control': 'private, no-store',
+    'Referrer-Policy': 'no-referrer',
+  });
 });
 
 app.post('/notes', requireAuth, requireAdmin, async (c) => {
@@ -789,10 +952,20 @@ app.post('/notes', requireAuth, requireAdmin, async (c) => {
     body: bodyText(b.body),
     bodyEn: bodyText(b.bodyEn),
     image: bodyText(b.image),
+    pdf: bodyText(b.pdf),
     grade: isContentGrade(b.grade) ? b.grade : 'all',
     order: Number(b.order) || 0,
     createdAt: Date.now(),
   });
+  // Trigger push notification for this grade (or everyone when grade = all)
+  const noteGrade = isContentGrade(b.grade) ? b.grade : 'all';
+  sendPushToGrade(noteGrade, {
+    title: '📖 مذكرة جديدة',
+    body: bodyText(b.title),
+    url: '/notes',
+    type: 'note',
+    id: note.id,
+  }).catch(() => {});
   return c.json({ note });
 });
 
@@ -808,6 +981,7 @@ app.put('/notes/:id', requireAuth, requireAdmin, async (c) => {
     body: b.body !== undefined ? bodyText(b.body) : note.body,
     bodyEn: b.bodyEn !== undefined ? bodyText(b.bodyEn) : note.bodyEn,
     image: b.image !== undefined ? bodyText(b.image) : note.image,
+    pdf: b.pdf !== undefined ? bodyText(b.pdf) : note.pdf,
     grade: b.grade !== undefined ? (isContentGrade(b.grade) ? b.grade : note.grade) : note.grade,
     order: b.order !== undefined ? Number(b.order) : note.order,
   });
@@ -1336,33 +1510,240 @@ app.delete('/admin/password-resets/:id', requireAuth, requireAdmin, async (c) =>
   return c.json({ ok: true, id });
 });
 
+/* =================== Push Notifications =================== */
+
+interface PushSubscriptionRow {
+  user_id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: number;
+}
+
+/** حفظ اشتراك push للمستخدم (يحل محل أي اشتراك سابق لنفس الـ endpoint). */
+app.post('/push/subscribe', requireAuth, requireSubscriber, async (c) => {
+  const user = getUser(c);
+  const { endpoint, p256dh, auth } = await c.req.json().catch(() => ({}));
+  if (!endpoint || !p256dh || !auth) return c.json({ error: 'بيانات الاشتراك ناقصة' }, 400);
+
+  const at = Date.now();
+  // Upsert by endpoint (unique per device)
+  const { error } = await sb
+    .from('push_subscriptions')
+    .upsert({ user_id: user.id, endpoint, p256dh, auth, created_at: at }, { onConflict: 'endpoint' });
+  if (error) {
+    console.error('[api] push/subscribe upsert:', error.message);
+    return c.json({ error: 'تعذّر حفظ الاشتراك' }, 500);
+  }
+  return c.json({ ok: true });
+});
+
+/** حذف اشتراك push للمستخدم. */
+app.post('/push/unsubscribe', requireAuth, requireSubscriber, async (c) => {
+  const user = getUser(c);
+  const { endpoint } = await c.req.json().catch(() => ({}));
+  if (!endpoint) return c.json({ error: 'endpoint مطلوب' }, 400);
+
+  const { error } = await sb.from('push_subscriptions').delete().eq('user_id', user.id).eq('endpoint', endpoint);
+  if (error) {
+    console.error('[api] push/unsubscribe delete:', error.message);
+    return c.json({ error: 'تعذّر حذف الاشتراك' }, 500);
+  }
+  return c.json({ ok: true });
+});
+
+/** إرسال push تجريبي للمستخدم الحالي. */
+app.post('/push/test', requireAuth, requireSubscriber, async (c) => {
+  const user = getUser(c);
+  await sendPushToUser(user.id, {
+    title: '🔔 DR Code',
+    body: 'هذا إشعار تجريبي! الإشعارات تعمل بنجاح.',
+    icon: '/pwa-192.png',
+    badge: '/pwa-192.png',
+    url: '/',
+    type: 'test',
+  });
+  return c.json({ ok: true });
+});
+
+/** إرسال push لكل مشتركي مرحلة معينة (أو للجميع عند grade = all) عند إضافة محتوى جديد. */
+interface PushSubRow {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+interface PushPayloadServer {
+  title: string;
+  body: string;
+  url?: string;
+  type?: 'lesson' | 'exam' | 'note' | 'test';
+  id?: number;
+  icon?: string;
+  badge?: string;
+}
+
+/** يهيّئ web-push مرة واحدة لكل استدعاء. يرجع null لو مفاتيح VAPID غير مضبوطة. */
+async function configureWebPush() {
+  const vapidPublic = Deno.env.get('VAPID_PUBLIC_KEY');
+  const vapidPrivate = Deno.env.get('VAPID_PRIVATE_KEY');
+  if (!vapidPublic || !vapidPrivate) {
+    console.warn('[push] VAPID keys not configured — skipping push (set VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY secrets)');
+    return null;
+  }
+  // استيراد ديناميكي: لو تعذّر تحميل الحزمة لا تتأثر بقية الـ API إطلاقاً.
+  const webPush = (await import('npm:web-push@^3.6.7')).default;
+  webPush.setVapidDetails(
+    Deno.env.get('VAPID_SUBJECT') ?? 'mailto:admin@drcode.com',
+    vapidPublic,
+    vapidPrivate,
+  );
+  return webPush;
+}
+
+/** يرسل نفس الإشعار لكل الاشتراكات، ويحذف الاشتراكات المنتهية (404/410). */
+async function deliverPush(subs: PushSubRow[], payload: PushPayloadServer): Promise<void> {
+  if (!subs.length) return;
+  try {
+    const webPush = await configureWebPush();
+    if (!webPush) return;
+
+    const body = JSON.stringify({
+      title: payload.title,
+      body: payload.body,
+      icon: payload.icon ?? '/pwa-192.png',
+      badge: payload.badge ?? '/pwa-192.png',
+      data: { url: payload.url ?? '/', type: payload.type ?? 'test', id: payload.id ?? 0 },
+    });
+
+    const results = await Promise.allSettled(
+      subs.map((sub) =>
+        webPush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          body,
+        ),
+      ),
+    );
+
+    await Promise.all(
+      results.map(async (result, index) => {
+        if (result.status === 'fulfilled') return;
+        const statusCode = (result.reason as { statusCode?: number } | null)?.statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          // اشتراك منتهي: احذفه حتى لا يتكرر فشل الإرسال له.
+          try {
+            await sb.from('push_subscriptions').delete().eq('endpoint', subs[index].endpoint);
+          } catch {
+            /* ignore */
+          }
+        } else {
+          console.error('[push] send failed:', (result.reason as Error)?.message ?? String(result.reason));
+        }
+      }),
+    );
+  } catch (e) {
+    console.error('[push] deliverPush error:', (e as Error).message);
+  }
+}
+
+/** إرسال push لجهاز/أجهزة مستخدم واحد (إشعار تجريبي). */
+export async function sendPushToUser(userId: number, payload: PushPayloadServer): Promise<void> {
+  const { data, error } = await sb
+    .from('push_subscriptions')
+    .select('endpoint, p256dh, auth')
+    .eq('user_id', userId)
+    .limit(20);
+  if (error) {
+    console.error('[push] load subscriptions:', error.message);
+    return;
+  }
+  await deliverPush((data ?? []) as PushSubRow[], payload);
+}
+
+/** إرسال push لكل مشتركي مرحلة معينة عند إضافة محتوى جديد. */
+export async function sendPushToGrade(grade: string, payload: PushPayloadServer): Promise<void> {
+  try {
+    let query = sb
+      .from('push_subscriptions')
+      .select('endpoint, p256dh, auth, users!inner(id, subscription, grade)')
+      .eq('users.subscription', true)
+      .limit(500);
+    // grade === 'all' ⇒ المحتوى متاح لكل المراحل، فنرسل لكل المشتركين.
+    if (grade && grade !== 'all') query = query.eq('users.grade', grade);
+    const { data, error } = await query;
+    if (error) {
+      console.error('[push] load grade subscriptions:', error.message);
+      return;
+    }
+    await deliverPush((data ?? []) as PushSubRow[], payload);
+  } catch (e) {
+    console.error('[push] sendPushToGrade error:', (e as Error).message);
+  }
+});
+
 // رابط رفع مباشر إلى Storage (تجاوز حد الحجم في الدوال) — يوقّع URL ثم يرفع المتصفح مباشرة
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/webm', 'video/quicktime', 'video/ogg']);
+const MAX_NOTE_PDF_BYTES = 20 * 1024 * 1024;
 const IMAGE_EXTS = /\.(png|jpe?g|webp|gif)$/i;
 const VIDEO_EXTS = /\.(mp4|webm|mov|ogv|ogg)$/i;
+const PDF_EXT = /\.pdf$/i;
 
 app.post('/admin/upload-url', requireAuth, requireAdmin, async (c) => {
   const b = await c.req.json().catch(() => ({}));
-  const bucketKey = b.bucket === 'images' ? 'images' : 'videos';
-  const bucket = bucketKey === 'images' ? BUCKET_IMAGES : BUCKET_VIDEOS;
+  const bucketKey = b.bucket;
+  if (bucketKey !== 'images' && bucketKey !== 'videos' && bucketKey !== 'notes') {
+    return c.json({ error: 'نوع الملف غير مدعوم' }, 400);
+  }
+  const bucket = bucketKey === 'images'
+    ? BUCKET_IMAGES
+    : bucketKey === 'notes'
+      ? BUCKET_NOTES
+      : BUCKET_VIDEOS;
   const fileName = String(b.fileName ?? 'file');
   const contentType = String(b.contentType ?? 'application/octet-stream');
+  const fileSize = Number(b.fileSize);
 
   const isImage = bucketKey === 'images';
-  const typeOk = isImage ? ALLOWED_IMAGE_TYPES.has(contentType) : ALLOWED_VIDEO_TYPES.has(contentType);
-  const extOk = isImage ? IMAGE_EXTS.test(fileName) : VIDEO_EXTS.test(fileName);
+  const isPdf = bucketKey === 'notes';
+  const typeOk = isImage
+    ? ALLOWED_IMAGE_TYPES.has(contentType)
+    : isPdf
+      ? contentType === 'application/pdf'
+      : ALLOWED_VIDEO_TYPES.has(contentType);
+  const extOk = isImage
+    ? IMAGE_EXTS.test(fileName)
+    : isPdf
+      ? PDF_EXT.test(fileName)
+      : VIDEO_EXTS.test(fileName);
   if (!typeOk || !extOk) {
+    const message = isImage
+      ? 'صيغة الصورة غير مسموحة (png/jpeg/webp/gif)'
+      : isPdf
+        ? 'يجب اختيار ملف PDF صالح'
+        : 'صيغة الفيديو غير مسموحة (mp4/webm/mov/ogv)';
     return c.json(
-      { error: isImage ? 'صيغة الصورة غير مسموحة (png/jpeg/webp/gif)' : 'صيغة الفيديو غير مسموحة (mp4/webm/mov/ogv)' },
-      400
+      { error: message },
+      400,
     );
   }
+  if (isPdf && (!Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > MAX_NOTE_PDF_BYTES)) {
+    return c.json({ error: 'حجم ملف PDF يجب ألا يتجاوز 20 ميجابايت' }, 400);
+  }
 
-  await ensureBucket(bucket);
-  const safePath = `${Date.now()}-${fileName.replace(/[^\w\u0600-\u06FF.-]+/g, '-').slice(0, 40)}`;
+  const bucketOptions = isPdf
+    ? { public: false, fileSizeLimit: MAX_NOTE_PDF_BYTES, allowedMimeTypes: ['application/pdf'] }
+    : { public: true };
+  await ensureBucket(bucket, bucketOptions);
+  const safeName = fileName.replace(/[^\w\u0600-\u06FF.-]+/g, '-');
+  const safePath = isPdf
+    ? `${Date.now()}-${safeName.replace(/\.pdf$/i, '').slice(0, 36) || 'note'}.pdf`
+    : `${Date.now()}-${safeName.slice(0, 40)}`;
   const { data, error } = await sb.storage.from(bucket).createSignedUploadUrl(safePath, { upsert: true });
   if (error || !data) return c.json({ error: error?.message ?? 'فشل إنشاء رابط الرفع' }, 400);
+  if (isPdf) {
+    return c.json({ uploadUrl: data.signedUrl, path: safePath, publicUrl: '', contentType });
+  }
   const { data: pub } = sb.storage.from(bucket).getPublicUrl(safePath);
   return c.json({ uploadUrl: data.signedUrl, path: safePath, publicUrl: pub.publicUrl, contentType });
 });
@@ -1442,11 +1823,19 @@ app.get('/admin/exam-results/:examId', requireAuth, requireAdmin, async (c) => {
 
 /* =================== التوجيه عبر x-path / ?path =================== */
 
-async function ensureBucket(bucket: string): Promise<void> {
+async function ensureBucket(
+  bucket: string,
+  options: { public: boolean; fileSizeLimit?: number; allowedMimeTypes?: string[] },
+): Promise<void> {
   const { data } = await sb.storage.getBucket(bucket);
   if (!data) {
-    const { error } = await sb.storage.createBucket(bucket, { public: true });
-    if (error) console.warn(`[storage] فشل إنشاء bucket ${bucket}:`, error.message);
+    const { error } = await sb.storage.createBucket(bucket, options);
+    if (error) throw new Error(`[storage] تعذّر إنشاء bucket ${bucket}: ${error.message}`);
+    return;
+  }
+  if (!options.public) {
+    const { error } = await sb.storage.updateBucket(bucket, options);
+    if (error) throw new Error(`[storage] تعذّر ضبط bucket ${bucket} كمساحة خاصة: ${error.message}`);
   }
 }
 

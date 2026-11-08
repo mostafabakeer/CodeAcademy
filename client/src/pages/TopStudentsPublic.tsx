@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
@@ -21,7 +21,7 @@ export default function TopStudentsPublic() {
     let alive = true;
     setLoading(true);
     setError('');
-    // كل مصدر مستقل: فشل أحدها لا يُسقط الصفحة، وكل واحد له كاش على حدة
+    // ÙƒÙ„ Ù…ØµØ¯Ø± Ù…Ø³ØªÙ‚Ù„: ÙØ´Ù„ Ø£Ø­Ø¯Ù‡Ø§ Ù„Ø§ ÙŠÙØ³Ù‚Ø· Ø§Ù„ØµÙØ­Ø©ØŒ ÙˆÙƒÙ„ ÙˆØ§Ø­Ø¯ Ù„Ù‡ ÙƒØ§Ø´ Ø¹Ù„Ù‰ Ø­Ø¯Ø©
     Promise.allSettled([loadTopStudents(), loadLatestExamTop(), loadExamLeaderboards()])
       .then(([s, l, b]) => {
         if (!alive) return;
@@ -54,7 +54,7 @@ export default function TopStudentsPublic() {
         className="relative overflow-hidden rounded-3xl border border-fire-500/25 shadow-2xl shadow-fire-950/60"
       >
         <img
-          src="/login-hero.png"
+          src="/login-hero.webp"
           alt=""
           fetchPriority="high"
           className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
@@ -71,14 +71,14 @@ export default function TopStudentsPublic() {
                 transition={{ delay: 0.15, type: 'spring', stiffness: 200, damping: 18 }}
                 className="h-16 w-16 overflow-hidden rounded-full border-2 border-fire-500/40 bg-ink-800 shadow-xl shadow-fire-900/50 animate-flame sm:h-20 sm:w-20"
               >
-                <img src="/owner.png" alt={t('top.founder')} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                <img src="/owner.webp" alt={t('top.founder')} loading="lazy" decoding="async" className="h-full w-full object-cover" />
               </motion.div>
               <div>
                 <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="text-2xl font-black sm:text-3xl">
                   <span className="text-fire-gradient">{t('top.title')}</span>
                 </motion.h1>
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 sm:justify-start">
-                  <span className="text-sm font-black">{lang === 'ar' ? 'مصطفى بكير' : 'Mostafa Bakir'}</span>
+                  <span className="text-sm font-black">{lang === 'ar' ? 'Ù…ØµØ·ÙÙ‰ Ø¨ÙƒÙŠØ±' : 'Mostafa Bakir'}</span>
                   <span className="text-xs text-gray-400">{t('top.founderTitle')}</span>
                 </motion.div>
               </div>
@@ -86,10 +86,10 @@ export default function TopStudentsPublic() {
 
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }} className="flex flex-col gap-3 sm:flex-row">
               <Link to="/register" onClick={handleRegister} className="btn-fire flex items-center gap-2 rounded-xl px-6 py-3 text-base font-bold text-white">
-                🚀 {t('top.joinNow')}
+                ðŸš€ {t('top.joinNow')}
               </Link>
               <Link to="/login" onClick={handleLogin} className="btn-ghost-fire flex items-center gap-2 rounded-xl px-6 py-3 text-base font-bold">
-                🔐 {t('nav.login')}
+                ðŸ” {t('nav.login')}
               </Link>
             </motion.div>
           </div>
@@ -105,7 +105,7 @@ export default function TopStudentsPublic() {
         </div>
       </motion.section>
 
-      {/* أوائل الموقع على مر الزمان — مباشرة تحت الـ hero */}
+      {/* Ø£ÙˆØ§Ø¦Ù„ Ø§Ù„Ù…ÙˆÙ‚Ø¹ Ø¹Ù„Ù‰ Ù…Ø± Ø§Ù„Ø²Ù…Ø§Ù† â€” Ù…Ø¨Ø§Ø´Ø±Ø© ØªØ­Øª Ø§Ù„Ù€ hero */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -113,7 +113,7 @@ export default function TopStudentsPublic() {
         className="space-y-5"
       >
         <div className="flex flex-col items-center gap-2 text-center md:flex-row md:items-center md:justify-between">
-          <h2 className="text-xl font-black md:text-2xl">🏆 {t('top.allTimeTitle')}</h2>
+          <h2 className="text-xl font-black md:text-2xl">ðŸ† {t('top.allTimeTitle')}</h2>
           <Link to="/login" className="btn-ghost-fire rounded-xl px-4 py-2 text-sm font-bold">
             {t('top.viewFullRanking')}
           </Link>
@@ -127,7 +127,7 @@ export default function TopStudentsPublic() {
           </div>
         ) : error ? (
           <div className="rounded-2xl border border-fire-500/30 bg-fire-950/30 px-4 py-6 text-center text-sm text-fire-300">
-            ⚠️ {t('top.empty')}
+            âš ï¸ {t('top.empty')}
           </div>
         ) : all.length === 0 ? (
           <p className="card-fire rounded-2xl px-4 py-6 text-center text-sm text-gray-400">{t('top.empty')}</p>
@@ -150,7 +150,7 @@ export default function TopStudentsPublic() {
         )}
       </motion.section>
 
-      {/* أوائل آخر امتحان لكل مرحلة */}
+      {/* Ø£ÙˆØ§Ø¦Ù„ Ø¢Ø®Ø± Ø§Ù…ØªØ­Ø§Ù† Ù„ÙƒÙ„ Ù…Ø±Ø­Ù„Ø© */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -159,7 +159,7 @@ export default function TopStudentsPublic() {
       >
         <div className="flex flex-col items-center gap-2 text-center md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-xl font-black md:text-2xl">⚡ {t('top.autoTitle')}</h2>
+            <h2 className="text-xl font-black md:text-2xl">âš¡ {t('top.autoTitle')}</h2>
             <p className="mt-1 text-sm text-gray-400">{t('top.autoSubtitle')}</p>
           </div>
           <span className="rounded-full border border-dashed border-white/25 px-3 py-1 text-xs font-bold text-gray-300">
@@ -173,7 +173,7 @@ export default function TopStudentsPublic() {
         </div>
       </motion.section>
 
-      {/* أوائل كل امتحان — أعلى ٣ لكل امتحان، الأحدث أولًا */}
+      {/* Ø£ÙˆØ§Ø¦Ù„ ÙƒÙ„ Ø§Ù…ØªØ­Ø§Ù† â€” Ø£Ø¹Ù„Ù‰ Ù£ Ù„ÙƒÙ„ Ø§Ù…ØªØ­Ø§Ù†ØŒ Ø§Ù„Ø£Ø­Ø¯Ø« Ø£ÙˆÙ„Ù‹Ø§ */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -182,7 +182,7 @@ export default function TopStudentsPublic() {
       >
         <div className="flex flex-col items-center gap-2 text-center md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-xl font-black md:text-2xl">📚 {t('top.everyExamTitle')}</h2>
+            <h2 className="text-xl font-black md:text-2xl">ðŸ“š {t('top.everyExamTitle')}</h2>
             <p className="mt-1 text-sm text-gray-400">{t('top.everyExamSubtitle')}</p>
           </div>
           <span className="rounded-full border border-dashed border-white/25 px-3 py-1 text-xs font-bold text-gray-300">
@@ -226,7 +226,7 @@ export default function TopStudentsPublic() {
           <p className="mx-auto mt-3 max-w-xl text-gray-300">{t('top.ctaSubtitle')}</p>
           <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             <Link to="/register" onClick={handleRegister} className="btn-fire rounded-xl px-8 py-3 text-lg font-bold text-white">
-              🚀 {t('top.joinNow')}
+              ðŸš€ {t('top.joinNow')}
             </Link>
             <Link to="/login" onClick={handleLogin} className="btn-ghost-fire rounded-xl px-8 py-3 text-lg font-bold">
               {t('nav.login')}

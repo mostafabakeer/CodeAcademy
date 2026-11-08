@@ -15,3 +15,7 @@ create index if not exists idx_notes_course_grade on public.notes(course_id, gra
 
 -- users: فلترة الأدمن والبحث
 create index if not exists idx_users_role_subscription_blocked on public.users(role, subscription, blocked);
+
+-- push_subscriptions: لاستعلامات الإشعارات
+create index if not exists idx_push_subscriptions_user_id on public.push_subscriptions(user_id);
+create unique index if not exists idx_push_subscriptions_endpoint on public.push_subscriptions(endpoint);

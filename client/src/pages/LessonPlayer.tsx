@@ -18,6 +18,7 @@ export default function LessonPlayer() {
   const [data, setData] = useState<LessonDetailData | null>(null);
   const [duration, setDuration] = useState(0);
   const [completed, setCompleted] = useState(false);
+  const [preloadedNext, setPreloadedNext] = useState(false);
   const lessonId = id ? Number(id) : null;
   const [localSeconds, setLocalSeconds] = useState(() => {
     const p = lessonId !== null ? getVideoProgressLocal(lessonId) : null;
@@ -43,12 +44,33 @@ export default function LessonPlayer() {
   }, [boot, lessonId]);
 
   const reportProgress = (seconds: number) => {
-    // نحتفظ دائمًا بأقصى تقدم لاستمرار الإحصائيات (لا نمسح عند 90% — فقط نعلن الإكمال).
     if (!lessonId || seconds <= 0) return;
     setLocalSeconds((s) => Math.max(s, seconds));
     setVideoProgressLocal(lessonId, seconds, duration);
     if (duration > 0 && seconds >= duration * 0.9) {
       setCompleted(true);
+    }
+    // Preload الدرس التالي عند 80%
+    if (duration > 0 && seconds >= duration * 0.8 && !preloadedNext) {
+      setPreloadedNext(true);
+      preloadNextLesson(lessonId, data?.lessons);
+    }
+  };
+
+  const preloadNextLesson = async (currentLessonId: number, lessons: { id: number; title: string; titleEn: string }[] | undefined) => {
+    if (!lessons || !boot) return;
+    const idx = lessons.findIndex((l) => l.id === currentLessonId);
+    if (idx >= 0 && idx < lessons.length - 1) {
+      const nextLesson = lessons[idx + 1];
+      // Preload: احمل بيانات الدرس التالي في الخلفية
+      try {
+        const nextData = buildLessonDetail(boot, nextLesson.id);
+        if (nextData) {
+          // The data is now in the content cache — next visit will be instant
+        }
+      } catch {
+        // Ignore preload errors
+      }
     }
   };
 

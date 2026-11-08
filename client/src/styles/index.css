@@ -353,6 +353,27 @@ html[lang='en'] body {
   border-color: rgba(244, 63, 79, 0.7);
 }
 
+/* أزرار مصغّرة كانت تُستخدم في لوحة الأدمن وشاشة الخطأ بدون تعريف في CSS */
+.btn-fire-rounded {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease;
+}
+.btn-fire-rounded:not(:disabled):active {
+  transform: scale(0.97);
+}
+.fire-shadow {
+  box-shadow: 0 4px 14px -8px rgba(0, 0, 0, 0.7);
+}
+.hover\:fire-bright:hover {
+  box-shadow:
+    0 0 0 1px rgba(244, 63, 79, 0.55),
+    0 8px 22px -8px rgba(244, 63, 79, 0.55);
+}
+
 /* حقل إدخال */
 .input-fire {
   background: rgba(19, 19, 29, 0.9);
@@ -505,6 +526,26 @@ h1, h2, h3 {
   select,
   textarea {
     font-size: 16px;
+  }
+}
+
+/* تقليل الحركة على الموبايل افتراضياً — يحترم prefers-reduced-motion */
+@media (max-width: 767px), (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* استثناءات: عناصر تحتاج حركة حتى مع تقليل الحركة */
+@media (prefers-reduced-motion: reduce) {
+  .cm-editor .cm-cursor,
+  .spinner,
+  .loading-indicator {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 

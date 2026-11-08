@@ -17,6 +17,7 @@ interface Props {
   onChange: (value: string) => void;
   language: string;
   height?: string;
+  errorLine?: number;
 }
 
 export default function CodeEditor({ value, onChange, language, height = '60vh' }: Props) {
