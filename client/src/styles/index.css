@@ -579,6 +579,56 @@ h1, h2, h3 {
   }
 }
 
+/* ============ PDF Protection Styles ============ */
+/* منع التحديد والنسخ والطباعة والحفظ من العارض */
+.pdf-protected {
+  pointer-events: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+.pdf-protected::selection {
+  background: transparent;
+}
+
+/* إخفاء أدوات المتصفح المدمجة في iframe PDF */
+@media print {
+  .pdf-protected {
+    display: none;
+  }
+}
+
+/* منع قائمة السياق على iframe */
+iframe.pdf-protected {
+  pointer-events: none;
+}
+
+/* طبقة حماية إضافية فوق iframe */
+.pdf-viewer-wrapper {
+  position: relative;
+}
+.pdf-viewer-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  background: transparent;
+}
+
+/* عند التحويم نسمح بالتمرير لكن نمنع التحديد */
+.pdf-viewer-wrapper:hover .pdf-protected {
+  pointer-events: auto;
+}
+.pdf-viewer-wrapper:hover .pdf-protected * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
 /* ============ 🧑⚕️ ماسكوت دكتور كود (CSS 3D خالص بدون مكتبات) ============ */
 .dc3d {
   position: relative;

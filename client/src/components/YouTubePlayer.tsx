@@ -1,3 +1,12 @@
+/**
+ * YouTube Player — isolated component to avoid React/YouTube IFrame DOM conflicts.
+ * ---------------------------------
+ * KEY FIX: container must be attached to document.body before initPlayer().
+ * If the container isn't in the DOM yet, we poll until it is (max 50ms attempts).
+ * This prevents the "insertBefore" error because we never create the iframe
+ * while React is in the middle of updating the same div.
+ */
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useLang } from '../i18n';
 import { extractYouTubeId, getYouTubeThumbnail } from '../lib/youtube';
@@ -101,6 +110,9 @@ export default function YouTubePlayer({
 
   const initPlayer = useCallback(() => {
     if (!videoId || !containerRef.current) return;
+    // 🔑 FIX: Ensure container is in DOM before creating the iframe.
+    // This prevents the "insertBefore" error because React won't be
+    // mid-update when the iframe tries to insert its content.
     if (!document.body.contains(containerRef.current)) return;
 
     destroyPlayer();
@@ -132,7 +144,7 @@ export default function YouTubePlayer({
           setIsLoading(false);
           setHasStarted(true);
           onReady?.();
-          const d = p.getDuration();
+          const d = player.getDuration();
           if (d > 0) onDuration?.(d);
         },
         onStateChange: (ev: { data: number }) => {
