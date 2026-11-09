@@ -5,6 +5,7 @@ import { useLang } from '../i18n';
 import { useUser } from '../store/authStore';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
+// import { downloadWatermarkedPDF, openWatermarkedPDF } from '../lib/pdfWatermark';
 
 const Markdown = lazy(() => import('react-markdown'));
 
@@ -17,10 +18,16 @@ export default function Notes() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [watermarkLoading, setWatermarkLoading] = useState(false);
+  const [isRendering, setIsRendering] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const pdfRequest = useRef<AbortController | null>(null);
   const loading = !data && !error;
+
+  const studentName = user?.fullName || '';
+  const studentPhone = user?.phone || '';
+  const studentGrade = user?.grade || '';
 
   // Filter notes client-side with search
   const filteredNotes = useMemo(() => {
@@ -70,6 +77,61 @@ export default function Notes() {
       if (pdfRequest.current === request) {
         pdfRequest.current = null;
         setPdfLoading(false);
+      }
+    }
+  };
+
+  const downloadPdf = async (noteId: number, noteTitle: string) => {
+    pdfRequest.current?.abort();
+    const request = new AbortController();
+    pdfRequest.current = request;
+    setWatermarkLoading(true);
+    setPdfError(null);
+    try {
+      const result = await api<{ url: string }>(`/api/notes/${noteId}/pdf`, { signal: request.signal });
+      if (!request.signal.aborted) {
+        const fileName = `${noteTitle.replace(/[^a-zA-Z0-9؀-ۿ\s-]+/g, '').trim()}.pdf`;
+        // Direct download without watermark
+        const a = document.createElement('a');
+        a.href = result.url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    } catch {
+      if (!request.signal.aborted) setPdfError(t('note.pdfError'));
+    } finally {
+      if (pdfRequest.current === request) {
+        pdfRequest.current = null;
+        setWatermarkLoading(false);
+      }
+    }
+  };
+
+const openPdf = async (noteId: number) => {
+    // Get the raw PDF URL and open it directly
+    pdfRequest.current?.abort();
+    const request = new AbortController();
+    pdfRequest.current = request;
+    setIsRendering(true);
+    setPdfError(null);
+    setPdfUrl(null);
+
+    try {
+      const result = await api<{ url: string }>(`/api/notes/${noteId}/pdf`, { signal: request.signal });
+      if (!request.signal.aborted && result.url) {
+        setPdfUrl(result.url);
+      }
+    } catch (err) {
+      if (!request.signal.aborted) {
+        console.error('[Notes] PDF fetch error:', err);
+        setPdfError(t('note.pdfError'));
+      }
+    } finally {
+      if (pdfRequest.current === request) {
+        pdfRequest.current = null;
+        setIsRendering(false);
       }
     }
   };
@@ -128,26 +190,102 @@ export default function Notes() {
                 </div>
                 {n.pdf && (
                   <section className="mt-5 border-t border-ink-600 pt-4">
-                    {!pdfUrl && (
-                      <button
-                        type="button"
-                        onClick={() => void viewPdf(n.id)}
-                        disabled={pdfLoading}
-                        className="btn-fire rounded-xl px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
-                      >
-                        {pdfLoading ? t('note.pdfLoading') : `📖 ${t('note.viewPdf')}`}
-                      </button>
+                    {!pdfUrl && !pdfLoading && !watermarkLoading && (
+                      <div className="flex flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            console.log('[Notes] Clicked view PDF for note:', n.id);
+                            void openPdf(n.id);
+                          }}
+                          disabled={pdfLoading}
+                          className="btn-fire w-full rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-60 touch-target"
+                        >
+                          {pdfLoading ? (
+                            <span className="inline-flex items-center gap-2">
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent inline-block" />
+                              {t('note.pdfLoading')}
+                            </span>
+                          ) : `📖 ${t('note.viewPdf')}`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            console.log('[Notes] Clicked download watermark for note:', n.id);
+                            void downloadPdf(n.id, lang === 'ar' ? n.title : n.titleEn);
+                          }}
+                          disabled={watermarkLoading || pdfLoading}
+                          className="btn-ghost-fire w-full rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-60 touch-target"
+                        >
+                          {watermarkLoading ? (
+                            <span className="inline-flex items-center gap-2">
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-transparent inline-block" />
+                              ⏳ جاري التحضير...
+                            </span>
+                          ) : '⬇️ تحميل'}
+                        </button>
+                      </div>
                     )}
-                    {pdfError && <p role="alert" className="mt-3 text-sm text-fire-300">{pdfError}</p>}
+                    {pdfLoading && (
+                      <div className="mt-3 flex flex-col items-center gap-2 py-8 rounded-xl bg-ink-900/50">
+                        <div className="relative h-16 w-16">
+                          <div className="absolute inset-0 rounded-full border-4 border-fire-500/20" />
+                          <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-fire-500" />
+                          <div className="absolute inset-2 animate-pulse rounded-full bg-fire-500/20" />
+                        </div>
+                        <p className="text-sm font-medium text-gray-300">{t('note.pdfLoading')}</p>
+                        <p className="text-xs text-gray-500">يتم تجهيز الملف بالعلامة المائية...</p>
+                      </div>
+                    )}
+                    {isRendering && !pdfUrl && (
+                      <div className="mt-3 flex flex-col items-center gap-2 py-8 rounded-xl bg-ink-900/50">
+                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-fire-500/30 border-t-fire-500" />
+                        <p className="text-sm text-gray-400">جاري المعالجة...</p>
+                      </div>
+                    )}
+                    {pdfError && (
+                      <div className="mt-3 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3">
+                        <p role="alert" className="text-sm text-fire-300">⚠️ {pdfError}</p>
+                        <button
+                          onClick={() => void openPdf(n.id)}
+                          className="mt-2 btn-fire w-full rounded-lg px-4 py-2 text-sm font-bold text-white"
+                        >
+                          إعادة المحاولة
+                        </button>
+                      </div>
+                    )}
                     {pdfUrl && (
-                      <div className="mt-3 overflow-hidden rounded-xl border border-ink-600 bg-ink-950">
-                        <iframe
-                          title={`${lang === 'ar' ? n.title : n.titleEn} — ${t('note.viewPdf')}`}
-                          src={`${pdfUrl}#toolbar=0&navpanes=0`}
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          className="h-[65vh] min-h-80 w-full"
-                        />
+                      <div className="mt-3 space-y-3">
+                        {/* Direct PDF view - works for most browsers */}
+                        <div className="relative aspect-[4/3] sm:aspect-[3/2] rounded-xl overflow-hidden bg-ink-900">
+                          <embed
+                            src={pdfUrl}
+                            type="application/pdf"
+                            className="w-full h-full"
+                            title={lang === 'ar' ? n.title : n.titleEn}
+                          />
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <a
+                            href={pdfUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn-fire flex-1 rounded-xl px-4 py-2.5 text-sm font-bold text-white inline-flex items-center justify-center gap-2 touch-target"
+                          >
+                            📄 <span>{t('note.openInNewTab')}</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => void downloadPdf(n.id, lang === 'ar' ? n.title : n.titleEn)}
+                            disabled={watermarkLoading}
+                            className="btn-ghost-fire flex-1 rounded-xl px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60 touch-target"
+                          >
+                            {watermarkLoading ? '⏳ جاري التحضير...' : '⬇️ تحميل'}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500 text-center sm:text-start">
+                          {t('note.mobileHint')}
+                        </p>
                       </div>
                     )}
                   </section>

@@ -97,6 +97,7 @@ export default function LessonPlayer() {
       </motion.div>
 
       <VideoPlayer
+        key={lesson.id}
         videoType={lesson.videoType}
         videoUrl={lesson.videoUrl}
         initialTime={resumeAt}

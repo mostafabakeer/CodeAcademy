@@ -127,12 +127,12 @@ export default function TopStudentsAdmin() {
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 border-t border-ink-800 pt-3">
-                  <button onClick={() => openEdit(s)} className="btn-ghost-fire rounded-lg px-3 py-2.5 text-sm font-bold">
+                  <button onClick={() => openEdit(s)} className="btn-ghost-fire rounded-lg px-3 py-2.5 text-sm font-bold touch-target">
                     {t('common.edit')}
                   </button>
                   <button
                     onClick={() => remove(s.id)}
-                    className="rounded-lg border border-fire-500/40 px-3 py-2.5 text-sm font-bold text-fire-300"
+                    className="rounded-lg border border-fire-500/40 px-3 py-2.5 text-sm font-bold text-fire-300 touch-target"
                   >
                     {t('common.delete')}
                   </button>
@@ -174,10 +174,10 @@ export default function TopStudentsAdmin() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1.5">
-                      <button onClick={() => openEdit(s)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold">
+                      <button onClick={() => openEdit(s)} className="btn-ghost-fire rounded-lg px-3 py-1 text-xs font-bold touch-target">
                         {t('common.edit')}
                       </button>
-                      <button onClick={() => remove(s.id)} className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300">
+                      <button onClick={() => remove(s.id)} className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300 touch-target">
                         {t('common.delete')}
                       </button>
                     </div>

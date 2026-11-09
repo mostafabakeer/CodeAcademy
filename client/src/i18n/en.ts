@@ -227,6 +227,8 @@ export const en: TranslationKeys = {
     viewPdf: 'View PDF on site',
     pdfLoading: 'Opening file...',
     pdfError: 'Could not open the file. Please try again.',
+    openInNewTab: 'Open in new tab',
+    mobileHint: 'If the viewer does not work, click the link above to open the file in a new tab or download it',
   },
   code: {
     title: 'Code Lab',

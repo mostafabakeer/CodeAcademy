@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useLang } from '../../i18n';
 
 interface AdminLink {
@@ -17,6 +18,7 @@ interface AdminGroup {
 export default function AdminLayout() {
   const { t } = useLang();
   const { pathname } = useLocation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const groups: AdminGroup[] = [
     {
@@ -55,60 +57,115 @@ export default function AdminLayout() {
       .find((l) => (l.end ? pathname === l.to : pathname.startsWith(l.to))) ?? allLinks[0];
 
   const pillClass = (isActive: boolean) =>
-    `flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2 text-sm font-semibold transition-colors ${
+    `flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-bold transition-all ${
       isActive
-        ? 'bg-gradient-to-r from-fire-600/30 to-ember-500/20 text-fire-300'
-        : 'text-gray-300 hover:bg-ink-800 hover:text-white'
+        ? 'bg-fire-500 text-white shadow-lg shadow-fire-500/20'
+        : 'text-gray-400 hover:bg-ink-800 hover:text-white'
+    }`;
+
+  const mobilePillClass = (isActive: boolean) =>
+    `flex items-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${
+      isActive
+        ? 'bg-fire-500 text-white shadow-md shadow-fire-500/10'
+        : 'bg-ink-800 text-gray-400 hover:text-white'
     }`;
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[260px_1fr]">
-      {/* ===== موبايل: شريط تنقل أفقي لاصق (بدل قائمة طويلة تدفع المحتوى لأسفل) ===== */}
-      <div className="sticky top-16 z-20 lg:hidden">
-        <div className="card-fire rounded-2xl bg-ink-950/95 p-2 backdrop-blur-lg">
-          <div className="flex items-center gap-2 px-2 pb-2">
-            <span className="text-lg">🛡️</span>
-            <span className="truncate text-sm font-black">{t('admin.title')}</span>
-            <span className="ms-auto truncate text-[11px] font-bold text-fire-300">{currentLink?.label}</span>
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start max-w-full overflow-x-hidden">
+      {/* ===== موبايل: ترويسة الأدمن مع زر القائمة ===== */}
+      <div className="sticky top-16 z-30 px-0 pb-2 lg:hidden w-full">
+        <div className="card-fire flex flex-col gap-3 rounded-2xl bg-ink-950/90 p-3 backdrop-blur-xl border-fire-500/20 shadow-2xl">
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl">🛡️</span>
+              <span className="font-black text-white">{t('admin.title')}</span>
+              <span className="mx-2 h-4 w-px bg-ink-700" />
+              <span className="text-xs font-bold text-fire-400">{currentLink?.label}</span>
+            </div>
+            <button
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-ink-800 text-white active:scale-95 transition-transform"
+            >
+              {isMenuOpen ? '✕' : '☰'}
+            </button>
           </div>
-          <nav
-            aria-label={t('admin.title')}
-            className="flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
+
+          <nav className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {allLinks.map((l) => (
               <NavLink
                 key={l.to}
                 to={l.to}
                 end={l.end}
-                className={({ isActive }) => pillClass(isActive)}
+                onClick={() => setIsMenuOpen(false)}
+                className={({ isActive }) => mobilePillClass(isActive)}
               >
-                <span aria-hidden="true">{l.icon}</span>
+                <span>{l.icon}</span>
                 {l.label}
               </NavLink>
             ))}
           </nav>
         </div>
+
+        {/* قائمة الموبايل المنسدلة (اختيارية كـ overlay) */}
+        <AnimatePresence>
+          {isMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="absolute inset-x-4 top-full mt-2 z-40 max-h-[70vh] overflow-y-auto rounded-3xl border border-fire-500/20 bg-ink-900/95 p-4 shadow-2xl backdrop-blur-2xl"
+            >
+              <div className="space-y-6">
+                {groups.map((g) => (
+                  <div key={g.label}>
+                    <div className="mb-3 px-2 text-[11px] font-black uppercase tracking-[0.1em] text-gray-500">{g.label}</div>
+                    <div className="grid grid-cols-1 gap-2">
+                      {g.links.map((l) => (
+                        <NavLink
+                          key={l.to}
+                          to={l.to}
+                          end={l.end}
+                          onClick={() => setIsMenuOpen(false)}
+                          className={({ isActive }) => pillClass(isActive)}
+                        >
+                          <span className="text-lg">{l.icon}</span>
+                          {l.label}
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* ===== كمبيوتر: قائمة جانبية ===== */}
+      {/* ===== كمبيوتر: قائمة جانبية ثابته ===== */}
       <motion.aside
         initial={{ opacity: 0, x: -12 }}
         animate={{ opacity: 1, x: 0 }}
-        className="card-fire hidden h-fit rounded-2xl p-3 lg:sticky lg:top-20 lg:block"
+        className="card-fire hidden w-[280px] shrink-0 rounded-3xl p-5 lg:sticky lg:top-24 lg:block border-fire-500/10 shadow-xl"
       >
-        <div className="mb-3 flex items-center gap-2 px-3 pt-2">
-          <span className="text-2xl">🛡️</span>
-          <span className="font-black">{t('admin.title')}</span>
+        <div className="mb-8 flex items-center gap-3 px-2">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-fire-500/10 text-2xl shadow-inner shadow-fire-500/20">
+            🛡️
+          </div>
+          <div>
+            <div className="text-sm font-bold text-gray-500">DR Code</div>
+            <div className="text-lg font-black text-white">{t('admin.title')}</div>
+          </div>
         </div>
-        <nav className="space-y-4">
+
+        <nav className="space-y-7">
           {groups.map((g) => (
             <div key={g.label}>
-              <div className="mb-1 px-3 text-[10px] font-black uppercase tracking-wider text-gray-500">{g.label}</div>
-              <div className="space-y-1">
+              <div className="mb-3 px-4 text-[10px] font-black uppercase tracking-[0.2em] text-gray-600">{g.label}</div>
+              <div className="space-y-1.5">
                 {g.links.map((l) => (
                   <NavLink key={l.to} to={l.to} end={l.end} className={({ isActive }) => pillClass(isActive)}>
-                    <span>{l.icon}</span>
-                    {l.label}
+                    <span className="text-xl">{l.icon}</span>
+                    <span className="truncate">{l.label}</span>
                   </NavLink>
                 ))}
               </div>
@@ -117,9 +174,9 @@ export default function AdminLayout() {
         </nav>
       </motion.aside>
 
-      <div className="min-w-0">
+      <main className="min-w-0 flex-1">
         <Outlet />
-      </div>
+      </main>
     </div>
   );
 }

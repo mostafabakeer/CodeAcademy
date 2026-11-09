@@ -529,6 +529,34 @@ h1, h2, h3 {
   }
 }
 
+/* Touch target minimum 44x44px for accessibility */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Ensure buttons have adequate touch targets on mobile */
+@media (max-width: 767px) {
+  button, [role="button"], .btn-fire, .btn-ghost-fire {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Better spacing for admin grids on mobile */
+  .grid-cols-admin-mobile {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Larger form controls on mobile */
+  .input-fire, select.input-fire {
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+}
+
 /* تقليل الحركة على الموبايل افتراضياً — يحترم prefers-reduced-motion */
 @media (max-width: 767px), (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -540,10 +568,12 @@ h1, h2, h3 {
 }
 
 /* استثناءات: عناصر تحتاج حركة حتى مع تقليل الحركة */
-@media (prefers-reduced-motion: reduce) {
+@media (max-width: 767px), (prefers-reduced-motion: reduce) {
   .cm-editor .cm-cursor,
   .spinner,
-  .loading-indicator {
+  .loading-indicator,
+  .animate-spin,
+  [class*="animate-spin"] {
     animation-duration: 1s !important;
     animation-iteration-count: infinite !important;
   }

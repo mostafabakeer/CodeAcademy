@@ -47,7 +47,7 @@ export default function Modal({ open, onClose, title, children }: { open: boolea
           exit={{ opacity: 0 }}
           onClick={onClose}
           role="presentation"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-6 backdrop-blur-sm overflow-y-auto"
         >
           <motion.div
             ref={panelRef}
@@ -63,11 +63,11 @@ export default function Modal({ open, onClose, title, children }: { open: boolea
             onKeyDown={(e) => {
               if (e.key === 'Escape') onClose();
             }}
-            className="card-fire max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl p-6 outline-none"
+            className="card-fire max-h-[90vh] w-full max-w-md sm:max-w-xl overflow-y-auto rounded-3xl p-4 sm:p-6 outline-none shadow-2xl mx-auto my-auto"
           >
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-black">{title}</h2>
-              <button onClick={onClose} className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold">
+            <div className="mb-4 sm:mb-5 flex items-center justify-between gap-2">
+              <h2 className="text-base sm:text-lg font-black shrink-0">{title}</h2>
+              <button onClick={onClose} className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold shrink-0">
                 {t('common.close')} ✕
               </button>
             </div>

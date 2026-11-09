@@ -209,7 +209,7 @@ export default function ExamsAdmin() {
       ) : exams.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noData')}</p>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 grid-cols-admin-mobile">
           {exams.map((e, i) => (
             <motion.div key={e.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="card-fire rounded-2xl p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -217,20 +217,20 @@ export default function ExamsAdmin() {
                   <div className="truncate font-bold">{lang === 'ar' ? e.title : e.titleEn}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
                     <GradeBadge grade={e.grade} />
-                    <span>
+                    <span className="truncate max-w-[200px] sm:max-w-none">
                       {courseName(e.courseId)} · {e.questionsCount ?? 0} {t('admin.questions')} · {t('admin.passingScore')} {e.passingScore}%
                     </span>
                     {!!e.allowRetake && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">↻ {t('admin.allowRetake')}</span>}
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2 sm:flex sm:shrink-0">
-                  <button onClick={() => openQuestions(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1">
+                  <button onClick={() => openQuestions(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
                     {t('admin.questions')}
                   </button>
-                  <button onClick={() => editExam(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1">
+                  <button onClick={() => editExam(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => removeExam(e.id)} className="rounded-lg border border-fire-500/40 px-2 py-2.5 text-xs font-bold text-fire-300 sm:px-3 sm:py-1">
+                  <button onClick={() => removeExam(e.id)} className="rounded-lg border border-fire-500/40 px-2 py-2.5 text-xs font-bold text-fire-300 sm:px-3 sm:py-1 touch-target">
                     {t('common.delete')}
                   </button>
                 </div>

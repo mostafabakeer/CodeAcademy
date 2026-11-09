@@ -30,6 +30,7 @@
     "hls.js": "^1.7.4",
     "lucide-react": "^1.56.0",
     "motion": "^12.15.0",
+    "pdf-lib": "^1.17.1",
     "pyodide": "^0.26.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

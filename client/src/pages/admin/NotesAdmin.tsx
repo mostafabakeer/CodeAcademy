@@ -136,7 +136,7 @@ export default function NotesAdmin() {
       ) : notes.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noData')}</p>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 grid-cols-admin-mobile">
           {notes.map((n, i) => (
             <motion.div key={n.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="card-fire rounded-2xl p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -144,14 +144,14 @@ export default function NotesAdmin() {
                   <div className="truncate font-bold">{n.title}</div>
                   <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
                     <GradeBadge grade={n.grade} />
-                    <span className="line-clamp-1">{n.body.slice(0, 120)}</span>
+                    <span className="line-clamp-1 truncate">{n.body.slice(0, 120)}</span>
                   </div>
                 </div>
                 <div className="flex gap-2 sm:shrink-0">
-                  <button onClick={() => openEdit(n)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1">
+                  <button onClick={() => openEdit(n)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1 touch-target">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => remove(n.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1">
+                  <button onClick={() => remove(n.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1 touch-target">
                     {t('common.delete')}
                   </button>
                 </div>

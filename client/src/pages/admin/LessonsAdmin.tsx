@@ -138,7 +138,7 @@ export default function LessonsAdmin() {
       ) : lessons.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noData')}</p>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 grid-cols-admin-mobile">
           {lessons.map((l, i) => (
             <motion.div key={l.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="card-fire rounded-2xl p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -146,14 +146,14 @@ export default function LessonsAdmin() {
                   <div className="truncate font-bold">{lang === 'ar' ? l.title : l.titleEn}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
                     <GradeBadge grade={l.grade} />
-                    <span>{courseName(l.courseId)} · {l.videoType === 'youtube' ? '▶ YouTube' : '📁 ملف'} · {Math.round(l.duration / 60)} {t('admin.minutes')}</span>
+                    <span className="truncate max-w-[200px] sm:max-w-none">{courseName(l.courseId)} · {l.videoType === 'youtube' ? '▶ YouTube' : '📁 ملف'} · {Math.round(l.duration / 60)} {t('admin.minutes')}</span>
                   </div>
                 </div>
                 <div className="flex gap-2 sm:shrink-0">
-                  <button onClick={() => openEdit(l)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1">
+                  <button onClick={() => openEdit(l)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1 touch-target">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => remove(l.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1">
+                  <button onClick={() => remove(l.id)} className="flex-1 rounded-lg border border-fire-500/40 px-3 py-2.5 text-xs font-bold text-fire-300 sm:flex-none sm:py-1 touch-target">
                     {t('common.delete')}
                   </button>
                 </div>
@@ -187,12 +187,12 @@ export default function LessonsAdmin() {
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.videoType')}</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => setForm({ ...form, videoType: 'youtube' })} className={`rounded-xl border px-4 py-2 text-sm font-bold ${form.videoType === 'youtube' ? 'border-fire-500 bg-fire-500/15 text-fire-300' : 'border-ink-600 bg-ink-900 text-gray-400'}`}>
-                ▶ {t('admin.youtube')}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button type="button" onClick={() => setForm({ ...form, videoType: 'youtube' })} className={`rounded-xl border px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 ${form.videoType === 'youtube' ? 'border-fire-500 bg-fire-500/15 text-fire-300' : 'border-ink-600 bg-ink-900 text-gray-400'}`}>
+                <span className="text-lg">▶</span> {t('admin.youtube')}
               </button>
-              <button type="button" onClick={() => setForm({ ...form, videoType: 'upload' })} className={`rounded-xl border px-4 py-2 text-sm font-bold ${form.videoType === 'upload' ? 'border-fire-500 bg-fire-500/15 text-fire-300' : 'border-ink-600 bg-ink-900 text-gray-400'}`}>
-                📁 {t('admin.upload')}
+              <button type="button" onClick={() => setForm({ ...form, videoType: 'upload' })} className={`rounded-xl border px-4 py-3 text-sm font-bold flex items-center justify-center gap-2 ${form.videoType === 'upload' ? 'border-fire-500 bg-fire-500/15 text-fire-300' : 'border-ink-600 bg-ink-900 text-gray-400'}`}>
+                <span className="text-lg">📁</span> {t('admin.upload')}
               </button>
             </div>
           </div>

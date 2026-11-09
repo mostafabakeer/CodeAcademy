@@ -90,7 +90,7 @@ const StudentTable: FC<StudentTableProps> = ({
             <button
               onClick={() => onToggleSubscription(s)}
               disabled={isBusy(s.id, 'sub')}
-              className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg font-bold fire-shadow transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${pad} ${s.subscription ? 'border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+              className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg font-bold fire-shadow transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${pad} ${s.subscription ? 'border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'} touch-target`}
             >
               {isBusy(s.id, 'sub') ? <Spinner /> : null}
               {s.subscription ? t('admin.disableSub') : t('admin.enableSub')}
@@ -98,7 +98,7 @@ const StudentTable: FC<StudentTableProps> = ({
             <button
               onClick={() => onToggleBlock(s)}
               disabled={isBusy(s.id, 'block')}
-              className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg font-bold fire-shadow transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${pad} ${s.blocked ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' : 'bg-fire-500/20 text-fire-300 hover:bg-fire-500/30'}`}
+              className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg font-bold fire-shadow transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${pad} ${s.blocked ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' : 'bg-fire-500/20 text-fire-300 hover:bg-fire-500/30'} touch-target`}
             >
               {isBusy(s.id, 'block') ? <Spinner /> : null}
               {s.blocked ? t('admin.unblock') : t('admin.block')}
@@ -108,7 +108,7 @@ const StudentTable: FC<StudentTableProps> = ({
         <button
           onClick={() => onToggleRole(s)}
           disabled={isBusy(s.id, 'role')}
-          className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 font-bold text-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60 ${pad}`}
+          className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 font-bold text-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60 ${pad} touch-target`}
         >
           {isBusy(s.id, 'role') ? <Spinner /> : null}
           {s.role === 'admin' ? t('admin.makeStudent') : t('admin.makeAdmin')} ⇄
@@ -116,7 +116,7 @@ const StudentTable: FC<StudentTableProps> = ({
         <button
           onClick={() => onDelete(s)}
           disabled={isBusy(s.id, 'delete')}
-          className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 font-bold text-fire-300 hover:bg-fire-600/30 disabled:cursor-not-allowed disabled:opacity-60 ${pad}`}
+          className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg bg-fire-950/60 font-bold text-fire-300 hover:bg-fire-600/30 disabled:cursor-not-allowed disabled:opacity-60 ${pad} touch-target`}
         >
           {isBusy(s.id, 'delete') ? <Spinner /> : <span aria-hidden="true">🗑</span>}
           {t('admin.deleteAccount')}
@@ -124,7 +124,7 @@ const StudentTable: FC<StudentTableProps> = ({
         <button
           onClick={() => onOpenDetail(s.id)}
           disabled={isBusy(s.id, 'detail')}
-          className={`btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg font-bold disabled:cursor-not-allowed disabled:opacity-60 ${mobile ? pad : 'px-3 py-1 text-xs'}`}
+          className={`btn-ghost-fire inline-flex items-center gap-1.5 rounded-lg font-bold disabled:cursor-not-allowed disabled:opacity-60 ${mobile ? pad : 'px-3 py-1 text-xs'} touch-target`}
         >
           {isBusy(s.id, 'detail') ? <Spinner /> : null}
           {t('admin.details')}

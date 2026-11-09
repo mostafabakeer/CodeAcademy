@@ -116,24 +116,24 @@ const submit = async (e: FormEvent) => {
       ) : courses.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('admin.noData')}</p>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 grid-cols-admin-mobile">
           {courses.map((c, i) => (
-            <motion.div key={c.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} className="card-fire rounded-2xl p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="font-extrabold">{c.title}</h3>
-                  {c.titleEn && <p className="text-xs text-gray-500">{c.titleEn}</p>}
+            <motion.div key={c.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} className="card-fire rounded-2xl p-4 sm:p-5">
+              <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="font-extrabold truncate">{c.title}</h3>
+                  {c.titleEn && <p className="text-xs text-gray-500 truncate">{c.titleEn}</p>}
                 </div>
-                <div className="flex flex-col items-end gap-1.5">
+                <div className="flex flex-col items-end gap-1.5 sm:shrink-0">
                   <GradeBadge grade={c.grade} />
-                  <span className="rounded-full bg-fire-500/15 px-3 py-1 text-xs font-bold text-fire-300">{c.lessonCount ?? 0} {t('course.lessons')}</span>
+                  <span className="rounded-full bg-fire-500/15 px-3 py-1 text-xs font-bold text-fire-300 whitespace-nowrap">{c.lessonCount ?? 0} {t('course.lessons')}</span>
                 </div>
               </div>
               <div className="mt-3 flex gap-2">
-                <button onClick={() => openEdit(c)} className="btn-ghost-fire flex-1 rounded-lg px-4 py-2.5 text-sm font-bold sm:flex-none sm:py-1.5">
+                <button onClick={() => openEdit(c)} className="btn-ghost-fire flex-1 rounded-lg px-4 py-2.5 text-sm font-bold touch-target">
                   {t('common.edit')}
                 </button>
-                <button onClick={() => remove(c.id)} className="flex-1 rounded-lg border border-fire-500/40 px-4 py-2.5 text-sm font-bold text-fire-300 hover:bg-fire-500/10 sm:flex-none sm:py-1.5">
+                <button onClick={() => remove(c.id)} className="flex-1 rounded-lg border border-fire-500/40 px-4 py-2.5 text-sm font-bold text-fire-300 hover:bg-fire-500/10 touch-target">
                   {t('common.delete')}
                 </button>
               </div>
