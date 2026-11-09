@@ -135,6 +135,7 @@ export default {
       '/pwa-maskable-512.png',
       '/login-hero.png',
       '/owner.png',
+      '/pyodide/',
     ];
 
     if (staticPaths.some((p) => pathname.startsWith(p))) {
