@@ -5,7 +5,7 @@ import { useLang } from '../i18n';
 import { useUser } from '../store/authStore';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
-import { downloadWatermarkedPDF, openWatermarkedPDF } from '../lib/pdfWatermark';
+import { downloadWatermarkedPDF } from '../lib/pdfWatermark';
 
 const Markdown = lazy(() => import('react-markdown'));
 
@@ -15,8 +15,7 @@ export default function Notes() {
   const { data, error, retry } = useBootstrapData(user?.id);
   const allNotes = data?.notes ?? [];
   const [open, setOpen] = useState<number | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -59,44 +58,17 @@ export default function Notes() {
     setTouchStart(null);
   };
 
-  const viewPdfWithWatermark = async (noteId: number) => {
+  const downloadNotePdf = async (noteId: number, noteTitle: string) => {
     pdfRequest.current?.abort();
     const request = new AbortController();
     pdfRequest.current = request;
-    setPdfLoading(true);
+    setDownloadingId(noteId);
     setPdfError(null);
-    setPdfUrl(null);
-    try {
-      const result = await api<{ url: string }>(`/api/notes/${noteId}/pdf`, { signal: request.signal });
-      if (!request.signal.aborted && result.url) {
-        // Open PDF with watermark applied
-        const watermarkedUrl = await openWatermarkedPDF(result.url, {
-          studentName,
-          studentPhone,
-          grade: studentGrade,
-        });
-        setPdfUrl(watermarkedUrl);
-      }
-    } catch {
-      if (!request.signal.aborted) setPdfError(t('note.pdfError'));
-    } finally {
-      if (pdfRequest.current === request) {
-        pdfRequest.current = null;
-        setPdfLoading(false);
-      }
-    }
-  };
 
-  const downloadPdfWithWatermark = async (noteId: number, noteTitle: string) => {
-    pdfRequest.current?.abort();
-    const request = new AbortController();
-    pdfRequest.current = request;
-    setPdfLoading(true);
-    setPdfError(null);
     try {
       const result = await api<{ url: string }>(`/api/notes/${noteId}/pdf`, { signal: request.signal });
       if (!request.signal.aborted && result.url) {
-        const fileName = noteTitle.replace(/[^a-zA-Z0-9฀-๿]+/g, '').trim() + '.pdf';
+        const fileName = noteTitle.replace(/[^a-zA-Z0-9؀-ۿ\s-]+/g, '').trim() + '.pdf';
         await downloadWatermarkedPDF(result.url, fileName, {
           studentName,
           studentPhone,
@@ -108,7 +80,7 @@ export default function Notes() {
     } finally {
       if (pdfRequest.current === request) {
         pdfRequest.current = null;
-        setPdfLoading(false);
+        setDownloadingId(null);
       }
     }
   };
@@ -116,14 +88,15 @@ export default function Notes() {
   const handleToggle = (noteId: number) => {
     pdfRequest.current?.abort();
     pdfRequest.current = null;
-    setPdfLoading(false);
     setOpen((prev) => (prev === noteId ? null : noteId));
-    setPdfUrl(null);
     setPdfError(null);
   };
 
   const renderNote = (n: (typeof filteredNotes)[number], index: number) => {
     const isOpen = open === n.id;
+    const isDownloading = downloadingId === n.id;
+    const title = lang === 'ar' ? n.title : n.titleEn;
+
     return (
       <motion.div
         key={n.id}
@@ -138,101 +111,71 @@ export default function Notes() {
         >
           <div className="flex items-center gap-3">
             <span className="text-2xl">📄</span>
-            <span className="font-extrabold">{lang === 'ar' ? n.title : n.titleEn}</span>
+            <span className="font-extrabold">{title}</span>
           </div>
           <motion.span animate={{ rotate: isOpen ? 180 : 0 }} className="text-fire-400">▾</motion.span>
         </button>
         <AnimatePresence initial={false}>
           {isOpen ? (
-            <>
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25 }}
-              >
-                <div className="px-5 pb-5">
-                  {n.image && (
-                    <img
-                      src={n.image}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      className="mb-3 max-h-60 w-full rounded-xl object-cover"
-                    />
-                  )}
-                  <div className="markdown-body text-sm">
-                    <Suspense fallback={<p className="text-gray-400">{t('common.loading')}</p>}>
-                      <Markdown>{lang === 'ar' ? n.body : n.bodyEn}</Markdown>
-                    </Suspense>
-                  </div>
-                  {n.pdf && (
-                    <section className="mt-5 border-t border-ink-600 pt-4">
-                      {!pdfUrl && !pdfLoading && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            console.log('[Notes] Clicked view/download PDF for note:', n.id);
-                            void viewPdfWithWatermark(n.id);
-                          }}
-                          disabled={pdfLoading}
-                          className="btn-fire w-full rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-60 touch-target"
-                        >
-                          {pdfLoading ? (
-                            <span className="inline-flex items-center gap-2">
-                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent inline-block" />
-                              {t('note.pdfLoading')}
-                            </span>
-                          ) : (
-                            <>
-                              📖 {t('note.viewPdf')} / ⬇️ {t('note.downloadPdf')}
-                            </>
-                          )}
-                        </button>
-                      )}
-                      {pdfLoading && (
-                        <div className="mt-3 flex flex-col items-center gap-2 py-8 rounded-xl bg-ink-900/50">
-                          <div className="relative h-16 w-16">
-                            <div className="absolute inset-0 rounded-full border-4 border-fire-500/20" />
-                            <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-fire-500" />
-                            <div className="absolute inset-2 animate-pulse rounded-full bg-fire-500/20" />
-                          </div>
-                          <p className="text-sm font-medium text-gray-300">{t('note.pdfLoading')}</p>
-                          <p className="text-xs text-gray-500">{t('note.preparingWatermark')}</p>
-                        </div>
-                      )}
-                      {pdfError && (
-                        <div className="mt-3 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3">
-                          <p role="alert" className="text-sm text-fire-300">⚠️ {pdfError}</p>
-                          <button
-                            onClick={() => void viewPdfWithWatermark(n.id)}
-                            className="mt-2 btn-fire w-full rounded-lg px-4 py-2 text-sm font-bold text-white"
-                          >
-                            {t('note.retry')}
-                          </button>
-                        </div>
-                      )}
-                      {pdfUrl && (
-                        <div className="mt-3 space-y-3">
-                          {/* Protected PDF view - no download, no text selection */}
-                          <div className="relative aspect-[4/3] sm:aspect-[3/2] rounded-xl overflow-hidden bg-ink-900 pdf-viewer-wrapper">
-                            <iframe
-                              src={pdfUrl}
-                              title={lang === 'ar' ? n.title : n.titleEn}
-                              className="w-full h-full pdf-protected"
-                              sandbox="allow-scripts allow-same-origin"
-                            />
-                          </div>
-                          <p className="text-xs text-gray-500 text-center sm:text-start">
-                            {t('note.mobileHint')}
-                          </p>
-                        </div>
-                      )}
-                    </section>
-                  )}
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25 }}
+            >
+              <div className="px-5 pb-5">
+                {n.image && (
+                  <img
+                    src={n.image}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="mb-3 max-h-60 w-full rounded-xl object-cover"
+                  />
+                )}
+                <div className="markdown-body text-sm">
+                  <Suspense fallback={<p className="text-gray-400">{t('common.loading')}</p>}>
+                    <Markdown>{lang === 'ar' ? n.body : n.bodyEn}</Markdown>
+                  </Suspense>
                 </div>
-              </motion.div>
-            </>
+                {n.pdf && (
+                  <section className="mt-5 border-t border-ink-600 pt-4">
+                    {!isDownloading && !pdfError && (
+                      <button
+                        type="button"
+                        onClick={() => void downloadNotePdf(n.id, title)}
+                        disabled={isDownloading}
+                        className="btn-fire w-full rounded-xl px-4 py-3 text-sm font-bold text-white disabled:opacity-60 touch-target"
+                      >
+                        ⬇️ {t('note.downloadPdf')}
+                      </button>
+                    )}
+                    {isDownloading && (
+                      <div className="mt-3 flex flex-col items-center gap-2 py-8 rounded-xl bg-ink-900/50">
+                        <div className="relative h-16 w-16">
+                          <div className="absolute inset-0 rounded-full border-4 border-fire-500/20" />
+                          <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-fire-500" />
+                          <div className="absolute inset-2 animate-pulse rounded-full bg-fire-500/20" />
+                        </div>
+                        <p className="text-sm font-medium text-gray-300">{t('note.pdfLoading')}</p>
+                        <p className="text-xs text-gray-500">{t('note.preparingWatermark')}</p>
+                      </div>
+                    )}
+                    {pdfError && (
+                      <div className="mt-3 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3">
+                        <p role="alert" className="text-sm text-fire-300">⚠️ {pdfError}</p>
+                        <button
+                          onClick={() => void downloadNotePdf(n.id, title)}
+                          className="mt-2 btn-fire w-full rounded-lg px-4 py-2 text-sm font-bold text-white"
+                        >
+                          {t('note.retry')}
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                )}
+              </div>
+            </motion.div>
           ) : null}
         </AnimatePresence>
       </motion.div>
