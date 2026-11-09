@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type Hls from 'hls.js';
 import { useLang } from '../i18n';
-import { extractYouTubeId, isYouTubeUrl, getYouTubeThumbnail } from '../lib/youtube';
+import { extractYouTubeId, isYouTubeUrl } from '../lib/youtube';
 import YouTubePlayer from './YouTubePlayer';
 
 interface VideoPlayerProps {
@@ -164,16 +164,6 @@ export default function VideoPlayer({
       <YouTubePlayer
         videoId={ytId!}
         initialTime={bootResume}
-        onReady={() => {}}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={onEnded}
-        onError={(e) => { setError(e); setIsLoading(false); }}
-        onDuration={(d) => { setDuration(d); onDuration?.(d); onDurationChange?.(d); }}
-        onTimeUpdate={onTimeUpdate}
-        onProgress={onProgress}
-        playbackRate={rate}
-        muted={isMuted}
         autoPlay={autoPlay}
       />
     );

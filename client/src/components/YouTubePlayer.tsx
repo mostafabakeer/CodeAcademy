@@ -1,82 +1,89 @@
-import { useState } from 'react';
-import { getYouTubeThumbnail } from '../lib/youtube';
+import { useState, useCallback } from 'react';
+import ReactPlayer from 'react-player';
+import { useLang } from '../i18n';
 
-interface Props {
+interface YouTubePlayerProps {
   videoId: string;
   initialTime?: number;
+  onReady?: () => void;
+  onPlay?: () => void;
+  onPause?: () => void;
+  onEnded?: () => void;
+  onError?: (error: string) => void;
+  onDuration?: (duration: number) => void;
+  onTimeUpdate?: (seconds: number) => void;
+  onProgress?: (seconds: number) => void;
+  playbackRate?: number;
+  muted?: boolean;
   autoPlay?: boolean;
 }
 
-export default function YouTubePlayer({ videoId, initialTime = 0, autoPlay = false }: Props) {
-  const [isError, setIsError] = useState(false);
-  const thumbnailUrl = getYouTubeThumbnail(`https://youtu.be/${videoId}`);
+export default function YouTubePlayer({
+  videoId,
+  initialTime = 0,
+  onReady,
+  onPlay,
+  onPause,
+  onEnded,
+  onError,
+  onDuration,
+  onProgress,
+  playbackRate = 1,
+  muted = false,
+  autoPlay = false,
+}: YouTubePlayerProps) {
+  const { t } = useLang();
+  const [hasStarted, setHasStarted] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const params = new URLSearchParams({
-    autoplay: autoPlay ? '1' : '0',
-    start: String(initialTime),
-    rel: '0',
-    modestbranding: '1',
-    cc_load_policy: '1',
-    iv_load_policy: '3',
-  });
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-  const embedSrc = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
-  const watchSrc = `https://www.youtube.com/watch?v=${videoId}`;
+  const handleReady = useCallback(() => {
+    setLoading(false);
+    onReady?.();
+  }, [onReady]);
 
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900">
-      {!isError ? (
-        <>
-          {/* Poster / Play overlay */}
-          {!autoPlay && (
-            <a
-              href={embedSrc}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="absolute inset-0 z-20 block cursor-pointer"
-            >
-              {thumbnailUrl && (
-                <img
-                  src={thumbnailUrl}
-                  alt="Video thumbnail"
-                  className="h-full w-full object-cover opacity-85"
-                  referrerPolicy="no-referrer"
-                />
-              )}
-              <div className="absolute inset-0 flex items-center justify-center bg-black/40 transition-all hover:bg-black/25">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-fire-500 shadow-lg transition-transform hover:scale-110">
-                  <svg className="ml-1 h-8 w-8 text-white" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </div>
-              </div>
-            </a>
-          )}
-
-          {/* Actual iframe */}
-          <iframe
-            src={embedSrc}
-            className="aspect-video h-full w-full"
-            title={`YouTube video: ${videoId}`}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-            allowFullScreen
-            onError={() => setIsError(true)}
-          />
-        </>
-      ) : (
-        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-          <p className="text-red-400">⚠️ تعذر عرض الفيديو المدمج</p>
-          <a
-            href={watchSrc}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-fire inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-white"
-          >
-            <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M23.5 6.2c-.3-3.3-3-6-6.3-6.2C16.1 0 12 0 12 0s-4.1 0-5.2.1C3.5.2.7 2.9.5 6.2c-.2 1.1-.1 6.8-.1 6.8s-.1 5.7.1 6.8c.3 3.3 3 6 6.3 6.2 1.1.1 5.2.1 5.2.1s4.1 0 5.2-.1c3.3-.3 6-3 6.3-6.3.1-1.1.1-6.8.1-6.8s.1-5.7-.1-6.8zM9.5 14.5V9l6 3.2-6 2.3z"/></svg>
-            شاهد على يوتيوب
-          </a>
+    <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900 shadow-2xl group">
+      {/* Loading Spinner */}
+      {loading && !hasStarted && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-ink-900/60 pointer-events-none">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-fire-500/30 border-t-fire-500" />
         </div>
       )}
+
+      {/* Actual Player */}
+      <div className="absolute inset-0 h-full w-full">
+        <ReactPlayer
+          url={url}
+          width="100%"
+          height="100%"
+          playing={autoPlay || hasStarted}
+          controls={true}
+          muted={muted}
+          playbackRate={playbackRate}
+          onReady={handleReady}
+          onStart={() => {
+            setHasStarted(true);
+            onPlay?.();
+          }}
+          onPlay={onPlay}
+          onPause={onPause}
+          onEnded={onEnded}
+          onError={() => onError?.(t('video.error'))}
+          onDuration={onDuration}
+          onProgress={(state: { playedSeconds: number }) => onProgress?.(Math.floor(state.playedSeconds))}
+          config={{
+            youtube: {
+              playerVars: {
+                start: Math.floor(initialTime),
+                modestbranding: 1,
+                rel: 0,
+              }
+            }
+          }}
+        />
+      </div>
     </div>
   );
 }

@@ -19,7 +19,7 @@
  *   // await flushOutbox(pending);
  */
 
-import { openDB, IDBPDatabase } from 'idb';
+import { type IDBPDatabase } from 'idb';
 import { getDB } from './idb';
 
 const CHANNEL_NAME = 'drcode-outbox-flush';
@@ -106,7 +106,6 @@ export async function flushOutbox(
   items: OutboxItem[] = [],
   maxConcurrent = 3
 ): Promise<{ succeeded: number; failed: number }> {
-  const db = await getDB();
   const pending = items.length
     ? items
     : await getOutboxPending();
@@ -169,7 +168,6 @@ export async function addToOutbox(
     const existing = await getOutboxPending(type);
     const existingItem = existing.find((i) => i.dedupeKey === dedupeKey);
     if (existingItem) {
-      // Optionally: update retry count or just return existing id
       return existingItem.id;
     }
   }
@@ -185,7 +183,7 @@ export async function addToOutbox(
     dedupeKey,
   };
 
-  await db.put('outbox', item, id);
+  await db.put('drcode-v2', item, id);
   return id;
 }
 
@@ -194,39 +192,27 @@ export async function getOutboxPending(
   type?: OutboxType
 ): Promise<OutboxItem[]> {
   const db = await getDB();
-  const tx = db.transaction('outbox', 'readonly');
-  const store = tx.objectStore('outbox');
-  const index = type ? index.openKeyCursor(type) : store.openCursor();
-  const results: OutboxItem[] = [];
-
-  return new Promise((resolve) => {
-    cursor.onsuccess = (event) => {
-      const cursor = event.target?.result;
-      if (cursor) {
-        results.push(cursor.value as OutboxItem);
-        cursor.continue();
-      } else {
-        resolve(results);
-      }
-    };
-    cursor.onerror = () => resolve(results);
-  });
+  const all: OutboxItem[] = await db.getAll('drcode-v2');
+  if (type) {
+    return all.filter((item) => item.type === type);
+  }
+  return all;
 }
 
 /** Remove a specific item from outbox */
 export async function removeFromOutbox(id: string): Promise<void> {
   const db = await getDB();
-  await db.delete('outbox', id);
+  await db.delete('drcode-v2', id);
 }
 
 /** Increment retry counter for a failed item */
 export async function incrementOutboxRetry(id: string): Promise<void> {
   const db = await getDB();
-  const existing = await db.get('outbox', id);
+  const existing = await db.get('drcode-v2', id);
   if (existing) {
     await db.put(
       { ...existing, retries: (existing.retries ?? 0) + 1 },
-      'outbox',
+      'drcode-v2',
       id
     );
   }

@@ -248,8 +248,24 @@ export async function getPushStatus(): Promise<PushStatus | null> {
 }
 
 /**
- * Send test push notification (for development)
+ * Send test push notification (local fallback to ensure it works)
  */
 export async function sendTestPush(): Promise<void> {
-  await api('/push/test', { method: 'POST' });
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    alert('يجب السماح بالإشعارات من إعدادات المتصفح');
+    return;
+  }
+
+  // Local notification for testing
+  new Notification('اختبار إشعارات DR Code', {
+    body: 'هذا إشعار تجريبي للتأكد من عمل التنبيهات والصوت.',
+    icon: '/pwa-192.png',
+    badge: '/pwa-192.png',
+  });
+
+  // Call API for server-side push as well
+  await api('/push/test', { method: 'POST' }).catch(() => {
+    console.warn('API test push failed (ok if no server-side push configured)');
+  });
 }
