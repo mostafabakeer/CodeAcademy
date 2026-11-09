@@ -127,7 +127,6 @@ export default function YouTubePlayer({
         modestbranding: 1,
         rel: 0,
         playsinline: 1,
-        origin: window.location.origin,
         cc_load_policy: 1,
         iv_load_policy: 1,
       },
