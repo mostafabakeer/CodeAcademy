@@ -1,6 +1,5 @@
-import { useState, useCallback } from 'react';
-import ReactPlayer from 'react-player';
-import { useLang } from '../i18n';
+import { useState } from 'react';
+import { getYouTubeThumbnail } from '../lib/youtube';
 
 interface YouTubePlayerProps {
   videoId: string;
@@ -21,69 +20,55 @@ interface YouTubePlayerProps {
 export default function YouTubePlayer({
   videoId,
   initialTime = 0,
-  onReady,
-  onPlay,
-  onPause,
-  onEnded,
-  onError,
-  onDuration,
-  onProgress,
-  playbackRate = 1,
-  muted = false,
   autoPlay = false,
 }: YouTubePlayerProps) {
-  const { t } = useLang();
-  const [hasStarted, setHasStarted] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const thumbnailUrl = getYouTubeThumbnail(`https://youtu.be/${videoId}`);
 
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const params = new URLSearchParams({
+    autoplay: isPlaying ? '1' : '0',
+    start: String(Math.floor(initialTime)),
+    rel: '0',
+    modestbranding: '1',
+    cc_load_policy: '1',
+    iv_load_policy: '3',
+    playsinline: '1',
+  });
 
-  const handleReady = useCallback(() => {
-    setLoading(false);
-    onReady?.();
-  }, [onReady]);
+  const embedUrl = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
 
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900 shadow-2xl group">
-      {/* Loading Spinner */}
-      {loading && !hasStarted && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-ink-900/60 pointer-events-none">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-fire-500/30 border-t-fire-500" />
+    <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900 shadow-2xl">
+      {!isPlaying ? (
+        <div
+          onClick={() => setIsPlaying(true)}
+          className="absolute inset-0 z-20 flex cursor-pointer items-center justify-center bg-black/40 transition-all hover:bg-black/25"
+        >
+          {thumbnailUrl && (
+            <img
+              src={thumbnailUrl}
+              alt="Video thumbnail"
+              className="absolute inset-0 h-full w-full object-cover opacity-85"
+              referrerPolicy="no-referrer"
+            />
+          )}
+          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-fire-500 shadow-lg transition-transform hover:scale-110">
+              <svg className="ml-1 h-10 w-10 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </div>
+          </div>
         </div>
-      )}
-
-      {/* Actual Player */}
-      <div className="absolute inset-0 h-full w-full">
-        <ReactPlayer
-          url={url}
-          width="100%"
-          height="100%"
-          playing={autoPlay || hasStarted}
-          controls={true}
-          muted={muted}
-          playbackRate={playbackRate}
-          onReady={handleReady}
-          onStart={() => {
-            setHasStarted(true);
-            onPlay?.();
-          }}
-          onPlay={onPlay}
-          onPause={onPause}
-          onEnded={onEnded}
-          onError={() => onError?.(t('video.error'))}
-          onDuration={onDuration}
-          onProgress={(state: { playedSeconds: number }) => onProgress?.(Math.floor(state.playedSeconds))}
-          config={{
-            youtube: {
-              playerVars: {
-                start: Math.floor(initialTime),
-                modestbranding: 1,
-                rel: 0,
-              }
-            }
-          }}
+      ) : (
+        <iframe
+          src={embedUrl}
+          className="absolute inset-0 h-full w-full border-0"
+          title="YouTube video player"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
         />
-      </div>
+      )}
     </div>
   );
 }
