@@ -78,7 +78,8 @@ export function useExamDeadline({
   // بدء العدّاد من جديد أو استئناؤه من مهلة محفوظة (مرة واحدة لكل امتحان).
   useEffect(() => {
     if (!examId || !durationMinutes || durationMinutes <= 0 || !active) {
-      setDeadline(null);
+      // Use setTimeout to avoid synchronous setState in effect
+      setTimeout(() => setDeadline(null), 0);
       return;
     }
     const saved = readDeadline(examId);

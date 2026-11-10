@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
-import { api } from '../api/client';
 import CodeEditor from '../components/CodeEditor';
 import { getDB, getAllFiles, getFileById, saveFile, deleteFile, generateId, setLastOpenedFileId, getLastOpenedFileId } from '../lib/localFileSystem';
 import { getCodeDraft, setCodeDraft, clearCodeDraft } from '../lib/localStore';

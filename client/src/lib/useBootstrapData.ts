@@ -54,9 +54,12 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
   useEffect(() => {
     idRef.current = userId;
     if (userId == null) {
-      setData(null);
-      setReloading(false);
-      setError(null);
+      // Use setTimeout to avoid synchronous setState in effect
+      setTimeout(() => {
+        setData(null);
+        setReloading(false);
+        setError(null);
+      }, 0);
       return;
     }
     const sync = getBootstrapSync(userId);

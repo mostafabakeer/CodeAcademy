@@ -37,12 +37,21 @@ export default function YouTubePlayer({
 
   const embedUrl = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setIsPlaying(true);
+    }
+  };
+
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900 shadow-2xl">
       {!isPlaying ? (
-        <div
+        <button
           onClick={() => setIsPlaying(true)}
+          onKeyDown={handleKeyDown}
           className="absolute inset-0 z-20 flex cursor-pointer items-center justify-center bg-black/40 transition-all hover:bg-black/25"
+          aria-label="تشغيل الفيديو"
         >
           {thumbnailUrl && (
             <img
@@ -59,7 +68,7 @@ export default function YouTubePlayer({
               </svg>
             </div>
           </div>
-        </div>
+        </button>
       ) : (
         <iframe
           src={embedUrl}
