@@ -260,6 +260,8 @@ export const en: TranslationKeys = {
     pythonNotSupported: 'Sorry, Python code cannot be executed in the browser.',
     linkHint: 'Link your files: in an HTML file use e.g. <link rel="stylesheet" href="style.css"> and the CSS styles will apply automatically when running.',
     fullPreview: 'Full Preview',
+    console: 'Console',
+    focusIframe: 'Focus iframe',
   },
   profile: {
     title: 'My Profile',

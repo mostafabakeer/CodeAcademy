@@ -199,7 +199,9 @@ function fetchWithTimeout(
  */
 function apiTargets(): string[] {
   const supabase = `${SUPABASE_URL}/functions/v1/api`;
-  return import.meta.env.DEV ? [supabase] : ['/api', supabase];
+  // Use ONLY proxy in dev to avoid CORS issues
+  // In production, try /api first (same origin), then fallback to direct Supabase
+  return import.meta.env.DEV ? ['/api'] : ['/api', supabase];
 }
 
 /**

@@ -25,9 +25,12 @@ export default function Navbar() {
   const contentUserId =
     user && (user.role === 'admin' || (user.role === 'student' && user.subscription)) ? user.id : null;
   const { data: content } = useBootstrapData(contentUserId);
+  const nowRef = useRef(Date.now());
+  nowRef.current = Date.now();
+
   const notifications = useMemo<ContentNotification[]>(() => {
     if (!content) return [];
-    const recentAfter = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const recentAfter = nowRef.current - 7 * 24 * 60 * 60 * 1000;
     return [
       ...content.lessons.map((item) => ({
         id: `lesson-${item.id}`,
@@ -54,7 +57,7 @@ export default function Navbar() {
       .filter((item) =>
         Number.isFinite(item.createdAt) &&
         item.createdAt >= recentAfter &&
-        item.createdAt <= Date.now()
+        item.createdAt <= nowRef.current
       )
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 20);
@@ -69,7 +72,7 @@ export default function Navbar() {
     const saved = Number(getLocal(`content-notifications-seen:${contentUserId}`));
     setSeen({
       userId: contentUserId,
-      at: Number.isFinite(saved) && saved > 0 ? saved : user?.createdAt ?? Date.now(),
+      at: Number.isFinite(saved) && saved > 0 ? saved : user?.createdAt ?? nowRef.current,
     });
   }, [contentUserId, user?.createdAt]);
 

@@ -258,6 +258,8 @@ export const ar = {
     pythonNotSupported: 'عذراً، لا يمكن تنفيذ كود Python في المتصفح.',
     linkHint: 'اربط ملفاتك ببعض: في ملف HTML اكتب مثلاً <link rel="stylesheet" href="style.css"> وستظهر تنسيقات ملف CSS تلقائياً عند التشغيل.',
     fullPreview: 'عرض كامل',
+    console: 'Console',
+    focusIframe: 'Focus iframe',
   },
   profile: {
     title: 'ملفي الشخصي',

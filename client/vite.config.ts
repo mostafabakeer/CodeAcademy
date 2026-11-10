@@ -10,6 +10,16 @@ export default defineConfig({
   esbuild: {
     drop: ['debugger'],
   },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'https://hgeugcmockvnfenhljlc.supabase.co/functions/v1/api',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -97,9 +107,6 @@ export default defineConfig({
     }),
   ],
   base: '/',
-  server: {
-    port: 5173,
-  },
   build: {
     chunkSizeWarningLimit: 1200,
     cssCodeSplit: true,
