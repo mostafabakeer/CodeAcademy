@@ -85,7 +85,8 @@ export function useExamDeadline({
     const saved = readDeadline(examId);
     const next = saved ?? Date.now() + durationMinutes * 60_000;
     if (!saved) writeDeadline(examId, next);
-    setDeadline(next);
+    // Use setTimeout to avoid synchronous setState in effect
+    setTimeout(() => setDeadline(next), 0);
   }, [examId, durationMinutes, active]);
 
   // مزامنة دفاعية بين التبويبات: إذا تغيّرت المهلة في تبويب آخر نتبنّاها.

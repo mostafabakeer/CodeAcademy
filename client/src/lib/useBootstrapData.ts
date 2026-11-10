@@ -63,7 +63,10 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
       return;
     }
     const sync = getBootstrapSync(userId);
-    if (sync) setData(sync);
+    if (sync) {
+      // Use setTimeout to avoid synchronous setState in effect
+      setTimeout(() => setData(sync), 0);
+    }
     run(false);
 
     // تنظيف عند unmount

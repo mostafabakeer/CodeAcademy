@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Link, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bell } from 'lucide-react';
@@ -25,12 +25,16 @@ export default function Navbar() {
   const contentUserId =
     user && (user.role === 'admin' || (user.role === 'student' && user.subscription)) ? user.id : null;
   const { data: content } = useBootstrapData(contentUserId);
+
   const nowRef = useRef(Date.now());
-  nowRef.current = Date.now();
+  useEffect(() => {
+    nowRef.current = Date.now();
+  });
 
   const notifications = useMemo<ContentNotification[]>(() => {
     if (!content) return [];
-    const recentAfter = nowRef.current - 7 * 24 * 60 * 60 * 1000;
+    const now = nowRef.current;
+    const recentAfter = now - 7 * 24 * 60 * 60 * 1000;
     return [
       ...content.lessons.map((item) => ({
         id: `lesson-${item.id}`,
@@ -57,7 +61,7 @@ export default function Navbar() {
       .filter((item) =>
         Number.isFinite(item.createdAt) &&
         item.createdAt >= recentAfter &&
-        item.createdAt <= nowRef.current
+        item.createdAt <= now
       )
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 20);
@@ -65,14 +69,17 @@ export default function Navbar() {
 
   useEffect(() => {
     if (!contentUserId) {
-      setSeen(null);
-      setNotificationsOpen(false);
+      setTimeout(() => {
+        setSeen(null);
+        setNotificationsOpen(false);
+      }, 0);
       return;
     }
     const saved = Number(getLocal(`content-notifications-seen:${contentUserId}`));
+    const now = Date.now();
     setSeen({
       userId: contentUserId,
-      at: Number.isFinite(saved) && saved > 0 ? saved : user?.createdAt ?? nowRef.current,
+      at: Number.isFinite(saved) && saved > 0 ? saved : user?.createdAt ?? now,
     });
   }, [contentUserId, user?.createdAt]);
 
