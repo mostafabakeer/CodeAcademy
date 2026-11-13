@@ -78,7 +78,7 @@ export default defineConfig({
         runtimeCaching: [
           {
             // محرك Python: كبير (10MB) ويُحمَّل مرة واحدة عند فتح محرر الأكواد.
-            urlPattern: /^\/pyodide\//,
+            urlPattern: /\/pyodide\/\d[^/]*\//,
             handler: 'CacheFirst',
             options: {
               cacheName: 'dr-pyodide',
@@ -86,7 +86,7 @@ export default defineConfig({
             },
           },
           {
-            urlPattern: /^\/assets\/.*\.(js|css|woff2?|ttf|otf)$/i,
+            urlPattern: /\/assets\/.*\.(js|css|woff2?|ttf|otf)$/i,
             handler: 'CacheFirst',
             options: {
               cacheName: 'dr-assets',
@@ -95,7 +95,7 @@ export default defineConfig({
           },
           {
             // الصور العامة الثابتة (شعار/رموز) — بدون مصادقة
-            urlPattern: /^\/logo\.png$|^\/login-hero\.png$|^\/owner\.png$/,
+            urlPattern: /\/logo\.png$|\/login-hero\.png$|\/owner\.png$/,
             handler: 'CacheFirst',
             options: {
               cacheName: 'dr-public-img',

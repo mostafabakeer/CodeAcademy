@@ -71,7 +71,7 @@ function subscriptionToData(sub: PushSubscription): PushSubscriptionData {
 
 async function saveSubscription(sub: PushSubscription): Promise<PushSubscriptionData> {
   const data = subscriptionToData(sub);
-  await api('/push/subscribe', { method: 'POST', body: JSON.stringify(data) });
+  await api('/push/subscribe', { method: 'POST', body: data });
   return data;
 }
 
@@ -97,7 +97,7 @@ async function getOrCreateSubscription(vapidKey: string): Promise<PushSubscripti
   if (!subscription) {
     subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      applicationServerKey: urlBase64ToUint8Array(vapidKey) as unknown as BufferSource,
     });
   }
 
@@ -149,7 +149,7 @@ export async function unsubscribeFromPush(): Promise<void> {
       await subscription.unsubscribe();
       await api('/push/unsubscribe', {
         method: 'POST',
-        body: JSON.stringify({ endpoint: subscription.endpoint }),
+        body: { endpoint: subscription.endpoint },
       });
     }
   } catch (error) {
@@ -177,21 +177,17 @@ export async function getPushStatus(): Promise<PushStatus | null> {
 }
 
 export async function sendTestPush(): Promise<void> {
+  if (!isPushSupported()) throw new Error('Push notifications not supported');
+
   const permission = await Notification.requestPermission();
-  if (permission !== 'granted') {
-    alert('يجب السماح بالإشعارات من إعدادات المتصفح');
-    return;
-  }
+  if (permission !== 'granted') throw new Error('Notification permission denied');
 
-  new Notification('🔔 اختبار إشعارات DR Code', {
-    body: 'هذا إشعار تجريبي للتأكد من عمل التنبيهات والصوت.',
-    icon: '/pwa-192.png',
-    badge: '/pwa-192.png',
-    vibrate: [200, 100, 200, 100, 200],
-    requireInteraction: true,
-  });
+  // نضمن وجود اشتراك محفوظ على الخادم قبل طلب الإشعار التجريبي، وإلا أرسل
+  // الخادم إلى صفر أجهزة وظهر الزر كأنه "يعمل" بلا نتيجة.
+  const subscribed = await ensurePushSubscription();
+  if (!subscribed) throw new Error('Push subscription not available');
 
-  await api('/push/test', { method: 'POST' }).catch(() => {});
+  await api('/push/test', { method: 'POST' });
 }
 
 // تصدير وظائف جدولة الإشعارات

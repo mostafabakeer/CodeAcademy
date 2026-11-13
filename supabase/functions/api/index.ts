@@ -67,6 +67,7 @@ import {
   listResultsByUser,
   listResultSummariesByUser,
   listCodeFilesByUser,
+  listCodeFilesWithCodeByUser,
   getCodeFileByUser,
   createCodeFile,
   updateCodeFile,
@@ -1027,10 +1028,15 @@ app.get('/code', requireAuth, requireSubscriber, async (c) => {
   if (!genericRateLimit(`code:${reqUser.id}`, 30, 60_000)) {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
-  const files = (await listCodeFilesByUser(reqUser.id)).map((f) => ({
+  const files = (
+    c.req.query('withCode') === '1'
+      ? await listCodeFilesWithCodeByUser(reqUser.id)
+      : await listCodeFilesByUser(reqUser.id)
+  ).map((f) => ({
     id: f.id,
     name: f.name,
     language: f.language,
+    ...(c.req.query('withCode') === '1' ? { code: f.code } : {}),
     updatedAt: f.updatedAt,
     createdAt: f.createdAt,
   }));
@@ -1631,6 +1637,12 @@ interface PushPayloadServer {
   id?: number;
   icon?: string;
   badge?: string;
+  /** كل الحقول التالية اختيارية وللتوافق مع أجهزة/متصفحات مختلفة. */
+  tag?: string;
+  sound?: string;
+  vibrate?: number[];
+  silent?: boolean;
+  requireInteraction?: boolean;
 }
 
 /** يهيّئ web-push مرة واحدة لكل استدعاء. يرجع null لو مفاتيح VAPID غير مضبوطة. */
@@ -1663,7 +1675,21 @@ async function deliverPush(subs: PushSubRow[], payload: PushPayloadServer): Prom
       body: payload.body,
       icon: payload.icon ?? '/pwa-192.png',
       badge: payload.badge ?? '/pwa-192.png',
-      data: { url: payload.url ?? '/', type: payload.type ?? 'test', id: payload.id ?? 0 },
+      // الصوت والاهتزاز: `sound` يُتجاهل على كروم/أندرويد لكنه يعمل على بعض
+      // الأجهزة، والاهتزاز يعمل على أندرويد. الواجهة المفتوحة تشغّل نغمتها
+      // بنفسها استجابةً لرسالة الـ Service Worker.
+      sound: payload.sound ?? 'default',
+      vibrate: payload.vibrate ?? [200, 100, 200],
+      silent: payload.silent ?? false,
+      requireInteraction: payload.requireInteraction ?? false,
+      tag: payload.tag ?? `drcode-${payload.type ?? 'test'}`,
+      type: payload.type ?? 'test',
+      data: {
+        url: payload.url ?? '/',
+        type: payload.type ?? 'test',
+        id: payload.id ?? 0,
+        tag: payload.tag ?? `drcode-${payload.type ?? 'test'}`,
+      },
     });
 
     const results = await Promise.allSettled(

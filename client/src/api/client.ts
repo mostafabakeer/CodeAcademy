@@ -418,7 +418,9 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
     if (isAdminMutation) {
       try {
         localStorage.removeItem(`bootstrap:v${getContentVersion()}:${getCurrentUserId()}`);
-      } catch {}
+      } catch {
+        // Ignore localStorage errors
+      }
     }
     return parsed as T;
   }
@@ -434,7 +436,9 @@ function getCurrentUserId(): number {
       const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
       return payload.id || 0;
     }
-  } catch {}
+  } catch {
+    // Ignore token parsing errors
+  }
   return 0;
 }
 

@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import Navbar from './components/Navbar';
@@ -11,6 +11,7 @@ import InstallPrompt from './components/InstallPrompt';
 import UploadNotifications from './components/UploadNotifications';
 import { useLang } from './i18n';
 import { useSession } from './store/authStore';
+import { installSoundUnlock } from './lib/notificationSound';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
@@ -137,6 +138,12 @@ function AnimatedRoutes() {
 }
 
 export default function App() {
+  // فتح قناة الصوت عند أول تفاعل حقيقي: شرط أساسي لتشغيل نغمة الإشعارات
+  // لاحقاً بعد عمليات غير مرتبطة بتفاعل مباشر (مثل انتهاء رفع ملف).
+  useEffect(() => {
+    installSoundUnlock();
+  }, []);
+
   return (
     <Suspense fallback={<PageLoader />}>
       <Shell />

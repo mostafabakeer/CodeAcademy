@@ -18,21 +18,36 @@ import {
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
 import ProgressBar from '../components/ProgressBar';
+import { getAllFiles } from '../lib/localFileSystem';
+import {
+  isNotificationSoundMuted,
+  setNotificationSoundMuted,
+  playNotificationSound,
+  unlockNotificationSound,
+} from '../lib/notificationSound';
 
 type PushState = 'loading' | 'unsupported' | 'enabled' | 'disabled' | 'denied';
+
+type CodeFileItem = {
+  id: string | number;
+  name: string;
+  language: string;
+  updatedAt: number;
+};
 
 export default function Profile() {
   const { t, lang } = useLang();
   const user = useUser();
   const { stats } = useProgress();
   const { logoutAll } = useSession();
-  const [codeFiles, setCodeFiles] = useState<{ id: number; name: string; language: string; updatedAt: number }[]>([]);
+  const [codeFiles, setCodeFiles] = useState<CodeFileItem[]>([]);
   const [secBusy, setSecBusy] = useState(false);
   const [secError, setSecError] = useState('');
   const [pushState, setPushState] = useState<PushState>('loading');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMsg, setPushMsg] = useState('');
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const [soundOn, setSoundOn] = useState(() => !isNotificationSoundMuted());
   const showIosHint = isIOS() && !isStandalonePwa();
 
   const refreshPushStatus = () => {
@@ -93,9 +108,41 @@ export default function Profile() {
   };
 
   useEffect(() => {
-    api<{ files: { id: number; name: string; language: string; updatedAt: number }[] }>('/api/code')
-      .then((d) => setCodeFiles(d.files))
-      .catch(() => {});
+    let active = true;
+    // ندمج السحابة والمحلي: السحابة تُعيد الملفات المزامنة، والمحلي قد يحوي
+    // ملفات لم تُرفع بعد (أوفلاين) أو ملفات أُنشئت قبل استرجاع المزامنة.
+    const keyOf = (f: CodeFileItem) => `${f.name}::${f.language}`;
+    const merge = (remote: CodeFileItem[], local: CodeFileItem[]) => {
+      const map = new Map<string, CodeFileItem>();
+      for (const file of [...remote, ...local]) {
+        const key = keyOf(file);
+        const prev = map.get(key);
+        if (!prev || file.updatedAt > prev.updatedAt) map.set(key, file);
+      }
+      return Array.from(map.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+    };
+
+    void Promise.all([
+      api<{ files: CodeFileItem[] }>('/api/code')
+        .then((d) => d.files)
+        .catch(() => [] as CodeFileItem[]),
+      getAllFiles()
+        .then((files) =>
+          files.map((f) => ({
+            id: f.id,
+            name: f.name,
+            language: f.language,
+            updatedAt: f.updatedAt,
+          })),
+        )
+        .catch(() => [] as CodeFileItem[]),
+    ]).then(([remote, local]) => {
+      if (active) setCodeFiles(merge(remote, local));
+    });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (!user) return null;
@@ -218,6 +265,38 @@ export default function Profile() {
           </p>
         )}
         {pushMsg && <p className="mt-2 text-sm font-bold text-red-400">{pushMsg}</p>}
+      </section>
+
+      <section className="card-fire rounded-2xl p-6">
+        <h2 className="mb-2 font-extrabold">🔊 {t('profile.soundTitle')}</h2>
+        <p className="mb-4 text-sm text-gray-500">{t('profile.soundHint')}</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              const next = !soundOn;
+              setSoundOn(next);
+              setNotificationSoundMuted(!next);
+              if (next) {
+                unlockNotificationSound();
+                playNotificationSound('message');
+              }
+            }}
+            className="rounded-xl border border-fire-500/40 bg-fire-500/10 px-4 py-2 text-sm font-bold text-fire-200 transition hover:bg-fire-500/20"
+          >
+            {soundOn ? t('profile.soundOn') : t('profile.soundOff')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              unlockNotificationSound();
+              playNotificationSound('message');
+            }}
+            className="rounded-xl border border-ink-600 bg-ink-900 px-4 py-2 text-sm font-bold text-gray-300 transition hover:bg-ink-800"
+          >
+            {t('profile.soundTest')}
+          </button>
+        </div>
       </section>
 
       <section className="card-fire rounded-2xl p-6">

@@ -1,7 +1,13 @@
 /* eslint-disable no-restricted-globals */
 /**
- * معالج Web Push مُحسّن — يعرض الإشعارات حتى بعد إغلاق التطبيق/المتصفح
- * الحجم: ~1.2KB بدلاً من 3KB
+ * معالج Web Push — يعرض الإشعارات حتى بعد إغلاق التطبيق/المتصفح.
+ *
+ * ملاحظات مهمة عن الصوت:
+ * - خاصية `sound` غير مدعومة على كروم/أندرويد (تُتجاهل) وعلى iOS يتحكم
+ *   النظام بالصوت. لذلك نرسل أيضاً رسالة للنوافذ المفتوحة كي تشغّل الواجهة
+ *   نغمتها بنفسها عبر Web Audio (وهذا هو المسار الذي يعمل فعلاً).
+ * - لا نجبر `requireInteraction` (كان يبقي الإشعار عالقاً على الشاشة دائماً)،
+ *   ولا نغيّر الـ tag لكل إشعار حتى تعمل إعادة التنبيه بشكل صحيح.
  */
 
 // دالة مساعدة لتحويل Base64 إلى Uint8Array
@@ -33,6 +39,9 @@ self.addEventListener('push', (event) => {
   const data = payload.data || {};
   const title = payload.title || 'DR Code';
   const body = payload.body || payload.message || 'يوجد محتوى جديد';
+  const type = payload.type || data.type || 'generic';
+  // tag ثابت لكل نوع: يسمح باستبدال الإشعار القديم بدل تكديس عشرات الإشعارات.
+  const tag = payload.tag || `drcode-${type}`;
 
   const options = {
     body,
@@ -40,25 +49,56 @@ self.addEventListener('push', (event) => {
     badge: payload.badge || '/pwa-192.png',
     dir: 'rtl',
     lang: payload.lang || 'ar',
-    vibrate: [200, 100, 200, 100, 200],
-    tag: data?.tag || `drcode-${Date.now()}`,
-    renotify: true,
-    requireInteraction: payload.requireInteraction !== false,
+    vibrate: Array.isArray(payload.vibrate) ? payload.vibrate : [200, 100, 200],
+    tag,
+    renotify: payload.renotify !== false,
+    // افتراضياً لا نُبقي الإشعار على الشاشة (كان true دائماً).
+    requireInteraction: payload.requireInteraction === true,
+    silent: payload.silent === true,
     data: {
-      url: payload.url || '/',
-      type: payload.type || 'generic',
-      id: payload.id || Date.now(),
+      url: payload.url || data.url || '/',
+      type,
+      id: payload.id || data.id || Date.now(),
       ...data,
     },
   };
 
+  // يظل يُمرَّر للأجهزة/المتصفحات التي تدعمه (لا يضرّ حين يُتجاهل).
   if (payload.sound) options.sound = payload.sound;
 
   event.waitUntil(
-    self.registration.showNotification(title, options).catch((err) => {
-      console.error('[push-sw] خطأ في إظهار الإشعار:', err);
-      return self.registration.showNotification(title, { body, icon: options.icon });
-    }),
+    (async () => {
+      try {
+        await self.registration.showNotification(title, options);
+      } catch (err) {
+        console.error('[push-sw] خطأ في إظهار الإشعار:', err);
+        try {
+          await self.registration.showNotification(title, {
+            body,
+            icon: options.icon,
+            tag,
+          });
+        } catch {
+          /* لا شيء آخر يمكن فعله */
+        }
+      }
+
+      // إبلاغ النوافذ المفتوحة: تشغيل الصوت داخل التطبيق (المسار الموثوق).
+      try {
+        const clients = await self.clients.matchAll({
+          type: 'window',
+          includeUncontrolled: true,
+        });
+        clients.forEach((client) => {
+          client.postMessage({
+            type: 'push-received',
+            payload: { title, body, type, data: options.data },
+          });
+        });
+      } catch {
+        /* ignore */
+      }
+    })(),
   );
 });
 
@@ -98,13 +138,25 @@ self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil(
     (async () => {
       try {
-        const subscription = event.newSubscription ||
-          await self.registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlB64ToUint8Array(
-              sessionStorage.getItem('applicationServerKey') || '',
-            ),
-          });
+        // ملاحظة: sessionStorage غير متاح داخل Service Worker، وكان الكود
+        // القديم يعتمد عليه فيحصل على مفتاح فارغ ويفشل الاشتراك دائماً.
+        let publicKey = '';
+        try {
+          const res = await fetch('/api/push/public-key', { cache: 'no-store' });
+          const json = await res.json();
+          publicKey = json?.key || '';
+        } catch {
+          publicKey = '';
+        }
+
+        const subscription =
+          event.newSubscription ||
+          (publicKey
+            ? await self.registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlB64ToUint8Array(publicKey),
+              })
+            : null);
 
         if (!subscription) return;
 
@@ -138,14 +190,3 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
-
-// تنظيف الإشعارات المنتهية صلاحيتها تلقائيًا
-let cleaned = 0;
-setInterval(() => {
-  if (cleaned > 1000) {
-    cleaned = 0;
-    return;
-  }
-  cleaned++;
-  // مراقبة الإشعارات القديمة تُجرى يدويًا من التطبيق
-}, 60000);

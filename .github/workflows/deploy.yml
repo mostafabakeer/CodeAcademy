@@ -20,6 +20,10 @@ jobs:
         working-directory: client
         run: npm ci
 
+      - name: Typecheck client (no emit)
+        working-directory: client
+        run: npm run typecheck
+
       - name: Check text encoding (mojibake guard)
         working-directory: client
         run: npm run check:encoding
@@ -57,10 +61,11 @@ jobs:
         shell: bash
         run: |
           # محرك Python في المتصفح: أصول Pyodide تُنسخ قبل البناء من node_modules
-          test -f client/dist/pyodide/pyodide.js \
-            || { echo "::error::client/dist/pyodide/pyodide.js is missing — copy-pyodide.mjs did not run"; exit 1; }
-          test -f client/dist/pyodide/pyodide.asm.wasm \
-            || { echo "::error::client/dist/pyodide/pyodide.asm.wasm is missing — Python in CodeLab would break"; exit 1; }
+          # المسار يحمل رقم الإصدار لكسر أي 404 قديم مخزَّن في متصفحات الطلاب.
+          test -f client/dist/pyodide/0.26.4/pyodide.js \
+            || { echo "::error::client/dist/pyodide/0.26.4/pyodide.js is missing — copy-pyodide.mjs did not run"; exit 1; }
+          test -f client/dist/pyodide/0.26.4/pyodide.asm.wasm \
+            || { echo "::error::client/dist/pyodide/0.26.4/pyodide.asm.wasm is missing — Python in CodeLab would break"; exit 1; }
           test -f client/dist/index.html \
             || { echo "::error::client/dist/index.html is missing — Vite output is not at client/dist (wrangler.toml [assets] directory = ./client/dist)"; exit 1; }
 
@@ -94,6 +99,25 @@ jobs:
           export CLOUDFLARE_API_TOKEN="$(cat "$RUNNER_TEMP/cf-token")"
           export CLOUDFLARE_ACCOUNT_ID="$(cat "$RUNNER_TEMP/cf-account")"
           npx --yes wrangler@4.137.0 deploy
+
+      # إثبات أن ما نُشر هو فعلاً الموقع الذي يفتحه الطلاب. بدون هذه الخطوة
+      # نشرنا سابقاً Worker باسم مختلف بينما بقي النطاق الحقيقي بلا Python.
+      - name: Smoke test live site (Pyodide must be reachable)
+        shell: bash
+        env:
+          SITE_URL: ${{ secrets.SITE_URL || 'https://codeacademy2.drcode.workers.dev' }}
+        run: |
+          base="${SITE_URL%/}"
+          for f in pyodide.js pyodide.asm.js pyodide.asm.wasm pyodide-lock.json python_stdlib.zip; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$base/pyodide/0.26.4/$f" || echo 000)"
+            if [ "$code" != "200" ]; then
+              echo "::error::$base/pyodide/0.26.4/$f returned HTTP $code — deployed worker is missing Pyodide assets. Check that wrangler.toml name matches the live worker (codeacademy2)."
+              exit 1
+            fi
+          done
+          curl -fsS --max-time 20 "$base/" > /dev/null \
+            || { echo "::error::$base/ is not reachable"; exit 1; }
+          echo "Smoke test passed: $base serves the Python engine."
 
       # كشف انحراف الواجهة عن الباك اند: الـ API يُنشر يدوياً، فقد تتقدّم الواجهة
       # بميزة (مثل Python) بينما الخادم قديم. تحذير واضح بدل فشل صامت للمستخدم.

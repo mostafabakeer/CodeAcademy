@@ -67,7 +67,8 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
       // Use setTimeout to avoid synchronous setState in effect
       setTimeout(() => setData(sync), 0);
     }
-    run(false);
+    // Use setTimeout to avoid synchronous setState in effect (run calls setReloading)
+    setTimeout(() => run(false), 0);
 
     // تنظيف عند unmount
     return () => {

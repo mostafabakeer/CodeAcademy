@@ -47,15 +47,32 @@ let videoProgressCacheAt = 0;
 const VIDEO_PROGRESS_CACHE_TTL = 1000; // 1 ثانية
 
 /** مسودة عمل ملف المحرر قبل الحفظ في السيرفر (تُستعاد عند فتح الملف). */
-export function getCodeDraft(fileId: number): string | null {
-  return getLocal(DRAFT_PREFIX + fileId);
+export interface CodeDraft {
+  code: string;
+  at: number;
 }
 
-export function setCodeDraft(fileId: number, code: string): void {
-  setLocal(DRAFT_PREFIX + fileId, code);
+export function getCodeDraft(fileId: string | number): CodeDraft | null {
+  const raw = getLocal(DRAFT_PREFIX + fileId);
+  if (!raw) return null;
+  // توافق مع الصيغة القديمة (نص الكود فقط بلا وقت).
+  if (!raw.startsWith('{')) return { code: raw, at: 0 };
+  try {
+    const parsed = JSON.parse(raw) as CodeDraft;
+    if (typeof parsed?.code === 'string') {
+      return { code: parsed.code, at: Number(parsed.at) || 0 };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { code: raw, at: 0 };
 }
 
-export function clearCodeDraft(fileId: number): void {
+export function setCodeDraft(fileId: string | number, code: string): void {
+  setLocal(DRAFT_PREFIX + fileId, JSON.stringify({ code, at: Date.now() } satisfies CodeDraft));
+}
+
+export function clearCodeDraft(fileId: string | number): void {
   removeLocal(DRAFT_PREFIX + fileId);
 }
 

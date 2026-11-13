@@ -1,4 +1,9 @@
-name = "drcode"
+# اسم الـ Worker يجب أن يطابق النطاق الحقيقي الذي يفتحه الطلاب:
+#   https://codeacademy2.drcode.workers.dev  ⇒  الـ Worker اسمه "codeacademy2"
+#   (الحساب اسمه "drcode" على workers.dev، والـ Worker "drcode" هو نطاق آخر)
+# كان الاسم "drcode" فكانت GitHub Actions تنشر موقعاً لا يزوره أحد، بينما
+# يظل النطاق الحقيقي على نسخة قديمة بلا أصول Pyodide ⇒ Python يفشل في الرفع فقط.
+name = "codeacademy2"
 compatibility_date = "2025-04-11"
 main = "src/worker.js"
 workers_dev = true

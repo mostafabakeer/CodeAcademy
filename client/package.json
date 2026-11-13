@@ -15,7 +15,8 @@
     "seo": "node scripts/generate-seo.mjs",
     "prerender": "node scripts/prerender.mjs",
     "check:encoding": "node scripts/check-encoding.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

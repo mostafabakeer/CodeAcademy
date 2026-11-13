@@ -567,13 +567,16 @@ h1, h2, h3 {
   }
 }
 
-/* استثناءات: عناصر تحتاج حركة حتى مع تقليل الحركة */
+/* استثناءات: عناصر تحتاج حركة بطيئة مريحة حتى على الموبايل ومع تقليل الحركة */
 @media (max-width: 767px), (prefers-reduced-motion: reduce) {
   .cm-editor .cm-cursor,
   .spinner,
   .loading-indicator,
   .animate-spin,
-  [class*="animate-spin"] {
+  [class*="animate-spin"],
+  .fm-roamer,
+  .fm-msg,
+  .stats-arc-fg {
     animation-duration: 1s !important;
     animation-iteration-count: infinite !important;
   }

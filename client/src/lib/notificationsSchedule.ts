@@ -24,9 +24,10 @@ interface NotificationHistory {
 
 const DB_NAME = 'drcode-notifications';
 const DB_VERSION = 1;
-let dbReady: Promise<ReturnType<typeof openDB>> | null = null;
+type NotificationDB = Awaited<ReturnType<typeof openDB>>;
+let dbReady: Promise<NotificationDB> | null = null;
 
-function getDB() {
+function getDB(): Promise<NotificationDB> {
   if (!dbReady) {
     dbReady = openDB(DB_NAME, DB_VERSION, {
       upgrade(db) {

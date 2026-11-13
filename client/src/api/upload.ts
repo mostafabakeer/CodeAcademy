@@ -1,4 +1,5 @@
 import { api } from './client';
+import { playNotificationSound } from '../lib/notificationSound';
 
 export interface SignedUpload {
   uploadUrl: string;
@@ -38,34 +39,32 @@ class NotificationService {
       channel.postMessage(data);
     }
 
-    // تشغيل صوت تنبيه عند النجاح
-    if (data.success) {
-      try {
-        const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3');
-        audio.volume = 0.5;
-        audio.play().catch(() => {
-          // المتصفح قد يحجب التشغيل التلقائي حتى يتفاعل المستخدم مع الصفحة
-          console.warn('Audio playback blocked by browser');
-        });
-      } catch (e) {
-        console.error('Failed to play notification sound', e);
-      }
-    }
+    // صوت التنبيه: نغمة مولّدة محلياً (تعمل بعد أول تفاعل مع الصفحة)
+    if (data.success) playNotificationSound('success');
 
+    // إشعار النظام: يجب أن يمر عبر Service Worker registration، لأن
+    // `new Notification()` يرمي Illegal constructor على أندرويد كروم.
+    // نضعه في مسار مستقل تماماً عن نجاح الرفع حتى لا يحوّل نجاحاً إلى فشل.
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      const opts = {
-        body: data.success
-          ? `تم رفع الملف بنجاح: ${data.fileName}`
-          : `فشل رفع الملف: ${data.error || 'خطأ محتمل'}`,
-        icon: '/pwa-192.png',
-        badge: '/pwa-192.png',
-        tag: 'upload-notification',
-        data: {
-          type: data.type,
-          fileName: data.fileName,
-        },
-      } as NotificationOptions & { renotify?: boolean };
-      new Notification(data.success ? '✅ رفع ملف ناجح' : '❌ فشل رفع الملف', opts);
+      void (async () => {
+        try {
+          const registration = await navigator.serviceWorker?.ready;
+          await registration?.showNotification(
+            data.success ? '✅ رفع ملف ناجح' : '❌ فشل رفع الملف',
+            {
+              body: data.success
+                ? `تم رفع الملف بنجاح: ${data.fileName}`
+                : `فشل رفع الملف: ${data.error || 'خطأ محتمل'}`,
+              icon: '/pwa-192.png',
+              badge: '/pwa-192.png',
+              tag: 'upload-notification',
+              data: { type: data.type, fileName: data.fileName },
+            },
+          );
+        } catch {
+          /* الإشعار رفاهية: لا يجوز أن يُفشل عملية رفع ناجحة */
+        }
+      })();
     }
   }
 }

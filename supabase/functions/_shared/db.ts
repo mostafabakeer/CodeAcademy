@@ -1528,6 +1528,16 @@ export async function listCodeFilesByUser(userId: number): Promise<CodeFile[]> {
   return (data ?? []).map(codeFromRow);
 }
 
+/** نفس القائمة لكن مع الكود — تستخدمها المزامنة لتنزيل كل الملفات بطلب واحد. */
+export async function listCodeFilesWithCodeByUser(userId: number): Promise<CodeFile[]> {
+  const { data } = await sb
+    .from('code_files')
+    .select('id, user_id, name, language, code, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false });
+  return (data ?? []).map(codeFromRow);
+}
+
 export async function getCodeFileByUser(userId: number, id: number): Promise<CodeFile | null> {
   const { data } = await sb.from('code_files').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
   return data ? codeFromRow(data) : null;

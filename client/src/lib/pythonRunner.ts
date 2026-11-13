@@ -11,14 +11,23 @@
  * يُعاد استخدام نفس الـ Worker لكل عمليات التشغيل. إن قُتل (مهلة/خطأ) ننشئ
  * واحداً جديداً تلقائياً.
  *
- * الأصول مستضافة ذاتياً من `/pyodide/` (تُنسخ وقت البناء من node_modules)
- * بدل CDN خارجي: نفس الأصل، أسرع في مصر، ويعمل مع كاش الـ PWA.
+ * المصادر بالترتيب:
+ * 1) نفس الأصل من `/pyodide/<version>/` (أسرع في مصر، ويعمل مع الكاش).
+ * 2) CDN مثبّت الإصدار كاحتياطي — حتى لا تتعطّل ميزة Python كلها لو نقصت
+ *    الأصول من حزمة النشر (وهو ما حدث فعلاً في نسخة سابقة).
+ *
+ * المسار يحمل رقم الإصدار لأن `_headers` يضع كاشاً طويلاً على `/pyodide/*`،
+ * وردود 404 القديمة المخزَّنة في متصفحات الطلاب كانت ستُخفي الإصلاح.
  */
 
-const PYODIDE_BASE = '/pyodide/';
+/** يجب أن يطابق هذا الثابت EXPECTED_VERSION في client/scripts/copy-pyodide.mjs */
+const PYODIDE_VERSION = '0.26.4';
 
-/** مهلة أول تحميل (10MB على شبكة بطيئة). */
-const INIT_TIMEOUT_MS = 90_000;
+const PYODIDE_BASE = `/pyodide/${PYODIDE_VERSION}/`;
+const PYODIDE_CDN_BASE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
+
+/** مهلة كل محاولة تحميل (10MB على شبكة بطيئة). */
+const INIT_TIMEOUT_MS = 45_000;
 
 /** مهلة تنفيذ الكود بعد جهوزية المحرك. */
 const RUN_TIMEOUT_MS = 5_000;
@@ -26,8 +35,10 @@ const RUN_TIMEOUT_MS = 5_000;
 export const PYTHON_TIMEOUT_MESSAGE =
   '❌ انتهت مهلة التنفيذ (5 ثوانٍ) — تحقق من وجود حلقة لا نهائية';
 
-const PYTHON_INIT_ERROR_MESSAGE =
-  '❌ تعذّر تجهيز محرك Python. تحقّق من اتصالك بالإنترنت ثم أعد المحاولة.';
+const PYTHON_INIT_ERROR_TITLE = '❌ تعذّر تجهيز محرك Python.';
+
+const PYTHON_INIT_ERROR_HINT =
+  'أعد المحاولة مرة أخرى، وإن تكرر الخطأ فتحقّق من الاتصال بالإنترنت.';
 
 /**
  * كود الـ Worker. سلسلة نصية (لا ملف منفصل) ليعمل مع بناء Vite بلا أي إعداد،
@@ -41,7 +52,7 @@ self.onmessage = async function (event) {
     try {
       importScripts(msg.base + 'pyodide.js');
       self.__pyodide = await loadPyodide({ indexURL: msg.base });
-      self.postMessage({ type: 'ready' });
+      self.postMessage({ type: 'ready', base: msg.base });
     } catch (err) {
       self.postMessage({
         type: 'init-error',
@@ -90,12 +101,15 @@ let readyPromise: Promise<void> | null = null;
 let isReady = false;
 let runSeq = 0;
 
-function absoluteBase(): string {
+/** المسار المطلق لنفس الأصل + CDN احتياطي. */
+function bases(): string[] {
+  let sameOrigin = PYODIDE_BASE;
   try {
-    return new URL(PYODIDE_BASE, `${window.location.origin}/`).href;
+    sameOrigin = new URL(PYODIDE_BASE, `${window.location.origin}/`).href;
   } catch {
-    return PYODIDE_BASE;
+    /* ignore */
   }
+  return [sameOrigin, PYODIDE_CDN_BASE];
 }
 
 /** يُسقط الـ Worker الحالي (بعد مهلة/خطأ) حتى يُعاد إنشاؤه في التشغيل التالي. */
@@ -112,20 +126,23 @@ function resetWorker(): void {
   isReady = false;
 }
 
-/** ينشئ الـ Worker ويحمّل Pyodide. نتيجة الـ promise تُحفظ فلا يتكرر التحميل. */
-function ensureWorker(): Promise<void> {
-  if (readyPromise) return readyPromise;
-
-  readyPromise = new Promise<void>((resolve, reject) => {
+/** يحاول تهيئة Pyodide من مصدر واحد داخل Worker جديد. */
+function tryInitFrom(base: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     let settled = false;
     let blobUrl = '';
-    let initTimer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const fail = (message: string) => {
       if (settled) return;
       settled = true;
-      if (initTimer) clearTimeout(initTimer);
-      resetWorker();
+      if (timer) clearTimeout(timer);
+      try {
+        w.terminate();
+      } catch {
+        /* ignore */
+      }
+      if (worker === w) worker = null;
       reject(new Error(message));
     };
 
@@ -134,35 +151,54 @@ function ensureWorker(): Promise<void> {
       blobUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
       w = new Worker(blobUrl);
     } catch {
-      fail('worker-unavailable');
+      reject(new Error('المتصفح لا يدعم Web Worker'));
       return;
     } finally {
-      // يمكن تحرير الرابط فور إنشاء الـ Worker (لن يُطلب ثانية).
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     }
 
     worker = w;
-
-    initTimer = setTimeout(() => fail('timeout'), INIT_TIMEOUT_MS);
+    timer = setTimeout(() => fail('انتهت مهلة تحميل المحرك'), INIT_TIMEOUT_MS);
 
     w.onmessage = (event: MessageEvent) => {
-      const data = event.data as { type?: string } | null;
+      const data = event.data as { type?: string; message?: string } | null;
       if (!data || settled) return;
       if (data.type === 'ready') {
         settled = true;
-        clearTimeout(initTimer);
-        w.onmessage = null;
+        if (timer) clearTimeout(timer);
         isReady = true;
+        // لا نحذف w.onmessage: runPython يضيف مستمعاً خاصاً به عبر addEventListener.
+        w.onmessage = null;
         resolve();
       } else if (data.type === 'init-error') {
-        fail((data as { message?: string }).message ?? 'init-error');
+        fail(data.message ?? 'خطأ غير معروف أثناء تحميل المحرك');
       }
     };
 
-    w.onerror = () => fail('init-error');
+    w.onerror = (event: ErrorEvent) => fail(event.message || 'تعذّر تحميل ملفات المحرك');
 
-    w.postMessage({ type: 'init', base: absoluteBase() });
+    w.postMessage({ type: 'init', base });
   });
+}
+
+/** ينشئ الـ Worker ويحمّل Pyodide، ويجرّب CDN لو فشل نفس الأصل. */
+function ensureWorker(): Promise<void> {
+  if (readyPromise) return readyPromise;
+
+  readyPromise = (async () => {
+    const errors: string[] = [];
+    for (const base of bases()) {
+      try {
+        await tryInitFrom(base);
+        return;
+      } catch (e) {
+        // tryInitFrom أنهى الـ Worker وأسقط المرجع بنفسه؛ لا نستدعي resetWorker
+        // هنا لأنه كان سيُفرغ readyPromise أثناء تنفيذها.
+        errors.push(`${base} → ${(e as Error).message}`);
+      }
+    }
+    throw new Error(errors.join('\n'));
+  })();
 
   // فشل التهيئة لا يجب أن يُبقي promise مرفوضاً محفوظاً للأبد.
   readyPromise.catch(() => {
@@ -184,6 +220,13 @@ export function warmUpPython(): void {
   });
 }
 
+function initErrorOutput(reason: string): string {
+  // نعرض سبباً مختصراً قابلاً للقراءة بدل الرسالة العامة القديمة التي كانت
+  // تُخفي الحقيقة (كانت تقول "تحقّق من اتصالك" حتى لو كان الخطأ 404).
+  const detail = reason.replace(/\s+/g, ' ').trim().slice(0, 400);
+  return `${PYTHON_INIT_ERROR_TITLE}\n${detail ? `السبب: ${detail}\n` : ''}${PYTHON_INIT_ERROR_HINT}`;
+}
+
 /**
  * ينفّذ كود Python ويعيد الناتج نصياً. لا يرمي أبداً — الأخطاء تُعاد داخل النص
  * حتى تُعرض في لوحة الناتج بنفس أسلوب JavaScript.
@@ -192,12 +235,12 @@ export function warmUpPython(): void {
 export async function runPython(code: string): Promise<{ output: string; errorLine?: number }> {
   try {
     await ensureWorker();
-  } catch {
-    return { output: PYTHON_INIT_ERROR_MESSAGE };
+  } catch (e) {
+    return { output: initErrorOutput((e as Error)?.message ?? '') };
   }
 
   const w = worker;
-  if (!w) return { output: PYTHON_INIT_ERROR_MESSAGE };
+  if (!w) return { output: initErrorOutput('لم يُنشأ الـ Worker') };
 
   const id = ++runSeq;
 

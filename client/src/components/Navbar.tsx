@@ -6,6 +6,7 @@ import { useLang } from '../i18n';
 import { useSession } from '../store/authStore';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getLocal, setLocal } from '../lib/storage';
+import { playNotificationSound } from '../lib/notificationSound';
 
 type ContentNotification = {
   id: string;
@@ -25,15 +26,15 @@ export default function Navbar() {
   const contentUserId =
     user && (user.role === 'admin' || (user.role === 'student' && user.subscription)) ? user.id : null;
   const { data: content } = useBootstrapData(contentUserId);
+  const [now, setNow] = useState(() => Date.now());
 
-  const nowRef = useRef(Date.now());
   useEffect(() => {
-    nowRef.current = Date.now();
-  });
+    const interval = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const notifications = useMemo<ContentNotification[]>(() => {
     if (!content) return [];
-    const now = nowRef.current;
     const recentAfter = now - 7 * 24 * 60 * 60 * 1000;
     return [
       ...content.lessons.map((item) => ({
@@ -65,7 +66,7 @@ export default function Navbar() {
       )
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 20);
-  }, [content, lang]);
+  }, [content, lang, now]);
 
   useEffect(() => {
     if (!contentUserId) {
@@ -77,15 +78,49 @@ export default function Navbar() {
     }
     const saved = Number(getLocal(`content-notifications-seen:${contentUserId}`));
     const now = Date.now();
-    setSeen({
-      userId: contentUserId,
-      at: Number.isFinite(saved) && saved > 0 ? saved : user?.createdAt ?? now,
-    });
+    setTimeout(() => {
+      setSeen({
+        userId: contentUserId,
+        at: Number.isFinite(saved) && saved > 0 ? saved : user?.createdAt ?? now,
+      });
+    }, 0);
   }, [contentUserId, user?.createdAt]);
 
   const unreadNotifications = seen?.userId === contentUserId
     ? notifications.filter((item) => item.createdAt > seen.at).length
     : 0;
+
+  /** تنبيه عائم + صوت لما يصل من Web Push والتطبيق مفتوح. */
+  const [pushToast, setPushToast] = useState<{ title: string; body: string } | null>(null);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const payload = event.data as
+        | { type?: string; payload?: { title?: string; body?: string } }
+        | null;
+      if (!payload || payload.type !== 'push-received') return;
+      playNotificationSound('alert');
+      const title = payload.payload?.title || 'DR Code';
+      const body = payload.payload?.body || '';
+      setPushToast({ title, body });
+      window.setTimeout(() => setPushToast(null), 7000);
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, []);
+
+  // صوت عند ظهور محتوى جديد أثناء فتح الصفحة (بدون صوت عند أول تحميل).
+  const lastUnreadRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!seen) return;
+    if (lastUnreadRef.current === null) {
+      lastUnreadRef.current = unreadNotifications;
+      return;
+    }
+    if (unreadNotifications > lastUnreadRef.current) playNotificationSound('message');
+    lastUnreadRef.current = unreadNotifications;
+  }, [unreadNotifications, seen]);
 
   const openNotifications = () => {
     if (contentUserId && content) {
@@ -314,6 +349,35 @@ export default function Navbar() {
               </div>
             </div>
           </motion.nav>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {pushToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            role="status"
+            aria-live="polite"
+            className="fixed inset-x-3 top-3 z-[60] mx-auto flex max-w-sm items-start gap-3 rounded-2xl border border-fire-500/40 bg-ink-900/95 px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur"
+          >
+            <Bell className="mt-0.5 h-5 w-5 shrink-0 text-fire-400" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold text-white">{pushToast.title}</p>
+              {pushToast.body && (
+                <p className="mt-0.5 line-clamp-2 text-xs text-gray-300">{pushToast.body}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPushToast(null)}
+              className="shrink-0 rounded-lg px-1.5 text-gray-400 hover:text-white"
+              aria-label={t('common.close') ?? 'close'}
+            >
+              ✕
+            </button>
+          </motion.div>
         )}
       </AnimatePresence>
     </header>

@@ -2,20 +2,28 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import CodeEditor from '../components/CodeEditor';
-import { getDB, getAllFiles, getFileById, saveFile, deleteFile, generateId, setLastOpenedFileId, getLastOpenedFileId } from '../lib/localFileSystem';
+import {
+  getAllFiles,
+  getFileById,
+  saveFile,
+  deleteFile as deleteLocalFile,
+  generateId,
+  setLastOpenedFileId,
+  getLastOpenedFileId,
+  type LocalFile,
+  type CodeLanguage,
+} from '../lib/localFileSystem';
 import { getCodeDraft, setCodeDraft, clearCodeDraft } from '../lib/localStore';
 import { runPython, isPythonReady, warmUpPython } from '../lib/pythonRunner';
+import {
+  syncCodeFiles,
+  pushCodeFile,
+  deleteRemoteCodeFile,
+  updateRemoteMeta,
+  refreshRemoteFile,
+} from '../lib/codeSync';
 
-interface LocalFile {
-  id: string;
-  name: string;
-  language: string;
-  code: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-const LANGUAGES = ['javascript', 'python', 'html', 'css'] as const;
+const LANGUAGES: readonly CodeLanguage[] = ['javascript', 'python', 'html', 'css'];
 const WORKER_TIMEOUT_MS = 5000;
 
 async function runJavaScript(code: string): Promise<string> {
@@ -52,14 +60,18 @@ async function runJavaScript(code: string): Promise<string> {
   `;
 
   return new Promise((resolve) => {
-    let worker = null;
-    let blobUrl = null;
+    let worker: Worker | null = null;
+    let blobUrl: string | null = null;
     let settled = false;
-    const finish = (text) => {
+    const finish = (text: string) => {
       if (settled) return;
       settled = true;
       if (blobUrl) URL.revokeObjectURL(blobUrl);
-      try { worker?.terminate(); } catch {}
+      try {
+        worker?.terminate();
+      } catch {
+        // Ignore worker termination errors
+      }
       resolve(text);
     };
 
@@ -139,7 +151,7 @@ function resolveLocalRefs(html: string, files: { name: string; language: string;
   out = out.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (tag, cssContent) => {
     const processedCss = cssContent.replace(
       /@import\s+(?:url\()?["']([^"']+)["']\)?\s*;/gi,
-      (importTag, importPath: string) => {
+      (importTag: string, importPath: string) => {
         const hit = lookup(importPath);
         if (hit && hit.language === 'css') return hit.code;
         return importTag; // Keep original if not found
@@ -152,7 +164,7 @@ function resolveLocalRefs(html: string, files: { name: string; language: string;
   out = out.replace(/<script\b[^>]*type=["']module["'][^>]*>([\s\S]*?)<\/script>/gi, (tag, jsContent) => {
     const processedJs = jsContent.replace(
       /import\s+(?:[\s\S]*?\sfrom\s+)?["']([^"']+)["']/gi,
-      (importTag, importPath: string) => {
+      (importTag: string, importPath: string) => {
         const hit = lookup(importPath);
         if (hit && hit.language === 'javascript') {
           // Replace the import with inline code (IIFE to avoid scope issues)
@@ -273,9 +285,16 @@ function injectConsoleCapture(html: string): string {
   }
 }
 
+interface CodeFileSummary {
+  id: string;
+  name: string;
+  language: string;
+  updatedAt: number;
+}
+
 export default function CodeLab() {
   const { t, lang } = useLang();
-  const [files, setFiles] = useState<{ id: string; name: string; language: string; updatedAt: number }[]>([]);
+  const [files, setFiles] = useState<CodeFileSummary[]>([]);
   const [current, setCurrent] = useState<LocalFile | null>(null);
   const [code, setCode] = useState('');
   const [saved, setSaved] = useState(false);
@@ -285,6 +304,8 @@ export default function CodeLab() {
   const [newName, setNewName] = useState('');
   const [error, setError] = useState('');
   const [output, setOutput] = useState('');
+  const [syncNote, setSyncNote] = useState('');
+  const [syncing, setSyncing] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [fullPreview, setFullPreview] = useState<string | null>(null);
   const [fullPreviewType, setFullPreviewType] = useState<'html' | 'text'>('html');
@@ -293,15 +314,164 @@ export default function CodeLab() {
   const [showConsole, setShowConsole] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const consoleMessagesRef = useRef(consoleMessages);
-  consoleMessagesRef.current = consoleMessages;
   const runningRef = useRef(false);
   const fileCacheRef = useRef<Map<string, LocalFile>>(new Map());
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSavedCodeRef = useRef<string>('');
+  const lastSavedCodeRef = useRef('');
+  const currentRef = useRef<LocalFile | null>(null);
+  const codeRef = useRef('');
+  const didInitRef = useRef(false);
 
-  // Define runCode early to avoid temporal dead zone issues with useEffect dependencies
-  const runCode = async () => {
-    if (!current) return;
+  // Keep refs in sync so callbacks/effects can read latest values without
+  // re-subscribing on every keystroke.
+  useEffect(() => {
+    consoleMessagesRef.current = consoleMessages;
+  }, [consoleMessages]);
+
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
+
+  useEffect(() => {
+    codeRef.current = code;
+  }, [code]);
+
+  /** يُحدّث قائمة الملفات فقط (بدون لمس المحرر). */
+  const refreshList = useCallback(async (): Promise<LocalFile[]> => {
+    const all = await getAllFiles();
+    setFiles(
+      all.map((f) => ({ id: f.id, name: f.name, language: f.language, updatedAt: f.updatedAt })),
+    );
+    return all;
+  }, []);
+
+  const selectFile = useCallback(async (id: string) => {
+    setError('');
+    try {
+      const file = await getFileById(id);
+      if (!file) return;
+
+      const draft = getCodeDraft(id);
+      fileCacheRef.current.set(id, file);
+      // نضبط آخر كود محفوظ قبل setCurrent حتى لا يظن الحفظ التلقائي أن هناك تعديلاً.
+      lastSavedCodeRef.current = file.code;
+      setCurrent(file);
+      // المسودة تُستعاد فقط لو كانت أحدث من الملف نفسه؛ غير ذلك كانت تتغلب
+      // على نسخة السحابة دائماً فيظهر كود قديم بعد تسجيل الدخول من جهاز آخر.
+      if (draft && draft.at > file.updatedAt) {
+        setCode(draft.code);
+      } else {
+        setCode(file.code);
+        if (draft) clearCodeDraft(id);
+      }
+      await setLastOpenedFileId(id);
+
+      // سجل النسخ يأتي من تفاصيل الملف (وليس من قائمة المزامنة الثقيلة).
+      if (file.remoteId) {
+        void refreshRemoteFile(file.remoteId).then((updated) => {
+          if (!updated || updated.id !== currentRef.current?.id) return;
+          fileCacheRef.current.set(updated.id, updated);
+          setCurrent((prev) => (prev && prev.id === updated.id ? { ...prev, versions: updated.versions } : prev));
+        });
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  /** يحمّل الملفات، ويزامن مع السحابة عند الطلب. */
+  const loadFiles = useCallback(
+    async (sync = true) => {
+      try {
+        if (sync) {
+          setSyncing(true);
+          const result = await syncCodeFiles();
+          if (result.ok) {
+            setSyncNote('');
+          } else {
+            // رسالة صادقة: "غير متصل" فقط عندما يكون الجهاز فعلاً بلا شبكة،
+            // وإلا فالمشكلة في الخادم (اشتراك/جلسة/خطأ مؤقت).
+            setSyncNote(
+              typeof navigator !== 'undefined' && !navigator.onLine
+                ? t('code.offlineOnly')
+                : t('code.syncError'),
+            );
+          }
+          setSyncing(false);
+        }
+
+        const all = await refreshList();
+
+        // استعادة آخر ملف مفتوح مرة واحدة فقط عند أول تحميل.
+        if (!didInitRef.current) {
+          didInitRef.current = true;
+          const lastId = await getLastOpenedFileId();
+          const target = lastId ? all.find((f) => f.id === lastId) : undefined;
+          if (target) await selectFile(target.id);
+        }
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [refreshList, selectFile, t],
+  );
+
+  /**
+   * حفظ فوري محلياً ثم رفع للسحابة. عند فشل الشبكة يبقى pendingSync حتى
+   * المزامنة التالية، فلا تُفقد أي تعديلات.
+   */
+  const persist = useCallback(
+    async (file: LocalFile, nextCode: string) => {
+      try {
+        const updated = await saveFile({
+          ...file,
+          code: nextCode,
+          updatedAt: Date.now(),
+          pendingSync: true,
+        });
+        fileCacheRef.current.set(updated.id, updated);
+        lastSavedCodeRef.current = nextCode;
+        setSaved(true);
+        window.setTimeout(() => setSaved(false), 1800);
+
+        const ok = await pushCodeFile(updated);
+        if (ok) {
+          clearCodeDraft(updated.id);
+          setSyncNote('');
+          const synced = await getFileById(updated.id);
+          if (synced) {
+            fileCacheRef.current.set(synced.id, synced);
+            setCurrent((prev) =>
+              prev && prev.id === synced.id
+                ? {
+                    ...prev,
+                    remoteId: synced.remoteId,
+                    pendingSync: false,
+                    versions: synced.versions,
+                    lastSyncedAt: synced.lastSyncedAt,
+                    updatedAt: synced.updatedAt,
+                  }
+                : prev,
+            );
+          }
+          void refreshList();
+        } else {
+          setSyncNote(t('code.savedLocally'));
+        }
+        return updated;
+      } catch (e) {
+        setError((e as Error).message);
+        return null;
+      }
+    },
+    [refreshList, t],
+  );
+
+  const runCode = useCallback(async () => {
+    const cur = currentRef.current;
+    if (!cur) return;
     if (runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
@@ -309,49 +479,39 @@ export default function CodeLab() {
     setPreview(null);
     setOutput('');
 
+    const currentCode = codeRef.current;
+
     try {
-      if (current.language === 'html' || current.language === 'css') {
-        // Get all files from IndexedDB to ensure we have the latest saved versions
-        const db = await getDB();
+      if (cur.language === 'html' || cur.language === 'css') {
         const allFilesFromDB = await getAllFiles();
 
         // Merge with cache, preferring current editor code for current file
         const allFilesMap = new Map<string, LocalFile>();
-        for (const f of allFilesFromDB) {
-          allFilesMap.set(f.id, f);
-        }
-        // Override with cache (which has unsaved changes)
-        for (const [id, f] of fileCacheRef.current.entries()) {
-          allFilesMap.set(id, f);
-        }
-        // Use current editor code for current file
-        if (current.id) {
-          const existing = allFilesMap.get(current.id);
-          if (existing) {
-            allFilesMap.set(current.id, { ...existing, code });
-          }
+        for (const f of allFilesFromDB) allFilesMap.set(f.id, f);
+        for (const [id, f] of fileCacheRef.current.entries()) allFilesMap.set(id, f);
+        if (cur.id) {
+          const existing = allFilesMap.get(cur.id);
+          if (existing) allFilesMap.set(cur.id, { ...existing, code: currentCode });
         }
 
-        const allFiles = Array.from(allFilesMap.values());
-        const refs = allFiles.map(f => ({ name: f.name, language: f.language, code: f.code }));
+        const refs = Array.from(allFilesMap.values()).map((f) => ({
+          name: f.name,
+          language: f.language,
+          code: f.code,
+        }));
 
-        let result: string;
-        if (current.language === 'html') {
-          result = resolveLocalRefs(code, refs);
+        if (cur.language === 'html') {
+          setPreview(resolveLocalRefs(currentCode, refs));
         } else {
-          const htmlFile = allFiles.find(f => f.language === 'html');
-          result = resolveLocalRefs(
-            htmlFile ? htmlFile.code : cssPreviewHtml(code),
-            refs
-          );
+          const htmlFile = Array.from(allFilesMap.values()).find((f) => f.language === 'html');
+          setPreview(resolveLocalRefs(htmlFile ? htmlFile.code : cssPreviewHtml(currentCode), refs));
         }
-        setPreview(result);
-      } else if (current.language === 'python') {
+      } else if (cur.language === 'python') {
         if (!isPythonReady()) setOutput(t('code.pythonLoading'));
-        const pythonResult = await runPython(code);
+        const pythonResult = await runPython(currentCode);
         setOutput(pythonResult.output);
       } else {
-        setOutput(await runJavaScript(code));
+        setOutput(await runJavaScript(currentCode));
       }
     } catch (e) {
       setOutput('❌ ' + (e as Error).message);
@@ -359,44 +519,46 @@ export default function CodeLab() {
       setRunning(false);
       runningRef.current = false;
     }
-  };
+  }, [t]);
 
-  // تحميل الملفات عند الفتح
+  // تحميل الملفات + مزامنة عند الفتح، وعند عودة الاتصال/النشاط.
   useEffect(() => {
-    loadFiles();
+    void loadFiles(true);
     warmUpPython();
-  }, []);
 
-  // حفظ المسودة محليًا عند كل تغيير (localStorage draft)
+    const onOnline = () => void loadFiles(true);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadFiles(true);
+    };
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [loadFiles]);
+
+  // حفظ المسودة محلياً عند كل تغيير (تستخدمها إعادة التحميل المفاجئ).
   useEffect(() => {
     if (!current?.id) return;
     setCodeDraft(current.id, code);
-  }, [code]);
+  }, [code, current?.id]);
 
-  // Auto-save to IndexedDB with debounce (1.5 seconds)
+  // حفظ محلي بعد توقف الكتابة + رفع للسحابة.
   useEffect(() => {
     if (!current?.id) return;
-    // Only trigger auto-save if code actually changed since last save
     if (code === lastSavedCodeRef.current) return;
 
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    // Don't set saved=false immediately - only when we actually save
-    saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        await saveFile({ ...current, code, updatedAt: Date.now() });
-        fileCacheRef.current.set(current.id, { ...current, code, updatedAt: Date.now() });
-        lastSavedCodeRef.current = code;
-        setSaved(true);
-        // Don't call loadFiles() here - it causes unnecessary re-renders
-        // The file list timestamp update isn't critical for auto-save
-      } catch (e) {
-        console.error('Auto-save failed:', e);
-      }
-    }, 1500);
+    saveTimeoutRef.current = setTimeout(() => {
+      const file = currentRef.current;
+      if (file) void persist(file, codeRef.current);
+    }, 1200);
+
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [code, current]);
+  }, [code, current?.id, persist]);
 
   // Handle console messages from full preview iframe
   useEffect(() => {
@@ -405,15 +567,15 @@ export default function CodeLab() {
       const data = event.data;
       if (!data || typeof data !== 'object') return;
 
-      if (data.type === 'console-ready') {
-        // Iframe is ready, we can now receive console messages
-        return;
-      }
+      if (data.type === 'console-ready') return;
 
       if (data.type === 'console' && data.payload) {
         const { type, args } = data.payload;
         if (['log', 'error', 'warn', 'info'].includes(type)) {
-          consoleMessagesRef.current = [...consoleMessagesRef.current, { type: type as 'log' | 'error' | 'warn' | 'info', args }];
+          consoleMessagesRef.current = [
+            ...consoleMessagesRef.current,
+            { type: type as 'log' | 'error' | 'warn' | 'info', args },
+          ];
           setConsoleMessages(consoleMessagesRef.current);
         }
       }
@@ -428,81 +590,49 @@ export default function CodeLab() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        // Trigger auto-save immediately
-        if (current?.id && code) {
-          saveFile({ ...current, code, updatedAt: Date.now() }).then(() => {
-            fileCacheRef.current.set(current.id, { ...current, code, updatedAt: Date.now() });
-            setSaved(true);
-            loadFiles();
-          });
-        }
+        const file = currentRef.current;
+        if (file) void persist(file, codeRef.current);
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
-        runCode();
+        void runCode();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [current, code, runCode]);
-
-  const loadFiles = useCallback(async () => {
-    try {
-      const db = await getDB();
-      const allFiles = await getAllFiles();
-      setFiles(allFiles.map(f => ({ id: f.id, name: f.name, language: f.language, updatedAt: f.updatedAt })));
-
-      // استعادة آخر ملف مفتوح
-      const lastId = await getLastOpenedFileId();
-      if (lastId) {
-        const savedFile = allFiles.find(f => f.id === lastId);
-        if (savedFile) selectFile(savedFile.id);
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const selectFile = async (id: string) => {
-    setError('');
-    try {
-      const db = await getDB();
-      const file = await getFileById(id);
-      if (!file) return;
-
-      const localDraft = getCodeDraft(id);
-      fileCacheRef.current.set(id, file);
-      setCurrent(file);
-      setCode(localDraft ?? file.code);
-      await setLastOpenedFileId(id);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
+  }, [persist, runCode]);
 
   const createFile = async () => {
     setError('');
     try {
       const id = await generateId();
-      const newFile = {
+      const file = await saveFile({
         id,
         name: newName || t('code.fileName'),
         language: 'javascript',
         code: '',
         createdAt: Date.now(),
         updatedAt: Date.now(),
-      };
+        pendingSync: true,
+      });
 
-      await saveFile(newFile);
       setNewName('');
       setCreating(false);
-      fileCacheRef.current.set(id, newFile);
-      await loadFiles();
-      setCurrent(newFile);
+      fileCacheRef.current.set(id, file);
+      await refreshList();
+      setCurrent(file);
       setCode('');
+      lastSavedCodeRef.current = '';
+
+      const ok = await pushCodeFile(file);
+      if (!ok) setSyncNote(t('code.savedLocally'));
+      const synced = await getFileById(id);
+      if (synced) {
+        fileCacheRef.current.set(id, synced);
+        setCurrent(synced);
+        await refreshList();
+      }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -511,29 +641,62 @@ export default function CodeLab() {
   const deleteFile = async (id: string) => {
     if (!window.confirm(t('code.deleteConfirm'))) return;
     try {
-      await deleteFile(id);
+      const file = await getFileById(id);
+      await deleteLocalFile(id);
+      clearCodeDraft(id);
       fileCacheRef.current.delete(id);
-      if (current?.id === id) {
+      if (currentRef.current?.id === id) {
         setCurrent(null);
         setCode('');
+        lastSavedCodeRef.current = '';
       }
-      await loadFiles();
+      await refreshList();
+
+      // الحذف من السحابة (وإلا يعود الملف عند أول مزامنة على جهاز آخر).
+      if (file?.remoteId) {
+        const ok = await deleteRemoteCodeFile(file.remoteId);
+        if (!ok) setSyncNote(t('code.syncError'));
+      }
     } catch (e) {
       setError((e as Error).message);
     }
   };
 
   const changeMeta = async (patch: { name?: string; language?: string }) => {
-    if (!current) return;
+    const file = currentRef.current;
+    if (!file) return;
     try {
-      const updated = { ...current, ...patch, updatedAt: Date.now() };
-      await saveFile(updated);
-      fileCacheRef.current.set(current.id, updated);
+      const updated = await saveFile({
+        ...file,
+        ...patch,
+        language:
+          patch.language === 'python' || patch.language === 'html' || patch.language === 'css'
+            ? patch.language
+            : patch.language === 'javascript'
+              ? 'javascript'
+              : file.language,
+        updatedAt: Date.now(),
+        pendingSync: true,
+      });
+      fileCacheRef.current.set(updated.id, updated);
       setCurrent(updated);
-      await loadFiles();
+      await refreshList();
+
+      const ok = await updateRemoteMeta(updated);
+      if (!ok) setSyncNote(t('code.savedLocally'));
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  const restoreVersion = async (version: { at: number; code: string }) => {
+    const file = currentRef.current;
+    if (!file) return;
+    if (!window.confirm(t('code.restoreConfirm'))) return;
+    setCode(version.code);
+    lastSavedCodeRef.current = version.code;
+    await persist(file, version.code);
+    setShowVersions(false);
   };
 
   const openFullPreview = () => {
@@ -548,6 +711,12 @@ export default function CodeLab() {
 
   const langLabel = (l: string) => (t(`code.${l}`) as string) || l;
 
+  const syncLabel = syncing
+    ? t('code.syncing')
+    : current?.pendingSync
+      ? t('code.savedLocally')
+      : t('code.syncedCloud');
+
   return (
     <>
       <div className="space-y-6">
@@ -558,7 +727,7 @@ export default function CodeLab() {
         >
           <div>
             <h1 className="text-2xl font-black sm:text-3xl">💻 {t('code.title')}</h1>
-            <p className="mt-1 text-sm text-gray-400">{t('code.savedLocally')}</p>
+            <p className="mt-1 text-sm text-gray-400">{syncNote || syncLabel}</p>
           </div>
           <button
             onClick={() => setCreating(true)}
@@ -664,10 +833,65 @@ export default function CodeLab() {
                       <option key={l} value={l}>{langLabel(l)}</option>
                     ))}
                   </select>
-                  <span className={`text-xs font-bold ${saved ? 'text-emerald-400' : 'text-gray-600'}`}>
-                    {saved ? `✓ ${t('code.saved')}` : '💾'}
+                  <button
+                    type="button"
+                    onClick={() => setShowVersions((v) => !v)}
+                    disabled={!current.versions?.length}
+                    className="btn-ghost-fire rounded-lg px-3 py-2 text-xs font-bold disabled:opacity-40"
+                    title={t('code.versions')}
+                  >
+                    🕑 {current.versions?.length ?? 0}
+                  </button>
+                  <span
+                    className={`text-xs font-bold ${
+                      current.pendingSync ? 'text-amber-400' : saved ? 'text-emerald-400' : 'text-gray-500'
+                    }`}
+                    title={syncLabel}
+                  >
+                    {syncing ? '⟳' : current.pendingSync ? '☁️↑' : saved ? '✓' : '☁️'}
                   </span>
                 </div>
+
+                {showVersions && (
+                  <div className="card-fire rounded-2xl p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-gray-300">🕑 {t('code.versions')}</h3>
+                      <button
+                        type="button"
+                        onClick={() => setShowVersions(false)}
+                        className="rounded-lg px-2 text-gray-400 hover:text-white"
+                        aria-label={t('common.close')}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {!current.versions?.length ? (
+                      <p className="text-sm text-gray-500">{t('common.loading')}</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {[...current.versions].reverse().map((v, i) => (
+                          <li
+                            key={`${v.at}-${i}`}
+                            className="flex items-center justify-between gap-3 rounded-lg bg-ink-900 px-3 py-2"
+                          >
+                            <span className="text-xs text-gray-400">
+                              #{current.versions!.length - i} ·{' '}
+                              {new Date(v.at).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-US')}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => restoreVersion(v)}
+                              className="rounded-lg border border-fire-500/40 px-3 py-1 text-xs font-bold text-fire-300 hover:bg-fire-500/10"
+                            >
+                              {t('code.restore')}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
                 <div className="card-fire rounded-2xl p-4">
                   <CodeEditor value={code} onChange={setCode} language={current.language} height="60vh" />
                 </div>
@@ -735,7 +959,10 @@ export default function CodeLab() {
                     onClick={() => {
                       if (iframeRef.current?.contentWindow) {
                         iframeRef.current.contentWindow.focus();
-                        iframeRef.current.contentWindow.console.log('%c Console opened', 'color: #e11d31; font-size: 14px; font-weight: bold;');
+                        (iframeRef.current.contentWindow as Window & typeof globalThis).console.log(
+                          '%c Console opened',
+                          'color: #e11d31; font-size: 14px; font-weight: bold;',
+                        );
                       }
                     }}
                     className="btn-ghost-fire rounded-lg px-4 py-1.5 text-sm font-bold"
@@ -775,7 +1002,7 @@ export default function CodeLab() {
                           {msg.type.toUpperCase()}
                         </span>
                         <span className="ml-2 text-gray-300">
-                          {msg.args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ')}
+                          {msg.args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' ')}
                         </span>
                       </div>
                     ))}
