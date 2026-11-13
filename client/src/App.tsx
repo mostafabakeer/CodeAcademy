@@ -6,9 +6,8 @@ import ProtectedRoute from './components/ProtectedRoute';
 import SubscriberGate from './components/SubscriberGate';
 import PageErrorBoundary from './components/PageErrorBoundary';
 import ErrorBoundary from './components/ErrorBoundary';
-import FloatingMascot from './components/FloatingMascot';
-import InstallPrompt from './components/InstallPrompt';
 import UploadNotifications from './components/UploadNotifications';
+import InstallPrompt from './components/InstallPrompt';
 import { useLang } from './i18n';
 import { useSession } from './store/authStore';
 import { installSoundUnlock } from './lib/notificationSound';
@@ -147,7 +146,6 @@ export default function App() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Shell />
-      <FloatingMascot />
       <InstallPrompt />
       <UploadNotifications />
     </Suspense>

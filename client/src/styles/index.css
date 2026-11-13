@@ -574,8 +574,6 @@ h1, h2, h3 {
   .loading-indicator,
   .animate-spin,
   [class*="animate-spin"],
-  .fm-roamer,
-  .fm-msg,
   .stats-arc-fg {
     animation-duration: 1s !important;
     animation-iteration-count: infinite !important;
@@ -872,94 +870,6 @@ iframe.pdf-protected {
 @keyframes dcChip {
   0%, 100% { transform: translateY(0) rotate(-2deg); }
   50% { transform: translateY(-10px) rotate(3deg); }
-}
-
-/* ============ الماسكوت الطائف — يلف في الموقع وهو بيتكلم ============ */
-.fm {
-  position: fixed;
-  inset: 0;
-  z-index: 45;
-  pointer-events: none;
-  overflow: hidden;
-}
-.fm-roamer {
-  position: absolute;
-  left: 82%;
-  top: 76%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  animation: fmRoamRest 56s ease-in-out infinite;
-  will-change: left, top, transform;
-}
-/* الجلسة الواحدة: الافتار يكمل دورة واحدة فقط ثم يقف (إخفاء في النهاية). */
-.fm-roam-once {
-  animation-iteration-count: 1;
-  animation-fill-mode: forwards;
-}
-.fm-bubble {
-  position: relative;
-  margin-bottom: 7px;
-  max-width: 170px;
-  padding: 7px 12px 8px;
-  border-radius: 13px;
-  border: 1px solid rgba(244, 63, 79, 0.45);
-  background: linear-gradient(160deg, #2b2b3c, #16161f);
-  box-shadow: 0 12px 28px -10px rgba(0, 0, 0, 0.65);
-  font-family: var(--font-cairo);
-  font-size: 12px;
-  font-weight: 800;
-  color: #fff;
-  text-align: center;
-  line-height: 1.5;
-}
-.fm-bubble::after {
-  content: '';
-  position: absolute;
-  bottom: -7px;
-  inset-inline-start: 28%;
-  width: 12px;
-  height: 12px;
-  background: #16161f;
-  border-inline-end: 1px solid rgba(244, 63, 79, 0.45);
-  border-bottom: 1px solid rgba(244, 63, 79, 0.45);
-  transform: rotate(45deg);
-}
-.fm-msg {
-  display: block;
-  animation: fmMsg 0.6s ease-out both;
-}
-.fm-mascot {
-  pointer-events: none;
-}
-@keyframes fmMsg {
-  from { opacity: 0; transform: translateY(8px) scale(0.96); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes fmRoamRest {
-  0%   { left: 82%; top: 76%; }
-  10%  { left: 70%; top: 38%; }
-  18%  { left: 30%; top: 10%; }
-  26%  { left: 6%;  top: 42%; }
-  34%  { left: 44%; top: 78%; }
-  42%  { left: 86%; top: 60%; }
-  52%  { left: 82%; top: 76%; }
-  100% { left: 82%; top: 76%; }
-}
-@media (max-width: 640px) {
-  .fm-roamer {
-    animation-duration: 48s;
-  }
-  .fm-bubble {
-    max-width: 140px;
-    font-size: 11px;
-    padding: 6px 9px 7px;
-  }
-}
-@media print {
-  .fm {
-    display: none !important;
-  }
 }
 
 /* ============ نوافذ الأكواد (terminal) ============ */
