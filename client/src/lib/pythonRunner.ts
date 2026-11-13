@@ -27,10 +27,10 @@ const PYODIDE_BASE = `/py-engine/${PYODIDE_VERSION}/`;
 const PYODIDE_CDN_BASE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
 
 /** مهلة كل محاولة تحميل — 10MB على شبكة موبايل بطيئة قد تحتاج أكثر من دقيقة. */
-const INIT_TIMEOUT_MS = 100_000;
+const INIT_TIMEOUT_MS = 120_000;
 
 /** مهلة فحص سريع: هل أصول المحرك موجودة على نفس الأصل؟ */
-const PREFLIGHT_TIMEOUT_MS = 6_000;
+const PREFLIGHT_TIMEOUT_MS = 12_000;
 
 /** مهلة تنفيذ الكود بعد جهوزية المحرك. */
 const RUN_TIMEOUT_MS = 5_000;

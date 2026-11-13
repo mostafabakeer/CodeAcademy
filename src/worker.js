@@ -135,9 +135,26 @@ export default {
       '/pwa-maskable-512.png',
       '/login-hero.png',
       '/owner.png',
-      '/pyodide/',
       '/py-engine/',
     ];
+
+    // توافق خلفي مهم: نسخ التطبيق القديمة المخزَّنة في متصفحات الطلاب (أو في
+    // كاش الـ service worker) ما زالت تطلب محرك Python من `/pyodide/<version>/`
+    // — المسار القديم الذي أُزيل. بدون هذا السطر يرى هؤلاء الطلاب رسالة
+    // "تعذّر تجهيز محرك Python" وهم على أحدث نشر. نعيد التوجيه داخلياً للمسار
+    // الجديد فيعمل الموقع عندهم فوراً بلا انتظار تحديث الحزمة.
+    if (pathname.startsWith('/pyodide/')) {
+      const rewritten = new URL(url);
+      rewritten.pathname = `/py-engine/${pathname.slice('/pyodide/'.length)}`;
+      // GET/HEAD فقط (وهو كل ما يطلبه محرك Python)، فنقل الهيدرز بلا جسم آمن.
+      return env.ASSETS.fetch(
+        new Request(rewritten.toString(), {
+          method: request.method,
+          headers: request.headers,
+          redirect: 'manual',
+        }),
+      );
+    }
 
     if (staticPaths.some((p) => pathname.startsWith(p))) {
       return env.ASSETS.fetch(request);
