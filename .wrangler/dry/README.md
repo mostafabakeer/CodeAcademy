@@ -1,1 +1,0 @@
-This folder contains the built output assets for the worker "codeacademy2" generated at 2026-11-13T00:30:59.934Z.
