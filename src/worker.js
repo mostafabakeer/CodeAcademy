@@ -136,6 +136,7 @@ export default {
       '/login-hero.png',
       '/owner.png',
       '/pyodide/',
+      '/py-engine/',
     ];
 
     if (staticPaths.some((p) => pathname.startsWith(p))) {

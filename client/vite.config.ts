@@ -66,7 +66,7 @@ export default defineConfig({
           '**/inter-cyrillic*.woff2',
           '**/inter-greek*.woff2',
           '**/inter-vietnamese*.woff2',
-          '**/pyodide/**',
+          '**/py-engine/**',
           // مكتبات ثقيلة تُحمَّل عند الحاجة فقط (hls لمشغل الدروس، CodeMirror لمحرر
           // الأكواد). تخزينها المسبق كان يُنزّل ~1.2MB لكل زائر جديد بلا فائدة.
           // بديلها runtimeCaching أدناه: تُخزَّن بعد أول استخدام وتبقى متاحة offline.
@@ -78,7 +78,7 @@ export default defineConfig({
         runtimeCaching: [
           {
             // محرك Python: كبير (10MB) ويُحمَّل مرة واحدة عند فتح محرر الأكواد.
-            urlPattern: /\/pyodide\/\d[^/]*\//,
+            urlPattern: /\/py-engine\/\d[^/]*\//,
             handler: 'CacheFirst',
             options: {
               cacheName: 'dr-pyodide',

@@ -12,18 +12,18 @@
  * واحداً جديداً تلقائياً.
  *
  * المصادر بالترتيب:
- * 1) نفس الأصل من `/pyodide/<version>/` (أسرع في مصر، ويعمل مع الكاش).
+ * 1) نفس الأصل من `/py-engine/<version>/` (أسرع في مصر، ويعمل مع الكاش).
  * 2) CDN مثبّت الإصدار كاحتياطي — حتى لا تتعطّل ميزة Python كلها لو نقصت
  *    الأصول من حزمة النشر (وهو ما حدث فعلاً في نسخة سابقة).
  *
- * المسار يحمل رقم الإصدار لأن `_headers` يضع كاشاً طويلاً على `/pyodide/*`،
+ * المسار يحمل رقم الإصدار لأن `_headers` يضع كاشاً طويلاً على `/py-engine/*`،
  * وردود 404 القديمة المخزَّنة في متصفحات الطلاب كانت ستُخفي الإصلاح.
  */
 
 /** يجب أن يطابق هذا الثابت EXPECTED_VERSION في client/scripts/copy-pyodide.mjs */
 const PYODIDE_VERSION = '0.26.4';
 
-const PYODIDE_BASE = `/pyodide/${PYODIDE_VERSION}/`;
+const PYODIDE_BASE = `/py-engine/${PYODIDE_VERSION}/`;
 const PYODIDE_CDN_BASE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
 
 /** مهلة كل محاولة تحميل — 10MB على شبكة موبايل بطيئة قد تحتاج أكثر من دقيقة. */
@@ -117,7 +117,7 @@ function sameOriginBase(): string {
  * هل الأصول موجودة فعلاً على نفس الأصل؟
  *
  * نفحص ملفاً صغيراً (pyodide-lock.json) قبل تحميل 10MB. السبب: بعض أوضاع
- * النشر تنشر الموقع بلا مجلد /pyodide (يحدث فعلاً)، وكان الطالب ينتظر مهلة
+ * النشر تنشر الموقع بلا مجلد /py-engine (يحدث فعلاً)، وكان الطالب ينتظر مهلة
  * طويلة قبل التحويل للـ CDN. الفحص يجعل القرار فورياً.
  */
 let sameOriginUsable: boolean | null = null;

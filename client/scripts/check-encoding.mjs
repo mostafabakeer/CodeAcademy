@@ -32,7 +32,15 @@ const HIGH =
 const RUN = new RegExp('[' + HIGH + ']{2,}', 'g');
 
 const EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '.html', '.json', '.md', '.sql']);
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git', 'pyodide', 'coverage']);
+const SKIP_DIRS = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  '.git',
+  'pyodide',
+  'py-engine',
+  'coverage',
+]);
 
 function looksMojibake(run) {
   const bytes = Buffer.alloc(run.length);

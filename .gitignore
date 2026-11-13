@@ -5,7 +5,10 @@ node_modules/
 dist/
 build/
 
-# أصول Python (Pyodide) تُنسخ وقت البناء من node_modules — لا تُحفظ في git
+# المسار القديم لمحرك Python (يُحذف تلقائياً وقت البناء). الأصول الفعلية في
+# client/public/py-engine/ ومُتتبَّعة في git عن قصد: بعض خطوط النشر تُسقط الملفات
+# المُهمَلة (gitignored) من حزمة الأصول، فكان مجلد المحرك يُنشر مفقوداً ويظهر
+# للطلاب خطأ "تعذّر تجهيز محرك Python" رغم نجاح البناء.
 client/public/pyodide/
 
 # env

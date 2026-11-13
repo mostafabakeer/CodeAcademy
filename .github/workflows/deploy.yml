@@ -62,10 +62,10 @@ jobs:
         run: |
           # محرك Python في المتصفح: أصول Pyodide تُنسخ قبل البناء من node_modules
           # المسار يحمل رقم الإصدار لكسر أي 404 قديم مخزَّن في متصفحات الطلاب.
-          test -f client/dist/pyodide/0.26.4/pyodide.js \
-            || { echo "::error::client/dist/pyodide/0.26.4/pyodide.js is missing — copy-pyodide.mjs did not run"; exit 1; }
-          test -f client/dist/pyodide/0.26.4/pyodide.asm.wasm \
-            || { echo "::error::client/dist/pyodide/0.26.4/pyodide.asm.wasm is missing — Python in CodeLab would break"; exit 1; }
+          test -f client/dist/py-engine/0.26.4/pyodide.js \
+            || { echo "::error::client/dist/py-engine/0.26.4/pyodide.js is missing — copy-pyodide.mjs did not run"; exit 1; }
+          test -f client/dist/py-engine/0.26.4/pyodide.asm.wasm \
+            || { echo "::error::client/dist/py-engine/0.26.4/pyodide.asm.wasm is missing — Python in CodeLab would break"; exit 1; }
           test -f client/dist/index.html \
             || { echo "::error::client/dist/index.html is missing — Vite output is not at client/dist (wrangler.toml [assets] directory = ./client/dist)"; exit 1; }
 
@@ -130,11 +130,11 @@ jobs:
           # نبدأ بملف صغير: لو غير موجود فالنشر بلا أصول ونتخطى بقية الفحوص
           # (كل فحص يعيد المحاولة ~دقيقة، فلا داعي لتكرارها خمس مرات).
           missing=0
-          if check_file /pyodide/0.26.4/pyodide-lock.json application/json; then
-            check_file /pyodide/0.26.4/pyodide.js text/javascript || missing=1
-            check_file /pyodide/0.26.4/pyodide.asm.js text/javascript || missing=1
-            check_file /pyodide/0.26.4/pyodide.asm.wasm application/wasm || missing=1
-            check_file /pyodide/0.26.4/python_stdlib.zip application/zip || missing=1
+          if check_file /py-engine/0.26.4/pyodide-lock.json application/json; then
+            check_file /py-engine/0.26.4/pyodide.js text/javascript || missing=1
+            check_file /py-engine/0.26.4/pyodide.asm.js text/javascript || missing=1
+            check_file /py-engine/0.26.4/pyodide.asm.wasm application/wasm || missing=1
+            check_file /py-engine/0.26.4/python_stdlib.zip application/zip || missing=1
           else
             missing=1
           fi

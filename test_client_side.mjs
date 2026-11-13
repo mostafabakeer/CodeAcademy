@@ -44,7 +44,7 @@ try {
   console.log('2. التحقق من وجود Pyodide محلياً...');
   const pyodideExists = await page.evaluate(async () => {
     try {
-      const resp = await fetch('/pyodide/pyodide.js');
+      const resp = await fetch('/py-engine/0.26.4/pyodide.js');
       return resp.ok;
     } catch {
       return false;
