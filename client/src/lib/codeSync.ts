@@ -162,32 +162,40 @@ export async function refreshRemoteFile(remoteId: number): Promise<LocalFile | n
 
 /**
  * بعض نسخ الخادم القديمة تُرجع قائمة الملفات بلا الكود (قبل دعم withCode=1).
- * في هذه الحالة لا نستبدل الكود المحلي بكود فارغ أبداً، بل نجلب كل ملف على حدة
+ * في هذه الحالة لا نستبدل الكود المحلي بكود فارغ أبداً، بل نجلب الملف على حدة
  * — وهو ما كان يعمل دائماً — حتى يظل الكود يظهر على أي جهاز بعد تسجيل الدخول
  * حتى لو تأخّر نشر تحديث الخادم.
+ *
+ * `needsCode` يقلّل الطلبات: لا نجلب تفاصيل ملف نعرف أن نسخته المحلية أحدث
+ * (أو مساوية)، لأن الدمج سيرفع المحلي أو لا يفعل شيئاً. هذا مهم لأن الخادم
+ * يحدّ الطلبات (30/دقيقة) وقد يرفض جلب عشرات الملفات دفعة واحدة.
  */
-async function fillMissingCodes(files: RemoteCodeFile[]): Promise<RemoteCodeFile[]> {
-  const missing = files.filter((f) => typeof f.code !== 'string');
-  if (!missing.length) return files;
-
+async function fillMissingCodes(
+  files: RemoteCodeFile[],
+  needsCode: (f: RemoteCodeFile) => boolean,
+): Promise<{ files: RemoteCodeFile[]; failed: Set<number> }> {
+  const missing = files.filter((f) => typeof f.code !== 'string' && needsCode(f));
+  const failed = new Set<number>();
   const filled = new Map<number, RemoteCodeFile>();
+
   for (let i = 0; i < missing.length; i += 4) {
-    const batch = missing.slice(i, i + 4);
     await Promise.all(
-      batch.map(async (f) => {
+      missing.slice(i, i + 4).map(async (f) => {
         try {
           const d = await api<{ file: RemoteCodeFile }>(`/api/code/${f.id}`);
           if (d?.file && typeof d.file.code === 'string') {
             filled.set(f.id, { ...f, ...d.file });
+          } else {
+            failed.add(f.id);
           }
         } catch {
-          /* نُبقي الملف بلا كود ونتجاهله في الدمج */
+          failed.add(f.id);
         }
       }),
     );
   }
 
-  return files.map((f) => filled.get(f.id) ?? f);
+  return { files: files.map((f) => filled.get(f.id) ?? f), failed };
 }
 
 /**
@@ -206,29 +214,58 @@ export function syncCodeFiles(): Promise<SyncResult> {
       return { ok: false, pulled: 0, pushed: 0, error: (e as Error).message };
     }
 
-    remote = await fillMissingCodes(remote);
-    // ملف بلا كود (فشل جلب تفاصيله) لا نلمس به النسخة المحلية إطلاقاً.
-    const mergeable = remote.filter((r) => typeof r.code === 'string');
-
     let pulled = 0;
     let pushed = 0;
     const locals = await getAllFiles();
     const localByRemote = new Map<number, LocalFile>();
     for (const l of locals) if (l.remoteId) localByRemote.set(l.remoteId, l);
 
-    // 1) السحابة → المحلي (مع الدمج)
-    for (const r of mergeable) {
+    /** ملف محلي قديم أُنشئ قبل المزامنة (بلا remoteId) بنفس الاسم واللغة. */
+    const legacyFor = (r: RemoteCodeFile) =>
+      locals.find(
+        (l) =>
+          !l.remoteId &&
+          l.name.trim() === r.name.trim() &&
+          asLanguage(l.language) === asLanguage(r.language),
+      );
+
+    // هل نحتاج كود النسخة السحابية فعلاً؟ (انظر شرح fillMissingCodes)
+    const needsCode = (r: RemoteCodeFile) => {
       const local = localByRemote.get(r.id);
+      if (local) return r.updatedAt > local.updatedAt;
+      const legacy = legacyFor(r);
+      if (legacy) return !(legacy.updatedAt > r.updatedAt);
+      return true;
+    };
+
+    const { files: filledRemote, failed } = await fillMissingCodes(remote, needsCode);
+
+    // 1) السحابة → المحلي (مع الدمج)
+    for (const r of filledRemote) {
+      const local = localByRemote.get(r.id);
+
+      // بلا كود: إما فشل جلبه (لا نلمس المحلي)، أو أن المحلي أحدث فلا حاجة له.
+      if (typeof r.code !== 'string') {
+        if (failed.has(r.id)) continue;
+        if (local) {
+          if ((local.pendingSync || local.updatedAt > r.updatedAt) && (await pushCodeFile(local))) {
+            pushed++;
+          }
+          continue;
+        }
+        const legacy = legacyFor(r);
+        if (legacy && legacy.updatedAt > r.updatedAt) {
+          await saveFile({ ...legacy, remoteId: r.id, pendingSync: true });
+          const fresh = (await getFileById(legacy.id)) ?? legacy;
+          if (await pushCodeFile(fresh)) pushed++;
+        }
+        continue;
+      }
 
       if (!local) {
         // ملف موجود على الخادم وليس هنا (جهاز جديد، أو أُنشئ من جهاز آخر).
         // قبل إنشاء نسخة جديدة: هل يوجد ملف محلي قديم بلا remoteId بنفس الاسم؟
-        const legacy = locals.find(
-          (l) =>
-            !l.remoteId &&
-            l.name.trim() === r.name.trim() &&
-            asLanguage(l.language) === asLanguage(r.language),
-        );
+        const legacy = legacyFor(r);
         if (legacy) {
           if (legacy.updatedAt > r.updatedAt) {
             await saveFile({ ...legacy, remoteId: r.id, pendingSync: true });
