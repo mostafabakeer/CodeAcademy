@@ -123,15 +123,34 @@ jobs:
               esac
               sleep 9
             done
-            echo "::error::$base$path returned HTTP ${code:-000} content-type '${ctype:-none}' after 8 attempts — the deployed worker is missing the Pyodide asset (an HTML fallback is often returned instead). Check that wrangler.toml name matches the live worker (codeacademy2)."
+            echo "missing  $path (HTTP ${code:-000}, content-type '${ctype:-none}')"
             return 1
           }
 
-          check_file /pyodide/0.26.4/pyodide.js text/javascript || exit 1
-          check_file /pyodide/0.26.4/pyodide.asm.js text/javascript || exit 1
-          check_file /pyodide/0.26.4/pyodide.asm.wasm application/wasm || exit 1
-          check_file /pyodide/0.26.4/pyodide-lock.json application/json || exit 1
-          check_file /pyodide/0.26.4/python_stdlib.zip application/zip || exit 1
+          # نبدأ بملف صغير: لو غير موجود فالنشر بلا أصول ونتخطى بقية الفحوص
+          # (كل فحص يعيد المحاولة ~دقيقة، فلا داعي لتكرارها خمس مرات).
+          missing=0
+          if check_file /pyodide/0.26.4/pyodide-lock.json application/json; then
+            check_file /pyodide/0.26.4/pyodide.js text/javascript || missing=1
+            check_file /pyodide/0.26.4/pyodide.asm.js text/javascript || missing=1
+            check_file /pyodide/0.26.4/pyodide.asm.wasm application/wasm || missing=1
+            check_file /pyodide/0.26.4/python_stdlib.zip application/zip || missing=1
+          else
+            missing=1
+          fi
+
+          # الواجهة تتحوّل تلقائياً إلى CDN لو كانت الأصول المحلية ناقصة، فغيابها
+          # لا يُعطّل Python. نُسجّل تحذيراً واضحاً (لا فشلاً) ونتأكد أن الاحتياطي
+          # (CDN) يعمل — وهو ما سيستخدمه الطالب فعلياً في هذه الحالة.
+          if [ "${missing:-0}" = "1" ]; then
+            echo "::warning::Pyodide assets are missing from the deployed worker. The app falls back to the pinned jsDelivr CDN, so Python still works, but self-hosting is broken. Check the deploy logs (workers.dev upload limit / Workers Builds) ."
+            cdn="https://cdn.jsdelivr.net/npm/pyodide@0.26.4"
+            for f in pyodide.js pyodide-lock.json; do
+              curl -fsS -I --max-time 30 "$cdn/$f" > /dev/null \
+                || { echo "::error::CDN fallback $cdn/$f is unreachable — Python would not work at all"; exit 1; }
+            done
+            echo "Python will load from the CDN fallback."
+          fi
 
           for attempt in 1 2 3 4 5; do
             if curl -fsS --max-time 30 "$base/" > /dev/null; then break; fi

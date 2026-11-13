@@ -1,0 +1,3 @@
+deploy-probe 420885e
+Generated locally so we can tell whether files from client/public are uploaded.
+If you can read this on the live site, static assets from public/ are deployed.

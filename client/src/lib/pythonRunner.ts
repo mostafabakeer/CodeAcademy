@@ -26,8 +26,11 @@ const PYODIDE_VERSION = '0.26.4';
 const PYODIDE_BASE = `/pyodide/${PYODIDE_VERSION}/`;
 const PYODIDE_CDN_BASE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
 
-/** مهلة كل محاولة تحميل (10MB على شبكة بطيئة). */
-const INIT_TIMEOUT_MS = 45_000;
+/** مهلة كل محاولة تحميل — 10MB على شبكة موبايل بطيئة قد تحتاج أكثر من دقيقة. */
+const INIT_TIMEOUT_MS = 100_000;
+
+/** مهلة فحص سريع: هل أصول المحرك موجودة على نفس الأصل؟ */
+const PREFLIGHT_TIMEOUT_MS = 6_000;
 
 /** مهلة تنفيذ الكود بعد جهوزية المحرك. */
 const RUN_TIMEOUT_MS = 5_000;
@@ -101,15 +104,46 @@ let readyPromise: Promise<void> | null = null;
 let isReady = false;
 let runSeq = 0;
 
-/** المسار المطلق لنفس الأصل + CDN احتياطي. */
-function bases(): string[] {
-  let sameOrigin = PYODIDE_BASE;
+/** المسار المطلق لأصول المحرك على نفس الأصل (أسرع ويعمل أوفلاين). */
+function sameOriginBase(): string {
   try {
-    sameOrigin = new URL(PYODIDE_BASE, `${window.location.origin}/`).href;
+    return new URL(PYODIDE_BASE, `${window.location.origin}/`).href;
   } catch {
-    /* ignore */
+    return PYODIDE_BASE;
   }
-  return [sameOrigin, PYODIDE_CDN_BASE];
+}
+
+/**
+ * هل الأصول موجودة فعلاً على نفس الأصل؟
+ *
+ * نفحص ملفاً صغيراً (pyodide-lock.json) قبل تحميل 10MB. السبب: بعض أوضاع
+ * النشر تنشر الموقع بلا مجلد /pyodide (يحدث فعلاً)، وكان الطالب ينتظر مهلة
+ * طويلة قبل التحويل للـ CDN. الفحص يجعل القرار فورياً.
+ */
+let sameOriginUsable: boolean | null = null;
+
+async function probeSameOrigin(): Promise<boolean> {
+  if (sameOriginUsable !== null) return sameOriginUsable;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PREFLIGHT_TIMEOUT_MS);
+    const res = await fetch(`${sameOriginBase()}pyodide-lock.json`, {
+      method: 'HEAD',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    sameOriginUsable = res.ok;
+  } catch {
+    sameOriginUsable = false;
+  }
+  return sameOriginUsable;
+}
+
+/** ترتيب المصادر: نفس الأصل أولاً إن كان سليماً، وإلا CDN فوراً. */
+async function bases(): Promise<string[]> {
+  const ok = await probeSameOrigin();
+  return ok ? [sameOriginBase(), PYODIDE_CDN_BASE] : [PYODIDE_CDN_BASE, sameOriginBase()];
 }
 
 /** يُسقط الـ Worker الحالي (بعد مهلة/خطأ) حتى يُعاد إنشاؤه في التشغيل التالي. */
@@ -137,6 +171,7 @@ function tryInitFrom(base: string): Promise<void> {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
       try {
         w.terminate();
       } catch {
@@ -153,8 +188,6 @@ function tryInitFrom(base: string): Promise<void> {
     } catch {
       reject(new Error('المتصفح لا يدعم Web Worker'));
       return;
-    } finally {
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
     }
 
     worker = w;
@@ -169,6 +202,9 @@ function tryInitFrom(base: string): Promise<void> {
         isReady = true;
         // لا نحذف w.onmessage: runPython يضيف مستمعاً خاصاً به عبر addEventListener.
         w.onmessage = null;
+        // نُلغي عنوان الـ Blob بعد نجاح التحميل فقط: إلغاؤه فوراً بعد إنشاء
+        // الـ Worker قد يجعله يفشل في المتصفحات التي تحمّل السكربت بشكل غير متزامن.
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
         resolve();
       } else if (data.type === 'init-error') {
         fail(data.message ?? 'خطأ غير معروف أثناء تحميل المحرك');
@@ -187,7 +223,7 @@ function ensureWorker(): Promise<void> {
 
   readyPromise = (async () => {
     const errors: string[] = [];
-    for (const base of bases()) {
+    for (const base of await bases()) {
       try {
         await tryInitFrom(base);
         return;
