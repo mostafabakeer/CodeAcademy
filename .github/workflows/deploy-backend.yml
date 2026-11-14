@@ -1,10 +1,17 @@
 name: Deploy Backend (Supabase)
 
-# الباك اند (Edge Functions + الميجريشنز) لا يُنشر تلقائياً مع الواجهة لأن
-# تغيير القاعدة يحتاج مراجعة. هذا workflow يدوي لتطبيق الميجريشنز ونشر الدوال
-# من نفس الفرع، ثم يتحقق من نسخة الـ API المنشورة.
+# الباك اند (Edge Functions + الميجريشنز).
+#
+# - عند الدفع على main: تُنشر الدوال فقط تلقائياً (بدون ميجريشنز) لأن تغيير
+#   القاعدة يحتاج مراجعة يدوية. بدون ذلك ظلّت إصلاحات مثل إشعارات الامتحانات
+#   حبيسة الريبو بينما الموقع الحي يعمل بنسخة قديمة.
+# - يدوياً: يمكن اختيار تطبيق الميجريشنز ونشر دوال محددة.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
   workflow_dispatch:
     inputs:
       run_migrations:
@@ -23,6 +30,10 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      # عند الدفع التلقائي لا توجد inputs: ننشر كل الدوال ونمنع الميجريشنز.
+      FUNCTIONS: ${{ inputs.functions || 'api backup cleanup' }}
+      RUN_MIGRATIONS: ${{ inputs.run_migrations || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +61,7 @@ jobs:
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
       - name: Apply database migrations
-        if: ${{ inputs.run_migrations }}
+        if: ${{ env.RUN_MIGRATIONS == 'true' }}
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -80,7 +91,7 @@ jobs:
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
           set -euo pipefail
-          for fn in ${{ inputs.functions }}; do
+          for fn in ${{ env.FUNCTIONS }}; do
             echo "Deploying function: $fn"
             supabase functions deploy "$fn" --no-verify-jwt
           done

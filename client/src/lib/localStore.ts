@@ -35,6 +35,17 @@ export function setInstallDismissed(): void {
   setLocal(INSTALL_DISMISSED_KEY, '1');
 }
 
+const NOTIF_PROMPT_KEY = 'notif_prompt_dismissed_at';
+
+/** وقت آخر مرة قال فيها المستخدم "لاحقاً" لبطاقة تفعيل الإشعارات (0 = لم يحدث). */
+export function getNotifPromptDismissedAt(): number {
+  return Number(getLocal(NOTIF_PROMPT_KEY)) || 0;
+}
+
+export function setNotifPromptDismissed(): void {
+  setLocal(NOTIF_PROMPT_KEY, String(Date.now()));
+}
+
 export interface VideoProgressLocal {
   seconds: number;
   duration: number;

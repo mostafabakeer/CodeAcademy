@@ -634,6 +634,22 @@ export const en: TranslationKeys = {
     iosStep2: 'Choose "Add to Home Screen" from the menu.',
     iosStep3: 'Tap "Add" at the top, and the DR Code icon will appear on your Home Screen.',
   },
+  notif: {
+    title: 'Turn on DR Code notifications',
+    desc: 'One tap, and you get an instant alert with a real sound whenever a new lesson, exam or note is added.',
+    accept: 'Turn on notifications',
+    enabling: 'Enabling…',
+    enabled: 'Notifications enabled ✓',
+    denied: 'The browser blocked notifications. Open the site settings in your browser, allow notifications, then try again.',
+    failed: 'Could not enable notifications. Check your connection and try again.',
+    later: 'Later',
+    close: 'Close',
+    iosTitle: 'Turn on notifications on iPhone',
+    iosIntro: 'iPhone only allows site notifications after the site is added to the Home Screen:',
+    iosStep1: 'Tap the Share button ⤴️ in Safari.',
+    iosStep2: 'Choose "Add to Home Screen".',
+    iosStep3: 'Open DR Code from the Home Screen, then tap "Turn on notifications".',
+  },
   public: {
     landingTitle: 'Learn Programming with Dr Code Platform',
     landingSubtitle:

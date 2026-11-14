@@ -135,25 +135,38 @@ export default {
       '/pwa-maskable-512.png',
       '/login-hero.png',
       '/owner.png',
-      '/py-engine/',
     ];
 
-    // توافق خلفي مهم: نسخ التطبيق القديمة المخزَّنة في متصفحات الطلاب (أو في
-    // كاش الـ service worker) ما زالت تطلب محرك Python من `/pyodide/<version>/`
-    // — المسار القديم الذي أُزيل. بدون هذا السطر يرى هؤلاء الطلاب رسالة
-    // "تعذّر تجهيز محرك Python" وهم على أحدث نشر. نعيد التوجيه داخلياً للمسار
-    // الجديد فيعمل الموقع عندهم فوراً بلا انتظار تحديث الحزمة.
-    if (pathname.startsWith('/pyodide/')) {
-      const rewritten = new URL(url);
-      rewritten.pathname = `/py-engine/${pathname.slice('/pyodide/'.length)}`;
-      // GET/HEAD فقط (وهو كل ما يطلبه محرك Python)، فنقل الهيدرز بلا جسم آمن.
-      return env.ASSETS.fetch(
-        new Request(rewritten.toString(), {
+    // محرك Python: نفس الأصل أولاً (`/py-engine/<version>/`).
+    //
+    // توافق خلفي مهم: نسخ التطبيق القديمة المخزَّنة في متصفحات الطلاب ما زالت
+    // تطلب المحرك من `/pyodide/<version>/` — المسار القديم الذي أُزيل. بدون
+    // إعادة التوجيه هذه يرى هؤلاء الطلاب رسالة "تعذّر تجهيز محرك Python".
+    //
+    // ولا نسمح بتخزين 404 هنا: في نشر سابق غاب مجلد المحرك، فخزّن المتصفح
+    // الردود الفارغة سنة كاملة (immutable) وظل الخطأ يظهر حتى بعد إصلاح النشر.
+    if (pathname.startsWith('/py-engine/') || pathname.startsWith('/pyodide/')) {
+      const target = pathname.startsWith('/pyodide/')
+        ? `/py-engine/${pathname.slice('/pyodide/'.length)}`
+        : pathname;
+      const assetUrl = new URL(url);
+      assetUrl.pathname = target;
+      const response = await env.ASSETS.fetch(
+        new Request(assetUrl.toString(), {
           method: request.method,
           headers: request.headers,
           redirect: 'manual',
         }),
       );
+      if (response.status !== 404) return response;
+
+      const headers = new Headers(response.headers);
+      headers.set('cache-control', 'no-store');
+      return new Response(response.body, {
+        status: 404,
+        statusText: response.statusText,
+        headers,
+      });
     }
 
     if (staticPaths.some((p) => pathname.startsWith(p))) {

@@ -8,6 +8,7 @@ import PageErrorBoundary from './components/PageErrorBoundary';
 import ErrorBoundary from './components/ErrorBoundary';
 import UploadNotifications from './components/UploadNotifications';
 import InstallPrompt from './components/InstallPrompt';
+import NotificationPrompt from './components/NotificationPrompt';
 import { useLang } from './i18n';
 import { useSession } from './store/authStore';
 import { installSoundUnlock } from './lib/notificationSound';
@@ -147,6 +148,7 @@ export default function App() {
     <Suspense fallback={<PageLoader />}>
       <Shell />
       <InstallPrompt />
+      <NotificationPrompt />
       <UploadNotifications />
     </Suspense>
   );

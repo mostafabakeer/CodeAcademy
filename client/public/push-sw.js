@@ -10,6 +10,33 @@
  *   ولا نغيّر الـ tag لكل إشعار حتى تعمل إعادة التنبيه بشكل صحيح.
  */
 
+/**
+ * توافق خلفي لمحرك Python.
+ *
+ * الحزم القديمة تطلب `/pyodide/<version>/*`، وقد خزّن المتصفح ردود 404 لهذا
+ * المسار سنة كاملة (immutable) وقت أن كان المجلد مفقوداً من النشر. إعادة
+ * التوجيه هنا تحدث **قبل** الرجوع لكاش المتصفح، فتُلغي أثر تلك الردود العالقة
+ * ويبدأ Python بالعمل دون أن يمسح الطالب بيانات الموقع.
+ *
+ * ملاحظة: لا نُعيد `respondWith` لأي مسار آخر حتى لا نتعارض مع Workbox.
+ */
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith('/pyodide/')) return;
+
+  const target = new URL(self.location.origin);
+  target.pathname = `/py-engine/${url.pathname.slice('/pyodide/'.length)}`;
+  target.search = url.search;
+
+  event.respondWith(
+    fetch(target.toString(), { credentials: 'same-origin' }).catch(() =>
+      fetch(event.request),
+    ),
+  );
+});
+
+
 // دالة مساعدة لتحويل Base64 إلى Uint8Array
 const urlB64ToUint8Array = (base64String) => {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);

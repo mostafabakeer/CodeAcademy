@@ -29,9 +29,6 @@ const PYODIDE_CDN_BASE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION
 /** مهلة كل محاولة تحميل — 10MB على شبكة موبايل بطيئة قد تحتاج أكثر من دقيقة. */
 const INIT_TIMEOUT_MS = 120_000;
 
-/** مهلة فحص سريع: هل أصول المحرك موجودة على نفس الأصل؟ */
-const PREFLIGHT_TIMEOUT_MS = 12_000;
-
 /** مهلة تنفيذ الكود بعد جهوزية المحرك. */
 const RUN_TIMEOUT_MS = 5_000;
 
@@ -114,36 +111,15 @@ function sameOriginBase(): string {
 }
 
 /**
- * هل الأصول موجودة فعلاً على نفس الأصل؟
+ * ترتيب المصادر.
  *
- * نفحص ملفاً صغيراً (pyodide-lock.json) قبل تحميل 10MB. السبب: بعض أوضاع
- * النشر تنشر الموقع بلا مجلد /py-engine (يحدث فعلاً)، وكان الطالب ينتظر مهلة
- * طويلة قبل التحويل للـ CDN. الفحص يجعل القرار فورياً.
+ * نفس الأصل أولاً **دائماً** — بلا فحص HEAD مسبق. السبب: الفحص كان يحدث قبل
+ * تحميل المحرك، وعلى شبكة بطيئة قد ينتهي بمهلة فيُرسل الطالب إلى jsDelivr
+ * (وهو أبطأ/محجوب أحياناً في مصر) فيفشل التحميل كله رغم أن الأصول موجودة
+ * على نفس الأصل. نجرّب نفس الأصل مباشرة؛ فإن فشل فعلاً ننتقل للـ CDN.
  */
-let sameOriginUsable: boolean | null = null;
-
-async function probeSameOrigin(): Promise<boolean> {
-  if (sameOriginUsable !== null) return sameOriginUsable;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PREFLIGHT_TIMEOUT_MS);
-    const res = await fetch(`${sameOriginBase()}pyodide-lock.json`, {
-      method: 'HEAD',
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    sameOriginUsable = res.ok;
-  } catch {
-    sameOriginUsable = false;
-  }
-  return sameOriginUsable;
-}
-
-/** ترتيب المصادر: نفس الأصل أولاً إن كان سليماً، وإلا CDN فوراً. */
-async function bases(): Promise<string[]> {
-  const ok = await probeSameOrigin();
-  return ok ? [sameOriginBase(), PYODIDE_CDN_BASE] : [PYODIDE_CDN_BASE, sameOriginBase()];
+function bases(): string[] {
+  return [sameOriginBase(), PYODIDE_CDN_BASE];
 }
 
 /** يُسقط الـ Worker الحالي (بعد مهلة/خطأ) حتى يُعاد إنشاؤه في التشغيل التالي. */
@@ -223,7 +199,7 @@ function ensureWorker(): Promise<void> {
 
   readyPromise = (async () => {
     const errors: string[] = [];
-    for (const base of await bases()) {
+    for (const base of bases()) {
       try {
         await tryInitFrom(base);
         return;

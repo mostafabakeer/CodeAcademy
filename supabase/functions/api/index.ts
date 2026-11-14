@@ -5,8 +5,7 @@ import { API_VERSION, MIN_CLIENT_VERSION } from '../_shared/version.ts';
 import { sb } from '../_shared/supabase.ts';
 import { requireAuth, requireAdmin, requireSubscriber, signToken, authCookieHeader, clearAuthCookieHeader, type AuthUser, invalidateUserCache } from '../_shared/auth.ts';
 import { hashPassword, verifyPassword } from '../_shared/password.ts';
-import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared/access.ts';
-import {
+import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared/access.ts';import {
   computeStudentStats,
   computeStudentStatsBatch,
   countAdmins,
@@ -100,6 +99,28 @@ import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAll
 
 const CODE_LANGUAGES = ['javascript', 'python', 'html', 'css'];
 const TOP_GRADES = ['bac1', 'bac2'];
+
+/**
+ * تنفيذ مهمة خلفية (مثل إرسال Push) دون أن يقتلها الـ runtime.
+ *
+ * Supabase Edge Functions يوقف الـ isolate بمجرد إرجاع الرد، فأي `void promise()`
+ * غير مُنتظر قد لا يكتمل إطلاقاً — وهذا سبب عدم وصول إشعار "امتحان جديد" رغم أن
+ * الإشعار التجريبي (الذي كان `await`ed) يعمل. نستخدم `EdgeRuntime.waitUntil`
+ * إن توفّر (الإنتاج)، وإلا ننتظر المهمة نفسها (بيئة محلية).
+ */
+async function background(task: Promise<unknown>): Promise<void> {
+  const safe = task.catch((e) => {
+    console.error('[bg]', (e as Error)?.message ?? String(e));
+  });
+  const runtime = (globalThis as {
+    EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void };
+  }).EdgeRuntime;
+  if (runtime?.waitUntil) {
+    runtime.waitUntil(safe);
+    return;
+  }
+  await safe;
+}
 
 /** bcrypt hash كاذب يُتحقق منه عند غياب المستخدم (تسوية زمن الدخول — ضد timing). */
 let dummyHashPromise: Promise<string> | null = null;
@@ -233,12 +254,12 @@ app.post('/auth/register', async (c) => {
 
   recordRegister(clientIp);
   // إشعار الأدمن بحساب جديد (بدون أي بيانات حساسة).
-  void sendPushToAdmins({
+  await background(sendPushToAdmins({
     title: '👤 طالب جديد سجّل',
     body: `${user.fullName} — ${GRADES[user.grade] || user.grade || 'بدون صف'}`,
     url: '/admin/students',
     type: 'student',
-  });
+  }));
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
   return c.json({ token, user: safeUser(user) }, 200, { 'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? '') });
 });
@@ -349,12 +370,12 @@ app.post('/auth/forgot-password', async (c) => {
   try {
     const reset = await createPasswordReset(user.id);
     // إشعار الأدمن فوراً — الطلب ينتظر موافقة يدوية، فالتأخير يعني طالباً عالقاً.
-    void sendPushToAdmins({
+    await background(sendPushToAdmins({
       title: '🔑 طلب استعادة كلمة سر',
       body: `${user.fullName || user.phone} — ${GRADES[user.grade] || user.grade || 'بدون صف'}`,
       url: '/admin/students',
       type: 'reset',
-    });
+    }));
     return c.json({ ok: true, requestId: reset.id });
   } catch (e) {
     console.error('[api] forgot-password createPasswordReset:', (e as Error).message);
@@ -704,13 +725,13 @@ app.post('/lessons', requireAuth, requireAdmin, async (c) => {
   });
   // Trigger push notification for this grade (or everyone when grade = all)
   const lessonGrade = isContentGrade(b.grade) ? b.grade : 'all';
-  sendPushToGrade(lessonGrade, {
+  await background(sendPushToGrade(lessonGrade, {
     title: '📚 درس جديد',
     body: bodyText(b.title),
     url: `/lessons/${lesson.id}`,
     type: 'lesson',
     id: lesson.id,
-  }).catch(() => {});
+  }));
   return c.json({ lesson });
 });
 
@@ -825,13 +846,13 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
   clearLatestExamTopCache();
   // Trigger push notification for this grade (or everyone when grade = all)
   const examGrade = isContentGrade(b.grade) ? b.grade : 'all';
-  sendPushToGrade(examGrade, {
+  await background(sendPushToGrade(examGrade, {
     title: '📝 امتحان جديد',
     body: bodyText(b.title),
     url: `/exams/${exam.id}`,
     type: 'exam',
     id: exam.id,
-  }).catch(() => {});
+  }));
   return c.json({ exam });
 });
 
@@ -987,13 +1008,13 @@ app.post('/notes', requireAuth, requireAdmin, async (c) => {
   });
   // Trigger push notification for this grade (or everyone when grade = all)
   const noteGrade = isContentGrade(b.grade) ? b.grade : 'all';
-  sendPushToGrade(noteGrade, {
+  await background(sendPushToGrade(noteGrade, {
     title: '📖 مذكرة جديدة',
     body: bodyText(b.title),
     url: '/notes',
     type: 'note',
     id: note.id,
-  }).catch(() => {});
+  }));
   return c.json({ note });
 });
 
@@ -1736,22 +1757,42 @@ export async function sendPushToUser(userId: number, payload: PushPayloadServer)
   await deliverPush((data ?? []) as PushSubRow[], payload);
 }
 
-/** إرسال push لكل مشتركي مرحلة معينة عند إضافة محتوى جديد. */
+/**
+ * إرسال push لكل من يهمه محتوى جديد في مرحلة معينة.
+ *
+ * القاعدة:
+ * - الأدمن: يصله دائماً (هو من يضيف المحتوى ويحتاج تأكيداً أن التنبيه يعمل).
+ * - الطالب المشترك: يصله لو كانت مرحلته مطابقة، أو كان المحتوى لكل المراحل.
+ * - غير المشترك: لا يصله (المحتوى مقفول عليه أصلاً).
+ *
+ * لا نفلتر `subscription` في استعلام SQL لأن ذلك يستبعد الأدمن (غالباً غير
+ * مشترك مدفوع) — نجلب الصفوف ثم نفلتر في JS.
+ */
 export async function sendPushToGrade(grade: string, payload: PushPayloadServer): Promise<void> {
   try {
-    let query = sb
+    const { data, error } = await sb
       .from('push_subscriptions')
-      .select('endpoint, p256dh, auth, users!inner(id, subscription, grade)')
-      .eq('users.subscription', true)
-      .limit(500);
-    // grade === 'all' ⇒ المحتوى متاح لكل المراحل، فنرسل لكل المشتركين.
-    if (grade && grade !== 'all') query = query.eq('users.grade', grade);
-    const { data, error } = await query;
+      .select('endpoint, p256dh, auth, users!inner(id, role, subscription, grade)')
+      .limit(1000);
     if (error) {
       console.error('[push] load grade subscriptions:', error.message);
       return;
     }
-    await deliverPush((data ?? []) as PushSubRow[], payload);
+
+    type Row = PushSubRow & {
+      users?: { role?: string | null; subscription?: boolean | null; grade?: string | null } | null;
+    };
+
+    const subs = ((data ?? []) as Row[]).filter((row) => {
+      const user = row.users;
+      if (!user) return false;
+      if (user.role === 'admin') return true;
+      if (!user.subscription) return false;
+      if (!grade || grade === 'all') return true;
+      return user.grade === grade;
+    });
+
+    await deliverPush(subs, payload);
   } catch (e) {
     console.error('[push] sendPushToGrade error:', (e as Error).message);
   }
