@@ -52,6 +52,8 @@ export default function NotificationPrompt() {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const timer = useRef<number | undefined>(undefined);
   const hideTimer = useRef<number | undefined>(undefined);
+  /** آخر إذن رأيناه — يمنع مزامنة الاشتراك مع كل مرة تعود فيها للصفحة. */
+  const lastPermission = useRef<NotificationPermission | null>(null);
 
   const needsInstallFirst = isIOS() && !isStandalonePwa();
 
@@ -63,10 +65,15 @@ export default function NotificationPrompt() {
     }
     if (Notification.permission === 'granted') {
       setStage('hidden');
-      // الإذن صار متاحاً (مثلاً بعد السماح من إعدادات المتصفح) ⇒ اشتراك صامت.
-      void ensurePushSubscription();
+      // الإذن صار متاحاً (مثلاً بعد السماح من إعدادات المتصفح) ⇒ اشتراك صامت،
+      // مرة واحدة فقط عند تغيّر الإذن — لا مع كل عودة للصفحة.
+      if (lastPermission.current !== 'granted') {
+        lastPermission.current = 'granted';
+        void ensurePushSubscription();
+      }
       return;
     }
+    lastPermission.current = Notification.permission;
     if (needsInstallFirst) {
       setStage('ios');
       return;
