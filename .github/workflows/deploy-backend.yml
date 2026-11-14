@@ -39,7 +39,9 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # نسخة مثبّتة: v3 غيّرت واجهة الأوامر (فشل نشر الدوال بصمت عند استخدام
+          # "latest"). هذه هي نفس النسخة التي نُشرت بها الدوال يدوياً ونجحت.
+          version: 2.114.0
 
       - name: Check Supabase credentials
         id: pre
@@ -97,9 +99,10 @@ jobs:
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
           set -euo pipefail
+          supabase --version || true
           for fn in ${{ env.FUNCTIONS }}; do
             echo "Deploying function: $fn"
-            supabase functions deploy "$fn" --no-verify-jwt
+            supabase functions deploy "$fn" --project-ref "$SUPABASE_PROJECT_ID" --no-verify-jwt
           done
 
       - name: Verify deployed API version
