@@ -17,6 +17,8 @@ client/public/pyodide/
 
 # supabase CLI (أدوات محلية - لا تُرفع)
 .bin/
+# ملفات مؤقتة يكتبها CLI عند كل أمر (project-ref/linked-project/إصدارات)
+supabase/.temp/
 
 # logs
 *.log
