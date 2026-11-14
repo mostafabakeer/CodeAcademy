@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useUser } from '../store/authStore';
 import { getNotifPromptDismissedAt, setNotifPromptDismissed } from '../lib/localStore';
-import { isIOS, isPushSupported, isStandalonePwa, subscribeToPush } from '../lib/pushNotifications';
+import {
+  ensurePushSubscription,
+  isIOS,
+  isPushSupported,
+  isStandalonePwa,
+  subscribeToPush,
+} from '../lib/pushNotifications';
 
 /** ننتظر قليلاً حتى يستقرّ الدخول وتظهر الصفحة قبل الظهور. */
 const SHOW_DELAY_MS = 3500;
@@ -13,6 +19,8 @@ const RETRY_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** مدة إظهار رسالة النجاح قبل الإخفاء. */
 const SUCCESS_HIDE_MS = 2600;
+
+type Stage = 'hidden' | 'ask' | 'blocked' | 'ios';
 
 type Feedback = 'enabled' | 'denied' | 'failed' | null;
 
@@ -25,13 +33,21 @@ type Feedback = 'enabled' | 'denied' | 'failed' | null;
  * `default`). بدون هذه البطاقة يبقى الطالب بلا اشتراك push، فلا يصله أي
  * تنبيه عند إضافة امتحان أو درس أو مذكرة.
  *
- * على الآيفون لا تعمل الإشعارات إلا بعد تثبيت الموقع على الشاشة الرئيسية،
- * فنعرض خطوات التثبيت بدل زر لا يعمل.
+ * الحالات:
+ * - `default`  ⇒ زر تفعيل مباشر.
+ * - `denied`   ⇒ لا يمكن للموقع أن يسأل مرة أخرى؛ نعرض خطوات السماح من
+ *                إعدادات المتصفح + زر "تحقّق مرة أخرى" (بعد أن يسمح المستخدم
+ *                يعمل الاشتراك فوراً بلا إعادة تحميل).
+ * - آيفون غير مثبّت ⇒ خطوات الإضافة للشاشة الرئيسية (iOS لا يسمح بالإشعارات
+ *                إلا داخل التطبيق المثبّت).
+ * - `granted`  ⇒ مزامنة صامتة للاشتراك ثم إخفاء البطاقة.
  */
 export default function NotificationPrompt() {
   const { t } = useLang();
   const user = useUser();
-  const [visible, setVisible] = useState(false);
+  const [stage, setStage] = useState<Stage>('hidden');
+  const [ready, setReady] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -39,21 +55,56 @@ export default function NotificationPrompt() {
 
   const needsInstallFirst = isIOS() && !isStandalonePwa();
 
+  /** يقرأ إذن المتصفح الحالي ويحدّد البطاقة المناسبة. */
+  const evaluate = useCallback(() => {
+    if (!user || !isPushSupported()) {
+      setStage('hidden');
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      setStage('hidden');
+      // الإذن صار متاحاً (مثلاً بعد السماح من إعدادات المتصفح) ⇒ اشتراك صامت.
+      void ensurePushSubscription();
+      return;
+    }
+    if (needsInstallFirst) {
+      setStage('ios');
+      return;
+    }
+    setStage(Notification.permission === 'denied' ? 'blocked' : 'ask');
+  }, [user, needsInstallFirst]);
+
   useEffect(() => {
-    if (!user) return;
-    if (!isPushSupported()) return;
-    // granted: الاشتراك تتم مزامنته تلقائياً. denied: لا يمكن سؤال المستخدم
-    // مرة أخرى من الصفحة (يلزمه تغيير إعدادات الموقع بنفسه).
-    if (Notification.permission !== 'default') return;
-    if (!navigator.onLine) return;
+    if (!user) {
+      setStage('hidden');
+      return;
+    }
+
+    evaluate();
 
     const dismissedAt = getNotifPromptDismissedAt();
     if (dismissedAt && Date.now() - dismissedAt < RETRY_AFTER_MS) return;
+    if (!navigator.onLine) return;
 
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setVisible(true), SHOW_DELAY_MS);
+    timer.current = window.setTimeout(() => setReady(true), SHOW_DELAY_MS);
     return () => window.clearTimeout(timer.current);
-  }, [user]);
+  }, [user, evaluate]);
+
+  // العودة للصفحة بعد تغيير إعدادات المتصفح: نعيد القراءة فوراً بدل انتظار reload.
+  useEffect(() => {
+    if (!user) return;
+    const sync = () => {
+      if (document.visibilityState === 'hidden') return;
+      evaluate();
+    };
+    document.addEventListener('visibilitychange', sync);
+    window.addEventListener('focus', sync);
+    return () => {
+      document.removeEventListener('visibilitychange', sync);
+      window.removeEventListener('focus', sync);
+    };
+  }, [user, evaluate]);
 
   useEffect(
     () => () => {
@@ -65,7 +116,7 @@ export default function NotificationPrompt() {
 
   const dismiss = () => {
     setNotifPromptDismissed();
-    setVisible(false);
+    setDismissed(true);
     setFeedback(null);
   };
 
@@ -75,14 +126,29 @@ export default function NotificationPrompt() {
     try {
       await subscribeToPush();
       setFeedback('enabled');
-      hideTimer.current = window.setTimeout(() => setVisible(false), SUCCESS_HIDE_MS);
+      hideTimer.current = window.setTimeout(() => setDismissed(true), SUCCESS_HIDE_MS);
     } catch (error) {
       const message = (error as Error)?.message ?? '';
-      setFeedback(Notification.permission === 'denied' ? 'denied' : /denied|permission/i.test(message) ? 'denied' : 'failed');
+      const blocked = Notification.permission === 'denied' || /denied|permission/i.test(message);
+      setFeedback(blocked ? 'denied' : 'failed');
+      if (blocked) setStage('blocked');
     } finally {
       setBusy(false);
     }
   };
+
+  /** بعد السماح من إعدادات المتصفح: نعيد الفحص ثم نشترك فوراً. */
+  const recheck = async () => {
+    setFeedback(null);
+    if (Notification.permission === 'granted') {
+      await enable();
+      return;
+    }
+    evaluate();
+    setFeedback('denied');
+  };
+
+  const visible = ready && !dismissed && stage !== 'hidden';
 
   return (
     <AnimatePresence>
@@ -111,15 +177,27 @@ export default function NotificationPrompt() {
               </span>
               <div className="min-w-0 space-y-0.5">
                 <p className="text-sm font-bold text-white">
-                  {t(needsInstallFirst ? 'notif.iosTitle' : 'notif.title')}
+                  {t(
+                    stage === 'ios'
+                      ? 'notif.iosTitle'
+                      : stage === 'blocked'
+                        ? 'notif.blockedTitle'
+                        : 'notif.title',
+                  )}
                 </p>
                 <p className="text-xs leading-relaxed text-gray-400">
-                  {t(needsInstallFirst ? 'notif.iosIntro' : 'notif.desc')}
+                  {t(
+                    stage === 'ios'
+                      ? 'notif.iosIntro'
+                      : stage === 'blocked'
+                        ? 'notif.blockedDesc'
+                        : 'notif.desc',
+                  )}
                 </p>
               </div>
             </div>
 
-            {needsInstallFirst ? (
+            {stage === 'ios' ? (
               <ol className="mt-4 space-y-1.5 text-xs text-gray-300">
                 <li className="flex items-start gap-2">
                   <span className="install-step shrink-0">1</span>
@@ -137,7 +215,7 @@ export default function NotificationPrompt() {
             ) : (
               <button
                 type="button"
-                onClick={enable}
+                onClick={stage === 'blocked' ? recheck : enable}
                 disabled={busy || feedback === 'enabled'}
                 className="btn-fire mt-4 w-full rounded-xl px-4 py-2.5 text-sm font-bold text-white disabled:opacity-70"
               >
@@ -145,7 +223,9 @@ export default function NotificationPrompt() {
                   ? t('notif.enabled')
                   : busy
                     ? t('notif.enabling')
-                    : t('notif.accept')}
+                    : stage === 'blocked'
+                      ? t('notif.recheck')
+                      : t('notif.accept')}
               </button>
             )}
 

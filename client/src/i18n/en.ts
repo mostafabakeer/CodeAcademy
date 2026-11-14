@@ -640,6 +640,10 @@ export const en: TranslationKeys = {
     accept: 'Turn on notifications',
     enabling: 'Enabling…',
     enabled: 'Notifications enabled ✓',
+    blockedTitle: 'Notifications are blocked on this device',
+    blockedDesc:
+      'Tap the lock (or ⓘ) icon next to the site address → Notifications → Allow, then press "Check again" — the subscription completes instantly, no reload needed.',
+    recheck: 'Check again',
     denied: 'The browser blocked notifications. Open the site settings in your browser, allow notifications, then try again.',
     failed: 'Could not enable notifications. Check your connection and try again.',
     later: 'Later',

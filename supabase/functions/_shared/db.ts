@@ -1944,11 +1944,37 @@ export const BACKUP_TABLES = [
   'app_config',
 ] as const;
 
-export async function exportAllToBackup(bucket: string): Promise<{ url: string; size: number; fileName: string }> {
+/** حجم صفحة القراءة — PostgREST يحدّ أي استعلام بـ 1000 صف افتراضياً. */
+const BACKUP_PAGE_SIZE = 1000;
+
+/**
+ * قراءة كل صفوف جدول على صفحات.
+ *
+ * بدون التقسيم كان التصدير يقف عند 1000 صف بصمت (حد PostgREST)، فتخرج نسخة
+ * احتياطية ناقصة تبدو سليمة — أخطر من الفشل الصريح.
+ */
+async function selectAllRows(table: string, columns: string): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let from = 0; ; from += BACKUP_PAGE_SIZE) {
+    const { data, error } = await sb
+      .from(table)
+      .select(columns)
+      .range(from, from + BACKUP_PAGE_SIZE - 1);
+    if (error) throw new Error(`فشل تصدير جدول ${table}: ${error.message}`);
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < BACKUP_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+export async function exportAllToBackup(
+  bucket: string,
+): Promise<{ url: string; path: string; size: number; fileName: string }> {
   const { data: existing } = await sb.storage.getBucket(bucket);
   if (!existing) {
-    const { error: bucketError } = await sb.storage.createBucket(bucket, { public: false });
-    if (bucketError) throw new Error(`فشل إنشاء bucket النسخ الاحتياطي: ${bucketError.message}`);
+    const { error } = await sb.storage.createBucket(bucket, { public: false });
+    if (error) throw new Error(`فشل إنشاء bucket النسخ الاحتياطي: ${error.message}`);
   }
 
   const snapshot: Record<string, any> = {
@@ -1956,59 +1982,64 @@ export async function exportAllToBackup(bucket: string): Promise<{ url: string; 
     tables: {} as Record<string, any>,
   };
 
-  const tableQueries = BACKUP_TABLES.map((table) => {
-    if (table === 'users') {
-      return sb.from(table).select('id, full_name, phone, grade, role, subscription, blocked, created_at');
-    }
-    return sb.from(table).select('*');
-  });
+  // جدول users يُصدَّر بأعمدة محددة: لا نُخرّج password_hash ولا أي سر إلى ملف.
+  const USER_COLUMNS = 'id, full_name, username, phone, grade, role, subscription, blocked, created_at';
 
-  const results = await Promise.all(tableQueries);
-  for (let i = 0; i < BACKUP_TABLES.length; i++) {
-    snapshot.tables[BACKUP_TABLES[i]] = results[i].data ?? [];
+  for (const table of BACKUP_TABLES) {
+    snapshot.tables[table] = await selectAllRows(table, table === 'users' ? USER_COLUMNS : '*');
   }
 
   const json = JSON.stringify(snapshot, null, 2);
+  const bytes = new TextEncoder().encode(json);
   const fileName = `backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
   const { error } = await sb.storage
     .from(bucket)
-    .upload(fileName, new TextEncoder().encode(json), { contentType: 'application/json', upsert: false });
+    .upload(fileName, bytes, { contentType: 'application/json', upsert: false });
   if (error) throw new Error(`فشل رفع النسخة الاحتياطية: ${error.message}`);
 
-  const { data } = sb.storage.from(bucket).getPublicUrl(fileName);
-  return { url: data.publicUrl, size: json.length, fileName };
+  // الـ bucket خاص (public: false) — الرابط العام لا يعمل، فنوقّع رابطاً مؤقتاً.
+  const { data: signed } = await sb.storage.from(bucket).createSignedUrl(fileName, 60 * 60 * 24 * 7);
+  return {
+    url: signed?.signedUrl ?? '',
+    path: `${bucket}/${fileName}`,
+    size: bytes.length,
+    fileName,
+  };
 }
 
 export async function cleanupData(): Promise<{ trimmedFiles: number; trimmedResults: number }> {
   let trimmedFiles = 0;
   let trimmedResults = 0;
 
-  const { data: files } = await sb.from('code_files').select('id, versions').limit(200);
-  const fileUpdates = (files ?? []).filter((f) => {
+  const files = await selectAllRows('code_files', 'id, versions');
+  for (const f of files as { id: number; versions?: unknown }[]) {
     const versions = Array.isArray(f.versions) ? f.versions : [];
-    return versions.length > MAX_VERSIONS;
-  });
-  if (fileUpdates.length) {
-    await Promise.all(
-      fileUpdates.map((f) =>
-        sb.from('code_files').update({ versions: (Array.isArray(f.versions) ? f.versions : []).slice(-MAX_VERSIONS) }).eq('id', f.id)
-      )
-    );
-    trimmedFiles = fileUpdates.length;
+    if (versions.length <= MAX_VERSIONS) continue;
+    const { error } = await sb
+      .from('code_files')
+      .update({ versions: versions.slice(-MAX_VERSIONS) })
+      .eq('id', f.id);
+    if (error) {
+      console.error('[cleanup] trim code_files:', error.message);
+      continue;
+    }
+    trimmedFiles += 1;
   }
 
-  const { data: results } = await sb.from('exam_results').select('user_id, exam_id, history').limit(200);
-  const resultUpdates = (results ?? []).filter((r) => {
+  const results = await selectAllRows('exam_results', 'user_id, exam_id, history');
+  for (const r of results as { user_id: number; exam_id: number; history?: unknown }[]) {
     const history = Array.isArray(r.history) ? r.history : [];
-    return history.length > MAX_HISTORY;
-  });
-  if (resultUpdates.length) {
-    await Promise.all(
-      resultUpdates.map((r) =>
-        sb.from('exam_results').update({ history: (Array.isArray(r.history) ? r.history : []).slice(-MAX_HISTORY) }).eq('user_id', r.user_id).eq('exam_id', r.exam_id)
-      )
-    );
-    trimmedResults = resultUpdates.length;
+    if (history.length <= MAX_HISTORY) continue;
+    const { error } = await sb
+      .from('exam_results')
+      .update({ history: history.slice(-MAX_HISTORY) })
+      .eq('user_id', r.user_id)
+      .eq('exam_id', r.exam_id);
+    if (error) {
+      console.error('[cleanup] trim exam_results:', error.message);
+      continue;
+    }
+    trimmedResults += 1;
   }
 
   return { trimmedFiles, trimmedResults };
