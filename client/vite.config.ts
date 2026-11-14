@@ -82,6 +82,9 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'dr-pyodide',
+              // لا نُخزّن إلا الردود الناجحة: بدونها كان أي 404/خطأ يُحفظ
+              // ويُعاد للطالب 30 يوماً، فيفشل Python بلا أي إصلاح ممكن.
+              cacheableResponse: { statuses: [200] },
               expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 30 },
             },
           },

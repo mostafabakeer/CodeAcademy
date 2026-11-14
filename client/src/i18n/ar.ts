@@ -259,6 +259,7 @@ export const ar = {
     preview: 'المعاينة',
     outputEmpty: 'اضغط زر التشغيل ▶ لترى نتيجة كودك هنا',
     pythonLoading: 'أول تشغيل لـ Python ينزّل المحرك مرة واحدة (~10 ميجا) وقد يستغرق بعض الثواني...',
+    pythonDownloading: 'جارٍ تنزيل محرك Python…',
     pythonNotSupported: 'عذراً، لا يمكن تنفيذ كود Python في المتصفح.',
     linkHint: 'اربط ملفاتك ببعض: في ملف HTML اكتب مثلاً <link rel="stylesheet" href="style.css"> وستظهر تنسيقات ملف CSS تلقائياً عند التشغيل.',
     fullPreview: 'عرض كامل',

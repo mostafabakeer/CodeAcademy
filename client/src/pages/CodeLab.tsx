@@ -14,7 +14,7 @@ import {
   type CodeLanguage,
 } from '../lib/localFileSystem';
 import { getCodeDraft, setCodeDraft, clearCodeDraft } from '../lib/localStore';
-import { runPython, isPythonReady, warmUpPython } from '../lib/pythonRunner';
+import { runPython, isPythonReady, warmUpPython, onPythonInitProgress } from '../lib/pythonRunner';
 import {
   syncCodeFiles,
   pushCodeFile,
@@ -526,6 +526,20 @@ export default function CodeLab() {
     void loadFiles(true);
     warmUpPython();
 
+    // نسبة تنزيل المحرك (أول مرة فقط): تُطمئن الطالب على شبكة بطيئة بدل
+    // رسالة ثابتة تبدو معلّقة.
+    const stopProgress = onPythonInitProgress(({ percent }) => {
+      const text =
+        percent === null
+          ? t('code.pythonDownloading')
+          : `${t('code.pythonDownloading')} ${percent}%`;
+      setOutput((prev) =>
+        prev === '' || prev === t('code.pythonLoading') || prev.startsWith(t('code.pythonDownloading'))
+          ? text
+          : prev,
+      );
+    });
+
     const onOnline = () => void loadFiles(true);
     const onVisible = () => {
       if (document.visibilityState === 'visible') void loadFiles(true);
@@ -533,10 +547,11 @@ export default function CodeLab() {
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
+      stopProgress();
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [loadFiles]);
+  }, [loadFiles, t]);
 
   // حفظ المسودة محلياً عند كل تغيير (تستخدمها إعادة التحميل المفاجئ).
   useEffect(() => {

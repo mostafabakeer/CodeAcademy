@@ -232,10 +232,6 @@ html[lang='en'] body {
   45% { opacity: 0.95; }
   100% { transform: translateY(var(--rise, -280px)) translateX(var(--drift, 22px)) scale(1.15); opacity: 0; }
 }
-@keyframes sparkle {
-  0%, 100% { opacity: 0.75; }
-  50% { opacity: 1; }
-}
 @keyframes emberFloat {
   0% { transform: translate(0, 0) scale(1); opacity: 0; }
   18% { opacity: 0.95; }
@@ -263,9 +259,9 @@ html[lang='en'] body {
   background: radial-gradient(circle at 35% 35%, #ffffff 0%, #fde68a 45%, #fbbf24 100%);
   box-shadow: 0 0 6px 1px rgba(253, 224, 71, 0.85);
   opacity: 0;
-  animation:
-    sparkRise var(--dur, 2s) cubic-bezier(0.22, 0.9, 0.36, 1) var(--delay, 0s) infinite,
-    sparkle var(--tw, 0.9s) ease-in-out var(--delay, 0s) infinite;
+  /* حركة واحدة فقط: كانت هناك حركة ثانية (`sparkle`) تُحرّك opacity أيضاً،
+     فتلغي تلاشي الشظية وتجعلها تظهر وتختفي فجأة عند حدود الحقل. */
+  animation: sparkRise var(--dur, 2s) cubic-bezier(0.22, 0.9, 0.36, 1) var(--delay, 0s) infinite;
 }
 .ember {
   position: absolute;
@@ -557,18 +553,22 @@ h1, h2, h3 {
   }
 }
 
-/* تقليل الحركة على الموبايل افتراضياً — يحترم prefers-reduced-motion */
-@media (max-width: 767px), (prefers-reduced-motion: reduce) {
+/*
+ * احترام تفضيل «تقليل الحركة» (إعداد في النظام أو المتصفح): إيقاف كل الحركة.
+ *
+ * كان الشرط هنا `(max-width: 767px), (prefers-reduced-motion: reduce)` — أي أن
+ * كل حركة الموقع كانت تُطفأ على أي هاتف، فتجمد شظايا صفحة الدخول وكل الحركات.
+ * تقليل الحركة يجب أن يتبع اختيار المستخدم فقط، لا عرض الشاشة.
+ */
+@media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
 
-/* استثناءات: عناصر تحتاج حركة بطيئة مريحة حتى على الموبايل ومع تقليل الحركة */
-@media (max-width: 767px), (prefers-reduced-motion: reduce) {
+  /* استثناءات: مؤشرات التحميل يجب أن تظل تدور وإلا بدت الصفحة معلّقة. */
   .cm-editor .cm-cursor,
   .spinner,
   .loading-indicator,
@@ -577,6 +577,16 @@ h1, h2, h3 {
   .stats-arc-fg {
     animation-duration: 1s !important;
     animation-iteration-count: infinite !important;
+  }
+}
+
+/*
+ * على الموبايل نوقف الحركات الثقيلة المستمرة فقط (شبكة الخلفية المتحركة)،
+ * ونترك الشظايا والانتقالات الخفيفة تعمل كما هي.
+ */
+@media (max-width: 767px) {
+  .parallax-grid {
+    animation: none !important;
   }
 }
 
@@ -962,11 +972,5 @@ iframe.pdf-protected {
   color: #fb7185;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
+/* (حُذف تكرار قاعدة تقليل الحركة الذي كان هنا: كان يعيد تعطيل مؤشرات
+   التحميل بعد استثنائها في القاعدة الأساسية أعلاه.) */
