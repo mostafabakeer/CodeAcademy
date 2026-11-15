@@ -87,6 +87,8 @@ export type PythonInitProgress = {
   phase: PythonInitPhase;
   /** نسبة 0–100 لكل الملفات (وليست للملف الحالي)، أو null إن كان الحجم مجهولاً. */
   percent: number | null;
+  /** true إذا كنا نجرّب إصداراً أقدم بعد فشل الإصدار الأول على هذا الجهاز. */
+  fallback: boolean;
 };
 
 /**
@@ -393,7 +395,7 @@ async function clearEngineCache(): Promise<void> {
 }
 
 /** يحاول تهيئة Pyodide من مصدر واحد داخل Worker جديد. */
-function tryInitFrom(base: string, reload: boolean): Promise<void> {
+function tryInitFrom(base: string, reload: boolean, fallback = false): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let blobUrl = '';
@@ -445,6 +447,7 @@ function tryInitFrom(base: string, reload: boolean): Promise<void> {
         emitProgress({
           phase,
           percent: total > 0 ? Math.min(to, Math.round(from + (loaded / total) * (to - from))) : null,
+          fallback,
         });
         return;
       }
@@ -506,8 +509,12 @@ function ensureWorker(): Promise<void> {
     const startedAt = Date.now();
     const withinDeadline = () => Date.now() - startedAt <= INIT_DEADLINE_MS;
 
-    for (const engine of preferredEngines()) {
+    const engines = preferredEngines();
+    for (let engineIndex = 0; engineIndex < engines.length; engineIndex++) {
       if (!withinDeadline()) break;
+      const engine = engines[engineIndex];
+      // كل ما بعد الإصدار الأول = إصدار بديل (نُخبر الطالب بذلك في شريط التقدّم).
+      const fallback = engineIndex > 0;
 
       const sources: string[] = [];
       if (engine.selfHosted) sources.push(sameOriginBase(engine.version));
@@ -519,7 +526,7 @@ function ensureWorker(): Promise<void> {
         if (!withinDeadline()) break;
 
         try {
-          await tryInitFrom(base, false);
+          await tryInitFrom(base, false, fallback);
           rememberEngine(engine.version);
           return;
         } catch (e) {
@@ -538,7 +545,7 @@ function ensureWorker(): Promise<void> {
           const reload = kind === 'cache';
           if (reload) await clearEngineCache();
           try {
-            await tryInitFrom(base, reload);
+            await tryInitFrom(base, reload, fallback);
             rememberEngine(engine.version);
             return;
           } catch (e2) {

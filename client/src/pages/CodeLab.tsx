@@ -528,13 +528,16 @@ export default function CodeLab() {
 
     // نسبة تنزيل المحرك (أول مرة فقط): تُطمئن الطالب على شبكة بطيئة بدل
     // رسالة ثابتة تبدو معلّقة.
-    const stopProgress = onPythonInitProgress(({ percent }) => {
-      const text =
-        percent === null
-          ? t('code.pythonDownloading')
-          : `${t('code.pythonDownloading')} ${percent}%`;
+    const stopProgress = onPythonInitProgress(({ percent, fallback }) => {
+      // الإصدار البديل يبدأ عدّاده من 0% بعد فشل الأول، فنسمّيه باسمه حتى لا
+      // يبدو للطالب أن التنزيل «رجع لورا» أو تكرر بلا سبب.
+      const label = fallback ? t('code.pythonFallbackDownloading') : t('code.pythonDownloading');
+      const text = percent === null ? label : `${label} ${percent}%`;
       setOutput((prev) =>
-        prev === '' || prev === t('code.pythonLoading') || prev.startsWith(t('code.pythonDownloading'))
+        prev === '' ||
+        prev === t('code.pythonLoading') ||
+        prev.startsWith(t('code.pythonDownloading')) ||
+        prev.startsWith(t('code.pythonFallbackDownloading'))
           ? text
           : prev,
       );

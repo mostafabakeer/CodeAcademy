@@ -262,6 +262,7 @@ export const en: TranslationKeys = {
     outputEmpty: 'Press Run ▶ to see your code result here',
     pythonLoading: 'The first Python run downloads the engine once (~10 MB) and may take a few seconds...',
     pythonDownloading: 'Downloading the Python engine…',
+    pythonFallbackDownloading: 'Downloading an alternative Python engine…',
     pythonNotSupported: 'Sorry, Python code cannot be executed in the browser.',
     linkHint: 'Link your files: in an HTML file use e.g. <link rel="stylesheet" href="style.css"> and the CSS styles will apply automatically when running.',
     fullPreview: 'Full Preview',
