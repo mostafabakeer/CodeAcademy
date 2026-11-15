@@ -1,3 +1,5 @@
+import { getLocal, removeLocal, setLocal } from './storage';
+
 /**
  * تشغيل Python في المتصفح داخل Web Worker معزول.
  *
@@ -15,6 +17,8 @@
  * 1) نفس الأصل من `/py-engine/<version>/` (أسرع في مصر، ويعمل مع الكاش).
  * 2) CDN مثبّت الإصدار كاحتياطي — حتى لا تتعطّل ميزة Python كلها لو نقصت
  *    الأصول من حزمة النشر (وهو ما حدث فعلاً في نسخة سابقة).
+ * 3) إصدار أقدم من الـ CDN إذا فشل إقلاع الإصدار الأول على الجهاز نفسه
+ *    (عيب Pyodide 0.26 على بعض أجهزة أندرويد — انظر ENGINES أدناه).
  *
  * المسار يحمل رقم الإصدار لأن `_headers` يضع كاشاً طويلاً على `/py-engine/*`،
  * وردود 404 القديمة المخزَّنة في متصفحات الطلاب كانت ستُخفي الإصلاح.
@@ -30,11 +34,27 @@
  * المحاولة (فشل تنزيله كان يُنتج تعليقاً صامتاً حتى مهلة الـ 120 ثانية).
  */
 
-/** يجب أن يطابق هذا الثابت EXPECTED_VERSION في client/scripts/copy-pyodide.mjs */
-const PYODIDE_VERSION = '0.26.4';
+/**
+ * محركات Python بالترتيب الذي نجرّبها به.
+ *
+ * لماذا أكثر من إصدار؟
+ * Pyodide 0.26+ لا يقلع على بعض أجهزة أندرويد (سامسونج خصوصاً) وينتهي بـ
+ * `exit(1)` داخل `init_fs_encoding` — عيب معروف في Pyodide لم يستطع مطوّروها
+ * إعادة إنتاجه (pyodide#5280)، بينما 0.25 يقلع على نفس الأجهزة. فلا فائدة من
+ * إعادة محاولة 0.26 على الجهاز نفسه؛ ننتقل مباشرة للإصدار الأقدم.
+ *
+ * الإصدار الأول مستضاف عندنا (أسرع في مصر + يعمل أوفلاين)، والثاني من الـ CDN
+ * فقط حتى لا نضيف ~7.4MB لحزمة النشر بلا داعٍ.
+ *
+ * يجب أن يطابق الإصدار الأول EXPECTED_VERSION في client/scripts/copy-pyodide.mjs.
+ */
+const ENGINES: ReadonlyArray<{ version: string; selfHosted: boolean }> = [
+  { version: '0.26.4', selfHosted: true },
+  { version: '0.25.1', selfHosted: false },
+];
 
-const PYODIDE_BASE = `/py-engine/${PYODIDE_VERSION}/`;
-const PYODIDE_CDN_BASE = `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`;
+/** الإصدار الذي نجح آخر مرة على هذا الجهاز — نتذكّره لئلا نعيد تنزيل الفاشل. */
+const ENGINE_MEMORY_KEY = 'pyEngineVersion';
 
 /** مهلة كل محاولة تحميل — 10MB على شبكة موبايل بطيئة قد تحتاج أكثر من دقيقة. */
 const INIT_TIMEOUT_MS = 120_000;
@@ -43,8 +63,11 @@ const INIT_TIMEOUT_MS = 120_000;
  * سقف زمني لكل المحاولات معاً. بدونه قد ينتظر الطالب دقائق على شبكة ميتة
  * قبل أن يرى أي رسالة. (المهل داخل المحاولة «مهلة خمول»: ما دام الملف ينزل
  * فعلاً نتركه يكمل — الشبكة هنا بطيئة لكنها تتحرك.)
+ *
+ * رُفع إلى 7 دقائق لأن مسار الاحتياط الكامل قد ينزّل محركين (12MB ثم 6MB) على
+ * شبكة بطيئة؛ وقطع المحاولة قبل اكتمالها يُهدر ما نزل منها بالفعل.
  */
-const INIT_DEADLINE_MS = 300_000;
+const INIT_DEADLINE_MS = 420_000;
 
 /** مهلة تنفيذ الكود بعد جهوزية المحرك. */
 const RUN_TIMEOUT_MS = 5_000;
@@ -150,6 +173,27 @@ self.onmessage = async function (event) {
 
   if (msg.type === 'init') {
     var stdlibUrl = '';
+    // آخر سطور ما كتبه Python/Emscripten قبل الفشل. رسالة exit(1) وحدها لا
+    // تقول السبب؛ السطر الحقيقي (مثل init_fs_encoding) يُكتب في الكونسول.
+    var captured = [];
+    var capture = function (text) {
+      if (!text) return;
+      captured.push(String(text));
+      if (captured.length > 40) captured.shift();
+    };
+    var consoleError = console.error;
+    var consoleWarn = console.warn;
+    var wrapConsole = function (original) {
+      return function () {
+        capture(Array.prototype.join.call(arguments, ' '));
+        return original.apply(console, arguments);
+      };
+    };
+    try {
+      console.error = wrapConsole(consoleError);
+      console.warn = wrapConsole(consoleWarn);
+    } catch (_) {}
+
     try {
       // إن فشل instantiateStreaming (ترويسة content-type خاطئة مثلاً) نكمل
       // بالمسار العادي بدل التعليق الصامت حتى المهلة.
@@ -186,16 +230,28 @@ self.onmessage = async function (event) {
       stdlibUrl = URL.createObjectURL(new Blob([stdlib], { type: 'application/zip' }));
       stdlib = null;
 
-      self.__pyodide = await loadPyodide({ indexURL: msg.base, stdLibURL: stdlibUrl });
+      self.__pyodide = await loadPyodide({
+        indexURL: msg.base,
+        stdLibURL: stdlibUrl,
+        // حتى لو أفلتت منّا رسالة من مسار آخر، نحتفظ بها للرسالة النهائية.
+        stdout: capture,
+        stderr: capture,
+      });
       self.postMessage({ type: 'ready', base: msg.base });
     } catch (err) {
       var name = (err && err.name) ? String(err.name) : '';
       var message = (err && err.message) ? String(err.message) : String(err);
+      var tail = captured.join(' ').replace(/\s+/g, ' ').trim();
+      if (tail) message += ' | ' + tail.slice(-320);
       self.postMessage({
         type: 'init-error',
         message: name && name !== 'Error' ? name + ': ' + message : message,
       });
     } finally {
+      try {
+        console.error = consoleError;
+        console.warn = consoleWarn;
+      } catch (_) {}
       if (stdlibUrl) { try { URL.revokeObjectURL(stdlibUrl); } catch (_) {} }
     }
     return;
@@ -270,12 +326,40 @@ function emitProgress(progress: PythonInitProgress): void {
 }
 
 /** المسار المطلق لأصول المحرك على نفس الأصل (أسرع ويعمل أوفلاين). */
-function sameOriginBase(): string {
+function sameOriginBase(version: string): string {
+  const path = `/py-engine/${version}/`;
   try {
-    return new URL(PYODIDE_BASE, `${window.location.origin}/`).href;
+    return new URL(path, `${window.location.origin}/`).href;
   } catch {
-    return PYODIDE_BASE;
+    return path;
   }
+}
+
+/** أصول الإصدار نفسه من jsDelivr (احتياطي عند نقص أصول النشر). */
+function cdnBase(version: string): string {
+  return `https://cdn.jsdelivr.net/npm/pyodide@${version}/`;
+}
+
+/**
+ * ترتيب المحركات لهذا الجهاز: الناجح سابقاً أولاً.
+ *
+ * بدون ذلك يعيد جهازٌ مصاب بعيب 0.26 تنزيل 12MB في كل زيارة ثم يفشل، قبل أن
+ * يصل إلى 0.25 — كارثة على شبكة بطيئة. بعد أول نجاح نبدأ بالإصدار العامل.
+ */
+function preferredEngines(): ReadonlyArray<{ version: string; selfHosted: boolean }> {
+  const remembered = getLocal(ENGINE_MEMORY_KEY);
+  if (!remembered) return ENGINES;
+  const first = ENGINES.filter((engine) => engine.version === remembered);
+  if (first.length === 0) return ENGINES;
+  return [...first, ...ENGINES.filter((engine) => engine.version !== remembered)];
+}
+
+function rememberEngine(version: string): void {
+  setLocal(ENGINE_MEMORY_KEY, version);
+}
+
+function forgetEngine(version: string): void {
+  if (getLocal(ENGINE_MEMORY_KEY) === version) removeLocal(ENGINE_MEMORY_KEY);
 }
 
 /** يُسقط الـ Worker الحالي (بعد مهلة/خطأ) حتى يُعاد إنشاؤه في التشغيل التالي. */
@@ -392,7 +476,8 @@ type FailureKind = 'cache' | 'network' | 'device';
  * تصنيف سبب فشل المحاولة — يحدّد شكل المحاولة التالية.
  * - `cache`: رد قديم/ناقص مخزَّن ⇒ امسح الكاش وأعد التنزيل.
  * - `network`: انقطاع/مهلة ⇒ أعد المحاولة بالكاش (لا تُهدر 10MB نزلت فعلاً).
- * - `device`: بايثون نفسه لم يقلع (ذاكرة/متصفح) ⇒ لا فائدة من التكرار، انتقل للـ CDN.
+ * - `device`: بايثون نفسه لم يقلع (ذاكرة/متصفح) ⇒ لا فائدة من التكرار على
+ *   الإصدار نفسه، انتقل للإصدار الأقدم من الـ CDN.
  */
 function classifyFailure(message: string): FailureKind {
   if (/HTTP 4\d\d|غير صالح|الملف ناقص/i.test(message)) return 'cache';
@@ -405,55 +490,72 @@ function classifyFailure(message: string): FailureKind {
 /**
  * ينشئ الـ Worker ويحمّل Pyodide.
  *
- * الترتيب: نفس الأصل ⇒ (إعادة محاولة مناسبة لسبب الفشل) ⇒ CDN.
- * إعادة المحاولة هي التي تُخرج المتصفحات التي علِق فيها رد قديم (404/ملف ناقص)
- * من الحلقة المسدودة، وكانت تحتاج قبل ذلك مسح بيانات الموقع يدوياً.
+ * لكل إصدار: نفس الأصل (إن كان مستضافاً عندنا) ⇒ CDN.
+ * وإذا فشل **إقلاع** Python نفسه (لا التنزيل) لا نُكرّر على الإصدار نفسه —
+ * فالعيب في الإصدار مع هذا الجهاز — بل ننتقل للإصدار الأقدم فوراً. هذا يوفّر
+ * ~12MB من إعادة تنزيل محكوم عليها بالفشل على شبكة بطيئة.
+ *
+ * إعادة المحاولة (بعد مسح الكاش أو فوقه) تُخرج المتصفحات التي علِق فيها رد
+ * قديم/ناقص من الحلقة المسدودة، وكانت تحتاج قبل ذلك مسح بيانات الموقع يدوياً.
  */
 function ensureWorker(): Promise<void> {
   if (readyPromise) return readyPromise;
 
   readyPromise = (async () => {
     const errors: string[] = [];
-    const same = sameOriginBase();
     const startedAt = Date.now();
     const withinDeadline = () => Date.now() - startedAt <= INIT_DEADLINE_MS;
 
-    // 1) نفس الأصل — المسار الطبيعي والأسرع.
-    let kind: FailureKind;
-    try {
-      await tryInitFrom(same, false);
-      return;
-    } catch (e) {
-      const message = (e as Error).message;
-      // tryInitFrom أنهى الـ Worker وأسقط المرجع بنفسه؛ لا نستدعي resetWorker
-      // هنا لأنه كان سيُفرغ readyPromise أثناء تنفيذها.
-      errors.push(`${same} → ${message}`);
-      kind = classifyFailure(message);
-    }
+    for (const engine of preferredEngines()) {
+      if (!withinDeadline()) break;
 
-    // 2) إعادة محاولة على نفس الأصل، بشكل يتبع سبب الفشل.
-    if (kind !== 'device' && withinDeadline()) {
-      const reload = kind === 'cache';
-      if (reload) await clearEngineCache();
-      try {
-        await tryInitFrom(same, reload);
-        return;
-      } catch (e) {
-        errors.push(`${same} → ${(e as Error).message}`);
+      const sources: string[] = [];
+      if (engine.selfHosted) sources.push(sameOriginBase(engine.version));
+      sources.push(cdnBase(engine.version));
+
+      let bootFailed = false;
+
+      for (const base of sources) {
+        if (!withinDeadline()) break;
+
+        try {
+          await tryInitFrom(base, false);
+          rememberEngine(engine.version);
+          return;
+        } catch (e) {
+          // tryInitFrom أنهى الـ Worker وأسقط المرجع بنفسه؛ لا نستدعي
+          // resetWorker هنا لأنه كان سيُفرغ readyPromise أثناء تنفيذها.
+          const message = (e as Error).message;
+          errors.push(`${base} → ${message}`);
+          const kind = classifyFailure(message);
+
+          if (kind === 'device') {
+            bootFailed = true;
+            break;
+          }
+
+          if (!withinDeadline()) break;
+          const reload = kind === 'cache';
+          if (reload) await clearEngineCache();
+          try {
+            await tryInitFrom(base, reload);
+            rememberEngine(engine.version);
+            return;
+          } catch (e2) {
+            errors.push(`${base} → ${(e2 as Error).message}`);
+          }
+        }
+      }
+
+      if (bootFailed) {
+        // كاش هذا الإصدار لم يعد موثوقاً بعد فشل الإقلاع؛ امسحه حتى لا يعود
+        // الطالب إليه في المحاولة القادمة بدل الإصدار الأقدم الناجح.
+        await clearEngineCache();
+        forgetEngine(engine.version);
       }
     }
 
-    // 3) الـ CDN كملاذ أخير.
-    if (withinDeadline()) {
-      try {
-        await tryInitFrom(PYODIDE_CDN_BASE, false);
-        return;
-      } catch (e) {
-        errors.push(`${PYODIDE_CDN_BASE} → ${(e as Error).message}`);
-      }
-    } else {
-      errors.push('تجاوزنا الوقت المسموح لتحميل المحرك');
-    }
+    if (!withinDeadline()) errors.push('تجاوزنا الوقت المسموح لتحميل المحرك');
 
     throw new Error(errors.join('\n'));
   })();
@@ -480,8 +582,12 @@ export function warmUpPython(): void {
 
 /** تلميح مناسب لكل نوع فشل — الرسالة العامة كانت تُخفي السبب الحقيقي. */
 function hintFor(reason: string): string {
+  // السطر الحقيقي من Python يأتي الآن ضمن الرسالة (نلتقط stderr في الـ Worker).
+  if (/init_fs_encoding|encodings|Fatal Python error/i.test(reason)) {
+    return 'محرك Python لا يستطيع الإقلاع على هذا المتصفح/الجهاز حتى بعد تجربة إصدار أقدم. افتح الموقع من Chrome أو Safari مباشرة (لا من متصفح داخل تطبيق مثل فيسبوك أو إنستجرام)، وأغلق التطبيقات الأخرى ثم أعد المحاولة. إن تكرر فأبلغنا بنوع الجهاز وإصدار المتصفح.';
+  }
   if (/exit\(1\)/i.test(reason)) {
-    return 'المحرك نزل لكن بايثون فشل في الإقلاع — غالباً انقطع التنزيل. أعد المحاولة والموقع في المقدمة (لا تخرج منه)، ولو تكرر أغلق التطبيق وافتحه من جديد.';
+    return 'المحرك نزل لكن بايثون فشل في الإقلاع. أعد المحاولة والموقع في المقدمة (لا تخرج منه)، ولو تكرر أغلق التطبيق وافتحه من جديد.';
   }
   if (/HTTP 4\d\d/i.test(reason)) {
     return 'ملفات المحرك غير متاحة على الخادم الآن. أبلغ إدارة الموقع إن تكرر الخطأ.';
@@ -501,7 +607,15 @@ function hintFor(reason: string): string {
 function initErrorOutput(reason: string): string {
   // نعرض سبباً مختصراً قابلاً للقراءة بدل الرسالة العامة القديمة التي كانت
   // تُخفي الحقيقة (كانت تقول "تحقّق من اتصالك" حتى لو كان الخطأ 404).
-  const detail = reason.replace(/\s+/g, ' ').trim().slice(0, 400);
+  // نُبقي آخر محاولتين فقط (الأحدث والأدق)، ونقصّ كل سطر حتى لا تختفي تفاصيل
+  // stderr المهمة في آخر الرسالة خلف عناوين المحاولات السابقة.
+  const lines = reason
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-2)
+    .map((line) => (line.length > 320 ? `${line.slice(0, 320)}…` : line));
+  const detail = lines.join(' • ');
   return `${PYTHON_INIT_ERROR_TITLE}\n${detail ? `السبب: ${detail}\n` : ''}${hintFor(reason)}`;
 }
 
