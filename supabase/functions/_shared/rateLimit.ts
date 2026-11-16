@@ -49,8 +49,10 @@ const REGISTER_WINDOW = 60 * 60 * 1000; // ساعة
 const REGISTER_MAX = 8;
 
 /**
- * عنوان المتصل — نفضّل x-real-ip (يضعه Cloudflare) وإلا آخر قيمة من
- * x-forwarded-for (التي يضيفها الوكيل الموثوق) بدل الأولى القابلة للتزوير.
+ * عنوان المتصل.
+ * الـ Worker يكتب `x-real-ip` من `cf-connecting-ip` ويمسح ما أرسله العميل،
+ * فنثق به أولاً. لو وصل الطلب مباشرة (بلا وسيط) نأخذ أول عنوان في
+ * `x-forwarded-for` (الأصلي) لا آخره (عنوان الوسيط).
  */
 export function ipOf(req: Request): string {
   const real = req.headers.get('x-real-ip');
@@ -61,7 +63,7 @@ export function ipOf(req: Request): string {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    if (parts.length) return parts[parts.length - 1];
+    if (parts.length) return parts[0];
   }
   return 'unknown';
 }
@@ -75,6 +77,15 @@ export function loginBlocked(ip: string, identifier: string): boolean {
 
 export function recordLoginFailure(ip: string, identifier: string): void {
   incr(`login-fail-id:${identifier}`, LOGIN_ID_MAX, LOGIN_ID_WINDOW);
+  incr(`login-fail-ip:${ip}`, LOGIN_IP_MAX, LOGIN_IP_WINDOW);
+}
+
+/**
+ * يحتسب فشلاً على IP فقط (بلا معرّف).
+ * يُستخدم عندما يكون المعرّف غير موجود: نحمي من مسح جدول المستخدمين/استهلاك
+ * bcrypt دون أن نتيح لمهاجم تجميد أرقام هواتف حقيقية.
+ */
+export function recordIpFailure(ip: string): void {
   incr(`login-fail-ip:${ip}`, LOGIN_IP_MAX, LOGIN_IP_WINDOW);
 }
 

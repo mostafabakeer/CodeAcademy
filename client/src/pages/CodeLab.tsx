@@ -321,6 +321,10 @@ export default function CodeLab() {
   const currentRef = useRef<LocalFile | null>(null);
   const codeRef = useRef('');
   const didInitRef = useRef(false);
+  const tRef = useRef(t);
+  tRef.current = t;
+  /** آخر مزامنة تلقائية (عودة للتاب/الشبكة) — بوابة 60 ثانية تمنع طلباً لكل تنقّل. */
+  const lastAutoSyncRef = useRef(0);
 
   // Keep refs in sync so callbacks/effects can read latest values without
   // re-subscribing on every keystroke.
@@ -393,8 +397,8 @@ export default function CodeLab() {
             // وإلا فالمشكلة في الخادم (اشتراك/جلسة/خطأ مؤقت).
             setSyncNote(
               typeof navigator !== 'undefined' && !navigator.onLine
-                ? t('code.offlineOnly')
-                : t('code.syncError'),
+                ? tRef.current('code.offlineOnly')
+                : tRef.current('code.syncError'),
             );
           }
           setSyncing(false);
@@ -415,7 +419,7 @@ export default function CodeLab() {
         setLoading(false);
       }
     },
-    [refreshList, selectFile, t],
+    [refreshList, selectFile],
   );
 
   /**
@@ -523,6 +527,7 @@ export default function CodeLab() {
 
   // تحميل الملفات + مزامنة عند الفتح، وعند عودة الاتصال/النشاط.
   useEffect(() => {
+    lastAutoSyncRef.current = Date.now();
     void loadFiles(true);
     warmUpPython();
 
@@ -531,21 +536,30 @@ export default function CodeLab() {
     const stopProgress = onPythonInitProgress(({ percent, fallback }) => {
       // الإصدار البديل يبدأ عدّاده من 0% بعد فشل الأول، فنسمّيه باسمه حتى لا
       // يبدو للطالب أن التنزيل «رجع لورا» أو تكرر بلا سبب.
-      const label = fallback ? t('code.pythonFallbackDownloading') : t('code.pythonDownloading');
+      const label = fallback ? tRef.current('code.pythonFallbackDownloading') : tRef.current('code.pythonDownloading');
       const text = percent === null ? label : `${label} ${percent}%`;
       setOutput((prev) =>
         prev === '' ||
-        prev === t('code.pythonLoading') ||
-        prev.startsWith(t('code.pythonDownloading')) ||
-        prev.startsWith(t('code.pythonFallbackDownloading'))
+        prev === tRef.current('code.pythonLoading') ||
+        prev.startsWith(tRef.current('code.pythonDownloading')) ||
+        prev.startsWith(tRef.current('code.pythonFallbackDownloading'))
           ? text
           : prev,
       );
     });
 
-    const onOnline = () => void loadFiles(true);
+    // المزامنة التلقائية عند عودة التاب/الشبكة لا تحتاج أن تعمل أكثر من مرة
+    // كل دقيقة؛ كانت تعمل عند كل visibilitychange (طلب لكل تنقّل).
+    const AUTO_SYNC_GATE_MS = 60_000;
+    const syncIfStale = () => {
+      const now = Date.now();
+      if (now - lastAutoSyncRef.current < AUTO_SYNC_GATE_MS) return;
+      lastAutoSyncRef.current = now;
+      void loadFiles(true);
+    };
+    const onOnline = () => syncIfStale();
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void loadFiles(true);
+      if (document.visibilityState === 'visible') syncIfStale();
     };
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
@@ -554,7 +568,7 @@ export default function CodeLab() {
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [loadFiles, t]);
+  }, [loadFiles]);
 
   // حفظ المسودة محلياً عند كل تغيير (تستخدمها إعادة التحميل المفاجئ).
   useEffect(() => {

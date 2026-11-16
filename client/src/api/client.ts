@@ -1,7 +1,7 @@
 import { SUPABASE_URL } from '../config';
 import { readStoredToken, writeStoredToken, clearStoredToken } from '../lib/sessionToken';
-import { clearSessionSnapshot } from '../lib/localStore';
-import { getContentVersion } from '../lib/content';
+import { clearSessionSnapshot, getSessionSnapshot } from '../lib/localStore';
+import { clearBootstrapCache } from '../lib/content';
 
 const AUTH_FAIL_KEY = 'dr_code_lastAuthFail';
 
@@ -240,23 +240,36 @@ function authHeaders(base: Record<string, string>): Record<string, string> {
  * - الكوكي ضاع (Safari/ITP، مسح بيانات الموقع) ⇒ التوكن الاحتياطي ينجح ويُعاد الكوكي.
  * نستخدم fetch خاماً (لا `api`) لتجنّب أي حلقة أو تكرار.
  */
+let refreshInFlight: Promise<boolean> | null = null;
+
 async function refreshSession(base: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${base}/auth/me`, {
-      method: 'GET',
-      headers: authHeaders({ 'x-path': '/auth/me' }),
-      credentials: 'include',
-    });
-    if (!res.ok) {
-      res.body?.cancel().catch(() => {});
+  // single-flight: عدة طلبات تفشل بـ401 في نفس اللحظة كانت كلها تنادي
+  // /auth/me (3 طلبات لكل صفحة بعد انتهاء الجلسة). نشارك نفس الوعد.
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${base}/auth/me`, {
+        method: 'GET',
+        headers: authHeaders({ 'x-path': '/auth/me' }),
+        credentials: 'include',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        res.body?.cancel().catch(() => {});
+        return false;
+      }
+      const data = (await res.json().catch(() => null)) as { token?: unknown } | null;
+      writeStoredToken(data?.token);
+      return true;
+    } catch {
       return false;
     }
-    const data = (await res.json().catch(() => null)) as { token?: unknown } | null;
-    writeStoredToken(data?.token);
-    return true;
-  } catch {
-    return false;
-  }
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+
+  return refreshInFlight;
 }
 
 export async function api<T = any>(path: string, options: ApiOptions = {}): Promise<T> {
@@ -416,11 +429,10 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
     const isAdminMutation = adminMutationPaths.some(p => route.startsWith(p)) &&
       ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
     if (isAdminMutation) {
-      try {
-        localStorage.removeItem(`bootstrap:v${getContentVersion()}:${getCurrentUserId()}`);
-      } catch {
-        // Ignore localStorage errors
-      }
+      // المفتاح الحقيقي في cache.ts هو `cache:bootstrap:v1:<id>` (مع بادئة
+      // التخزين)، والكود القديم كان يمسح مفتاحاً غير موجود أبداً.
+      const uid = getSessionSnapshot()?.user?.id ?? getCurrentUserId();
+      clearBootstrapCache(uid || null);
     }
     return parsed as T;
   }
@@ -428,19 +440,25 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
   throw lastFailure ?? new ApiError('تعذّر الاتصال بالخادم، حاول مجدداً', 0);
 }
 
-// Helper to get current user ID from session
+// Helper to get current user ID from the stored session token
 function getCurrentUserId(): number {
+  // التوكن محفوظ ككائن JSON `{ v, token, exp }` وليس JWT خاماً — الكود
+  // القديم كان يفكّه كـJWT فيفشل دائماً ويرجع 0.
+  const token = readStoredToken();
+  if (!token) return 0;
   try {
-    const token = localStorage.getItem('dr_code_token_v1');
-    if (token) {
-      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-      return payload.id || 0;
-    }
+    const part = token.split('.')[1];
+    if (!part) return 0;
+    const payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/'))) as {
+      id?: unknown;
+      sub?: unknown;
+    };
+    const id = Number(payload?.id ?? payload?.sub);
+    return Number.isFinite(id) && id > 0 ? id : 0;
   } catch {
-    // Ignore token parsing errors
+    return 0;
   }
-  return 0;
 }
 
-// getContentVersion imported from content.ts
+// end of api client helpers
 

@@ -3,11 +3,14 @@ import { useShallow } from 'zustand/react/shallow';
 import { api, ApiError, recordAuthFailure, clearAuthFail } from '../api/client';
 import { getBootstrapSync, loadBootstrap, clearBootstrapCache } from '../lib/content';
 import {
+  clearExamReviews,
   getAllVideoProgressLocal,
   getSessionSnapshot,
   saveSessionSnapshot,
   clearSessionSnapshot,
 } from '../lib/localStore';
+import { claimLocalData } from '../lib/localOwner';
+import { ensurePushSubscription } from '../lib/pushNotifications';
 import { clearStoredToken, readStoredToken } from '../lib/sessionToken';
 import { broadcastAuth } from '../lib/sessionSync';
 import { computeStats, emptyStats, type LevelTier, type StudentStats } from '../lib/stats';
@@ -49,18 +52,6 @@ function statsFor(user: User, levels: LevelTier[], examResults: ExamResultSummar
     watch,
     tiers: levels,
   });
-}
-
-/** يُنظّف مراجعات الامتحانات المخزنة محليًا (لا تتسرب لآخر يستخدم نفس الجهاز). */
-function cleanupExamReviews(): void {
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('exam_review_')) localStorage.removeItem(key);
-    }
-  } catch {
-    /* ignore */
-  }
 }
 
 /**
@@ -123,6 +114,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
    */
   applyMe: async (me) => {
     clearAuthFail();
+    // مستخدم مختلف على نفس الجهاز؟ امسح ملفاته/تقدّمه/مسوداته أولاً.
+    await claimLocalData(me.user.id);
     // لقطة الهوية تُحفظ عند كل إقلاع ناجح حتى نستعيد الجلسة بلا شبكة لاحقاً.
     const prevSnap = getSessionSnapshot();
     const levels: LevelTier[] = me.levels.length
@@ -221,6 +214,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       /* نكمل ببيانات الدخول — تُحدَّث في أول إقلاع تالٍ */
     }
     await get().applyMe(me);
+    // اشتراك الإشعارات قد يكون مسجّلاً لحساب سابق على نفس الجهاز.
+    void ensurePushSubscription();
     broadcastAuth('login');
   },
 
@@ -237,6 +232,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       /* نكمل ببيانات التسجيل */
     }
     await get().applyMe(me);
+    // لو الجهاز كان لحساب آخر، forgetPushEndpoint() مسح الاشتراك المحلي —
+    // نعيد تسجيله للحساب الحالي (بلا طلب لو الاشتراك نفسه مسجّل بالفعل).
+    void ensurePushSubscription();
     broadcastAuth('login');
     return { user: data.user };
   },
@@ -251,7 +249,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
     clearStoredToken();
     clearAuthFail();
-    cleanupExamReviews();
+    clearExamReviews();
     clearSessionSnapshot();
     clearBootstrapCache(get().user?.id ?? null);
     set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });
@@ -268,7 +266,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
     clearStoredToken();
     clearAuthFail();
-    cleanupExamReviews();
+    clearExamReviews();
     clearSessionSnapshot();
     clearBootstrapCache(get().user?.id ?? null);
     set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });

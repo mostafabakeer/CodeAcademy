@@ -135,6 +135,44 @@ export function getAllVideoProgressLocal(): Record<number, VideoProgressLocal> {
   return out;
 }
 
+/** يمسح كل تقدم المشاهدة المحلي (عند دخول مستخدم مختلف على نفس الجهاز). */
+export function clearAllVideoProgress(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('codeacademy_' + VIDEO_PREFIX)) localStorage.removeItem(key);
+    }
+  } catch {
+    /* ignore */
+  }
+  videoProgressCache = null;
+  videoProgressCacheAt = 0;
+}
+
+/** يمسح كل مسودات المحرر المحلية. */
+export function clearAllDrafts(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('codeacademy_' + DRAFT_PREFIX)) localStorage.removeItem(key);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** يمسح مراجعات الامتحانات المخزنة محليًا (لا تتسرب لآخر يستخدم نفس الجهاز). */
+export function clearExamReviews(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('exam_review_')) localStorage.removeItem(key);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getSessionSnapshot(): SessionSnapshot | null {
   const raw = getLocal(SESSION_KEY);
   if (!raw) return null;

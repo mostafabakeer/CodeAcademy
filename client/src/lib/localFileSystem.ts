@@ -135,6 +135,23 @@ export async function saveFile(
   return record;
 }
 
+/**
+ * يمسح كل الملفات المحلية وميتاداتها.
+ * يُستدعى فقط عند دخول مستخدم مختلف على نفس الجهاز حتى لا تنتقل ملفات
+ * طالب إلى حساب طالب آخر (ولا تُرفع له عند أول مزامنة).
+ */
+export async function clearAllFiles(): Promise<void> {
+  try {
+    const db = await getDB();
+    const tx = db.transaction([STORE_FILES, STORE_META], 'readwrite');
+    tx.objectStore(STORE_FILES).clear();
+    tx.objectStore(STORE_META).clear();
+    await txDone(tx);
+  } catch (e) {
+    console.error('[localFileSystem] clearAllFiles:', e);
+  }
+}
+
 export async function deleteFile(id: string): Promise<void> {
   const db = await getDB();
   const tx = db.transaction(STORE_FILES, 'readwrite');

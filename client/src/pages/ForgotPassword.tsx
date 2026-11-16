@@ -37,9 +37,9 @@ export default function ForgotPassword() {
     }
   };
 
-  const checkStatus = async () => {
-    setError('');
-    setLoading(true);
+  const checkStatus = async (silent = false) => {
+    if (!silent) setError('');
+    if (!silent) setLoading(true);
     try {
       const d = await api<{ status: Status }>(
         `/api/auth/forgot-password/status?phone=${encodeURIComponent(phone)}`
@@ -51,9 +51,9 @@ export default function ForgotPassword() {
         setCodeExpired(true);
       }
     } catch (err) {
-      setError((err as Error).message);
+      if (!silent) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -104,13 +104,39 @@ export default function ForgotPassword() {
     }
   };
 
-  // Auto-poll status while pending — updates UI when admin approves/rejects
+  // Auto-poll status while pending — updates UI when admin approves/rejects.
+  // Backoff تدريجي (5s → 15s → 60s) + توقف عند إخفاء التاب: كان يستعلم كل
+  // 5 ثوانٍ بلا نهاية حتى لو التاب متروك مفتوحاً طوال الليل.
   useEffect(() => {
     if (status !== 'pending' || !phone.trim() || done) return;
-    const timer = setInterval(() => {
-      checkStatus();
-    }, 5000);
-    return () => clearInterval(timer);
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = 5000;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== 'hidden') await checkStatus(true);
+      delay = Math.min(delay * 2, 60_000);
+      if (!cancelled) timer = setTimeout(tick, delay);
+    };
+
+    timer = setTimeout(tick, delay);
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || cancelled) return;
+      clearTimeout(timer);
+      delay = 5000;
+      timer = setTimeout(tick, 1000);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- checkStatus تعتمد على phone وt
   }, [status, phone, done]);
 
   // Reset form state when leaving the approved/form state
@@ -201,7 +227,7 @@ export default function ForgotPassword() {
         💬 {t('auth.contactReadmin')}
       </a>
       <button
-        onClick={checkStatus}
+        onClick={() => void checkStatus()}
         disabled={loading}
         className="btn-ghost-fire w-full rounded-xl px-4 py-3 text-sm font-bold disabled:opacity-60"
       >

@@ -15,7 +15,8 @@ export function getCached<T>(key: string, ttlMs: number): T | null {
   try {
     const parsed = JSON.parse(raw) as CacheEntry<T>;
     if (typeof parsed.at !== 'number' || Date.now() - parsed.at > ttlMs) {
-      removeLocal(CACHE_PREFIX + key);
+      // لا نحذف المدخل المنتهي: `getCachedStale` يعيده عند فشل الشبكة،
+      // وحذفه هنا كان يجعل الموقع يفقد بياناته بالكامل بعد انقطاع الإنترنت.
       return null;
     }
     return parsed.data;

@@ -44,6 +44,16 @@ async function proxyApi(request, url) {
 
   const headers = new Headers(request.headers);
   headers.delete('host');
+  // عنوان العميل الحقيقي من Cloudflare — نمسح ما أرسله المتصفح من
+  // x-real-ip/x-forwarded-for (كان يسمح بتزوير IP وتجاوز كل حدود المعدل).
+  const clientIp = request.headers.get('cf-connecting-ip');
+  if (clientIp) {
+    headers.set('x-real-ip', clientIp);
+    headers.set('x-forwarded-for', clientIp);
+  } else {
+    headers.delete('x-real-ip');
+    headers.delete('x-forwarded-for');
+  }
   // ندعم الدالة المنشورة القديمة (x-path) والجديدة (المسار من الرابط)
   headers.set('x-path', route + url.search);
   headers.set('x-forwarded-host', url.host);

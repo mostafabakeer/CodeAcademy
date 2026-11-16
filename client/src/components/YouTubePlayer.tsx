@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getYouTubeThumbnail } from '../lib/youtube';
 
 interface YouTubePlayerProps {
@@ -17,16 +17,168 @@ interface YouTubePlayerProps {
   autoPlay?: boolean;
 }
 
+/**
+ * تحميل YouTube IFrame API مرة واحدة لكل صفحة.
+ * نستخدمه بدل iframe عادي لأن الـ iframe وحده لا يعطي أي حدث تقدّم،
+ * فكانت دروس يوتيوب تُسجّل 0% مشاهدة مهما شاهد الطالب.
+ */
+let apiPromise: Promise<any> | null = null;
+
+function loadYouTubeApi(): Promise<any> {
+  const w = window as any;
+  if (w.YT?.Player) return Promise.resolve(w.YT);
+  if (apiPromise) return apiPromise;
+
+  apiPromise = new Promise((resolve, reject) => {
+    const previous = w.onYouTubeIframeAPIReady;
+    w.onYouTubeIframeAPIReady = () => {
+      try {
+        previous?.();
+      } catch {
+        /* ignore */
+      }
+      if (w.YT?.Player) resolve(w.YT);
+    };
+
+    const script = document.createElement('script');
+    script.src = 'https://www.youtube.com/iframe_api';
+    script.async = true;
+    script.onerror = () => {
+      apiPromise = null;
+      reject(new Error('YouTube API failed'));
+    };
+    document.head.appendChild(script);
+
+    window.setTimeout(() => {
+      if (w.YT?.Player) resolve(w.YT);
+      else {
+        apiPromise = null;
+        reject(new Error('YouTube API timeout'));
+      }
+    }, 12_000);
+  });
+
+  return apiPromise;
+}
+
 export default function YouTubePlayer({
   videoId,
   initialTime = 0,
   autoPlay = false,
+  onReady,
+  onPlay,
+  onPause,
+  onEnded,
+  onError,
+  onDuration,
+  onTimeUpdate,
+  onProgress,
 }: YouTubePlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const [apiFailed, setApiFailed] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<any>(null);
+  const initialTimeRef = useRef(initialTime);
+  initialTimeRef.current = initialTime;
+  const cbRef = useRef({ onReady, onPlay, onPause, onEnded, onError, onDuration, onTimeUpdate, onProgress });
+  cbRef.current = { onReady, onPlay, onPause, onEnded, onError, onDuration, onTimeUpdate, onProgress };
+
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let lastProgressAt = 0;
+    let lastProgressSec = -1;
+
+    const emitProgress = (force = false) => {
+      const p = playerRef.current;
+      if (!p?.getCurrentTime) return;
+      const seconds = Number(p.getCurrentTime()) || 0;
+      cbRef.current.onTimeUpdate?.(seconds);
+      const whole = Math.floor(seconds);
+      if (whole <= 0) return;
+      const now = Date.now();
+      if (!force && now - lastProgressAt < 5000 && whole - lastProgressSec < 5) return;
+      lastProgressAt = now;
+      lastProgressSec = whole;
+      cbRef.current.onProgress?.(whole);
+    };
+
+    const stopTimer = () => {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    };
+
+    loadYouTubeApi()
+      .then((YT) => {
+        if (cancelled || !hostRef.current) return;
+        playerRef.current = new YT.Player(hostRef.current, {
+          videoId,
+          playerVars: {
+            autoplay: 1,
+            start: Math.floor(initialTimeRef.current),
+            rel: 0,
+            modestbranding: 1,
+            cc_load_policy: 1,
+            iv_load_policy: 3,
+            playsinline: 1,
+          },
+          events: {
+            onReady: (e: any) => {
+              if (cancelled) return;
+              cbRef.current.onReady?.();
+              const duration = Number(e.target.getDuration?.() ?? 0);
+              if (duration > 0) cbRef.current.onDuration?.(duration);
+              if (initialTimeRef.current > 0) e.target.seekTo(initialTimeRef.current, true);
+            },
+            onStateChange: (e: any) => {
+              if (cancelled) return;
+              const state = YT.PlayerState;
+              if (e.data === state.PLAYING) {
+                cbRef.current.onPlay?.();
+                stopTimer();
+                timer = window.setInterval(() => emitProgress(), 1000);
+              } else if (e.data === state.PAUSED) {
+                stopTimer();
+                cbRef.current.onPause?.();
+                emitProgress(true);
+              } else if (e.data === state.ENDED) {
+                stopTimer();
+                emitProgress(true);
+                cbRef.current.onEnded?.();
+              }
+            },
+            onError: () => {
+              if (!cancelled) cbRef.current.onError?.('video error');
+            },
+          },
+        });
+      })
+      .catch(() => {
+        // فشل تحميل الـ API (شبكة بطيئة/حجب) ⇒ نرجع لـ iframe عادي:
+        // الفيديو يعمل، فقط بلا تتبّع تقدّم، بدل شاشة معطّلة.
+        if (!cancelled) setApiFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+      stopTimer();
+      try {
+        playerRef.current?.destroy?.();
+      } catch {
+        /* ignore */
+      }
+      playerRef.current = null;
+    };
+  }, [isPlaying, videoId]);
+
   const thumbnailUrl = getYouTubeThumbnail(`https://youtu.be/${videoId}`);
 
   const params = new URLSearchParams({
-    autoplay: isPlaying ? '1' : '0',
+    autoplay: '1',
     start: String(Math.floor(initialTime)),
     rel: '0',
     modestbranding: '1',
@@ -34,7 +186,6 @@ export default function YouTubePlayer({
     iv_load_policy: '3',
     playsinline: '1',
   });
-
   const embedUrl = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -69,7 +220,7 @@ export default function YouTubePlayer({
             </div>
           </div>
         </button>
-      ) : (
+      ) : apiFailed ? (
         <iframe
           src={embedUrl}
           className="absolute inset-0 h-full w-full border-0"
@@ -77,6 +228,8 @@ export default function YouTubePlayer({
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           allowFullScreen
         />
+      ) : (
+        <div ref={hostRef} className="absolute inset-0 h-full w-full" />
       )}
     </div>
   );

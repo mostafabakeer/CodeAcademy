@@ -9,6 +9,7 @@ import {
   absoluteUrl,
 } from '../lib/seo/site';
 import type { JsonLd } from '../lib/seo/schema';
+import { useLang } from '../i18n';
 
 export interface SeoProps {
   /** عنوان الصفحة (دون اسم الموقع — يُضاف تلقائياً). */
@@ -74,6 +75,7 @@ export function Seo({
   type = 'website',
   jsonLd = null,
 }: SeoProps) {
+  const { lang } = useLang();
   const jsonLdKey = jsonLd ? JSON.stringify(jsonLd) : '';
 
   useEffect(() => {
@@ -84,8 +86,9 @@ export function Seo({
     const resolvedTitle = fullTitle(title);
 
     document.title = resolvedTitle;
-    document.documentElement.lang = 'ar';
-    document.documentElement.dir = 'rtl';
+    // اللغة/الاتجاه يديرهما LanguageProvider حسب اختيار المستخدم — كان
+    // هذا السطر يفرض العربية/RTL فينقلب وضع English رأساً على عقب.
+    const isArabic = lang === 'ar';
 
     // hreflang for Arabic/English
     upsertLink('alternate', absoluteUrl(path), 'ar');
@@ -101,8 +104,8 @@ export function Seo({
 
     upsertMeta('property', 'og:type', type);
     upsertMeta('property', 'og:site_name', BRAND_FULL);
-    upsertMeta('property', 'og:locale', 'ar_EG');
-    upsertMeta('property', 'og:locale:alternate', 'en_US');
+    upsertMeta('property', 'og:locale', isArabic ? 'ar_EG' : 'en_US');
+    upsertMeta('property', 'og:locale:alternate', isArabic ? 'en_US' : 'ar_EG');
     upsertMeta('property', 'og:title', resolvedTitle);
     upsertMeta('property', 'og:description', description);
     upsertMeta('property', 'og:url', canonical);
@@ -126,7 +129,7 @@ export function Seo({
       clearManaged();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jsonLdKey يمثّل jsonLd نصياً
-  }, [title, description, path, image, noindex, type, jsonLdKey]);
+  }, [title, description, path, image, noindex, type, jsonLdKey, lang]);
 
   return null;
 }

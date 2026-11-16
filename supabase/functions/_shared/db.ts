@@ -1116,7 +1116,9 @@ export async function getResult(userId: number, examId: number): Promise<ExamRes
 }
 
 export async function upsertResult(result: ExamResult): Promise<void> {
-  await sb.from('exam_results').upsert(resultToRow(result), { onConflict: 'user_id,exam_id' });
+  // كان الخطأ يُبتلع فيُرجّع الـ endpoint 200 بينما النتيجة لم تُحفظ أصلاً.
+  const { error } = await sb.from('exam_results').upsert(resultToRow(result), { onConflict: 'user_id,exam_id' });
+  if (error) throw new Error(`upsertResult: ${error.message}`);
 }
 
 export async function listResultsByUser(userId: number): Promise<ExamResult[]> {

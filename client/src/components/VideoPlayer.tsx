@@ -61,17 +61,29 @@ export default function VideoPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [hlsLevels, setHlsLevels] = useState<string[]>([]);
 
+  // أحدث callbacks في ref: الآباء يعيدون إنشاء الدوال كل render (LessonPlayer
+  // يحدّث الحالة كل ثانية)، وكانت إضافتها لتبعيات الـ effect تعيد بناء
+  // عنصر الفيديو والمستمعين كل ثانية.
+  const cbRef = useRef({ onTimeUpdate, onDurationChange, onEnded, onError, onProgress, onDuration });
+  cbRef.current = { onTimeUpdate, onDurationChange, onEnded, onError, onProgress, onDuration };
+  const lastUiSecRef = useRef(-1);
+  const lastProgressSecRef = useRef(-1);
+  const lastProgressAtRef = useRef(0);
+
   const startTick = useCallback(() => {
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = setInterval(() => {
       const v = videoRef.current;
       if (v && !v.paused) {
-        setCurrentTime(v.currentTime);
-        onTimeUpdate?.(v.currentTime);
-        onProgress?.(Math.floor(v.currentTime));
+        const whole = Math.floor(v.currentTime);
+        // timeupdate يحدّث الواجهة أصلاً؛ المؤقّت احتياطي فقط.
+        if (whole !== lastUiSecRef.current) {
+          lastUiSecRef.current = whole;
+          setCurrentTime(v.currentTime);
+        }
       }
     }, 1000);
-  }, [onTimeUpdate, onProgress]);
+  }, []);
 
   const stopTick = useCallback(() => { if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; } }, []);
 
@@ -95,6 +107,10 @@ export default function VideoPlayer({
     hls.loadSource(srcUrl); hls.attachMedia(videoEl);
   }, [applyHlsQuality, t]);
 
+  // الـ effect الأساسي يجب ألا يعاد بناؤه عند تغيير الجودة/اللغة.
+  const startHlsRef = useRef(startHls);
+  startHlsRef.current = startHls;
+
   const togglePlay = useCallback(async () => {
     const v = videoRef.current; if (!v) return;
     if (!hasStarted || v.src !== effectiveSrc) { setHasStarted(true); setIsLoading(true); v.src = effectiveSrc; v.poster = poster || ''; v.load(); await new Promise<void>(resolve => { const onMeta = () => { v.removeEventListener('loadedmetadata', onMeta); resolve(); }; v.addEventListener('loadedmetadata', onMeta, { once: true }); setTimeout(resolve, 500); }); }
@@ -102,8 +118,8 @@ export default function VideoPlayer({
   }, [isPlaying, hasStarted, effectiveSrc, poster, startTick, stopTick, t]);
 
   const seek = useCallback((s: number) => {
-    const v = videoRef.current; if (!v) return; v.currentTime = Math.max(0, Math.min(s, v.duration)); setCurrentTime(v.currentTime); onTimeUpdate?.(v.currentTime);
-  }, [onTimeUpdate]);
+    const v = videoRef.current; if (!v) return; v.currentTime = Math.max(0, Math.min(s, v.duration)); setCurrentTime(v.currentTime); cbRef.current.onTimeUpdate?.(v.currentTime);
+  }, []);
 
   const cycleRate = useCallback(() => { const i = RATES.indexOf(rate); const next = RATES[(i + 1) % RATES.length]; setRate(next); localStorage.setItem('dr_video_rate', String(next)); const v = videoRef.current; if (v) v.playbackRate = next; }, [rate]);
 
@@ -128,20 +144,48 @@ export default function VideoPlayer({
   useEffect(() => {
     let mounted = true;
     setError(null); setHasStarted(false); setDuration(0); setCurrentTime(0); setIsPlaying(false); setIsLoading(true); cleanupHls();
+    lastUiSecRef.current = -1;
+    lastProgressSecRef.current = -1;
+    lastProgressAtRef.current = 0;
 
     const v = videoRef.current; if (!v) return;
     const srcUrl = effectiveSrc;
-    if (/\.m3u8(\?.*)?$/.test(srcUrl)) void startHls(srcUrl, v);
+    if (/\.m3u8(\?.*)?$/.test(srcUrl)) void startHlsRef.current(srcUrl, v);
     else { if (v.src !== effectiveSrc) { v.src = effectiveSrc; v.poster = poster || ''; v.load(); } }
 
-    const onMeta = () => { const el = videoRef.current; if (!el || !mounted) return; setDuration(el.duration); onDuration?.(el.duration); onDurationChange?.(el.duration); if (bootResume > 0 && bootResume < el.duration) el.currentTime = bootResume; };
+    // إبلاغ التقدّم بحد أقصى مرة كل 5 ثوانٍ (كان timeupdate يكتب في
+    // localStorage ~4 مرات/ثانية على الموبايل).
+    const emitProgress = (force = false) => {
+      const el = videoRef.current;
+      if (!el || !mounted) return;
+      const whole = Math.floor(el.currentTime);
+      if (whole <= 0) return;
+      const now = Date.now();
+      if (whole === lastProgressSecRef.current) return;
+      if (!force && now - lastProgressAtRef.current < 5000 && whole - lastProgressSecRef.current < 5) return;
+      lastProgressAtRef.current = now;
+      lastProgressSecRef.current = whole;
+      cbRef.current.onProgress?.(whole);
+    };
+
+    const onMeta = () => { const el = videoRef.current; if (!el || !mounted) return; setDuration(el.duration); cbRef.current.onDuration?.(el.duration); cbRef.current.onDurationChange?.(el.duration); if (bootResume > 0 && bootResume < el.duration) el.currentTime = bootResume; };
     const onPlay = () => { if (!mounted) return; setIsPlaying(true); setIsLoading(false); startTick(); };
-    const onPause = () => { if (!mounted) return; setIsPlaying(false); stopTick(); };
-    const onEndedEvent = () => { if (!mounted) return; setIsPlaying(false); stopTick(); onEnded?.(); };
+    const onPause = () => { if (!mounted) return; setIsPlaying(false); stopTick(); emitProgress(true); };
+    const onEndedEvent = () => { if (!mounted) return; setIsPlaying(false); stopTick(); emitProgress(true); cbRef.current.onEnded?.(); };
     const onWaiting = () => { if (!mounted) return; setIsLoading(true); };
     const onCanPlay = () => { if (!mounted) return; setIsLoading(false); };
-    const onVideoError = () => { if (!mounted) return; setError(t('video.error')); setIsLoading(false); stopTick(); onError?.(new Error(t('video.error'))); };
-    const onTimeUpdateEvent = () => { const el = videoRef.current; if (!el || !mounted) return; setCurrentTime(el.currentTime); onTimeUpdate?.(el.currentTime); onProgress?.(Math.floor(el.currentTime)); };
+    const onVideoError = () => { if (!mounted) return; setError(t('video.error')); setIsLoading(false); stopTick(); cbRef.current.onError?.(new Error(t('video.error'))); };
+    const onTimeUpdateEvent = () => {
+      const el = videoRef.current;
+      if (!el || !mounted) return;
+      const whole = Math.floor(el.currentTime);
+      if (whole !== lastUiSecRef.current) {
+        lastUiSecRef.current = whole;
+        setCurrentTime(el.currentTime);
+      }
+      cbRef.current.onTimeUpdate?.(el.currentTime);
+      emitProgress();
+    };
 
     v.addEventListener('loadedmetadata', onMeta, { once: true });
     v.addEventListener('play', onPlay); v.addEventListener('pause', onPause); v.addEventListener('ended', onEndedEvent);
@@ -153,7 +197,8 @@ export default function VideoPlayer({
       v.removeEventListener('waiting', onWaiting); v.removeEventListener('canplay', onCanPlay); v.removeEventListener('error', onVideoError); v.removeEventListener('timeupdate', onTimeUpdateEvent);
       cleanupHls(); stopTick();
     };
-  }, [effectiveSrc, poster, bootResume, onDuration, onDurationChange, onEnded, startHls, t, cleanupHls, stopTick, startTick, onTimeUpdate, onProgress]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks تُقرأ من cbRef
+  }, [effectiveSrc, poster, bootResume]);
 
   useEffect(() => { const saved = localStorage.getItem('dr_video_rate'); if (saved && !isNaN(Number(saved))) { const r = Number(saved); if (r >= 0.25 && r <= 4) { setRate(r); const v = videoRef.current; if (v) v.playbackRate = r; } } }, []);
 
@@ -165,6 +210,11 @@ export default function VideoPlayer({
         videoId={ytId!}
         initialTime={bootResume}
         autoPlay={autoPlay}
+        onDuration={(d) => { cbRef.current.onDuration?.(d); cbRef.current.onDurationChange?.(d); }}
+        onTimeUpdate={(s) => cbRef.current.onTimeUpdate?.(s)}
+        onProgress={(s) => cbRef.current.onProgress?.(s)}
+        onEnded={() => cbRef.current.onEnded?.()}
+        onError={(m) => cbRef.current.onError?.(new Error(m))}
       />
     );
   }

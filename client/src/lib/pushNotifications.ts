@@ -1,7 +1,18 @@
 import { api } from '../api/client';
+import { getLocal, removeLocal, setLocal } from './storage';
 
 const BUILD_VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY ?? '';
 let runtimeVapidKey: string | null = null;
+
+/** آخر endpoint سُجّل على الخادم — يمنع POST متكرراً عند كل فتح للموقع. */
+const PUSH_ENDPOINT_KEY = 'pushEndpoint';
+let savedEndpoint: string | null = null;
+let ensureInFlight: Promise<boolean> | null = null;
+
+function readSavedEndpoint(): string {
+  if (savedEndpoint === null) savedEndpoint = getLocal(PUSH_ENDPOINT_KEY) ?? '';
+  return savedEndpoint;
+}
 
 export interface PushSubscriptionData {
   endpoint: string;
@@ -69,9 +80,13 @@ function subscriptionToData(sub: PushSubscription): PushSubscriptionData {
   };
 }
 
-async function saveSubscription(sub: PushSubscription): Promise<PushSubscriptionData> {
+async function saveSubscription(sub: PushSubscription, force = false): Promise<PushSubscriptionData> {
   const data = subscriptionToData(sub);
+  // نفس الاشتراك محفوظ مسبقاً ⇒ لا داعي لإعادة إرساله للخادم في كل تحميل.
+  if (!force && readSavedEndpoint() === data.endpoint) return data;
   await api('/push/subscribe', { method: 'POST', body: data });
+  savedEndpoint = data.endpoint;
+  setLocal(PUSH_ENDPOINT_KEY, data.endpoint);
   return data;
 }
 
@@ -115,27 +130,41 @@ export async function subscribeToPush(): Promise<PushSubscriptionData | null> {
 
   try {
     const subscription = await getOrCreateSubscription(vapidKey);
-    return await saveSubscription(subscription);
+    // تفعيل صريح من المستخدم ⇒ نؤكد الاشتراك على الخادم دائماً.
+    return await saveSubscription(subscription, true);
   } catch (error) {
     console.error('Push subscription failed:', error);
     throw error;
   }
 }
 
-export async function ensurePushSubscription(): Promise<boolean> {
-  if (!isPushSupported()) return false;
-  if (Notification.permission !== 'granted') return false;
+export function ensurePushSubscription(): Promise<boolean> {
+  if (!isPushSupported()) return Promise.resolve(false);
+  if (Notification.permission !== 'granted') return Promise.resolve(false);
+  // single-flight: AuthInitializer وNotificationPrompt ينادوانها معاً عند الإقلاع.
+  if (ensureInFlight) return ensureInFlight;
 
-  try {
-    const vapidKey = await getVapidPublicKey();
-    if (!vapidKey) return false;
-    const subscription = await getOrCreateSubscription(vapidKey);
-    await saveSubscription(subscription);
-    return true;
-  } catch (error) {
-    console.warn('[push] background sync skipped:', error);
-    return false;
-  }
+  ensureInFlight = (async () => {
+    try {
+      const vapidKey = await getVapidPublicKey();
+      if (!vapidKey) return false;
+      const subscription = await getOrCreateSubscription(vapidKey);
+      await saveSubscription(subscription);
+      return true;
+    } catch (error) {
+      console.warn('[push] background sync skipped:', error);
+      return false;
+    }
+  })().finally(() => {
+    ensureInFlight = null;
+  });
+
+  return ensureInFlight;
+}
+
+export function forgetPushEndpoint(): void {
+  savedEndpoint = '';
+  removeLocal(PUSH_ENDPOINT_KEY);
 }
 
 export async function unsubscribeFromPush(): Promise<void> {
@@ -151,6 +180,8 @@ export async function unsubscribeFromPush(): Promise<void> {
         method: 'POST',
         body: { endpoint: subscription.endpoint },
       });
+      savedEndpoint = '';
+      removeLocal(PUSH_ENDPOINT_KEY);
     }
   } catch (error) {
     console.error('Push unsubscription failed:', error);

@@ -95,7 +95,7 @@ import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared
   type MyExamRank,
   type Course,
 } from '../_shared/db.ts';
-import { ipOf, loginBlocked, recordLoginFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
+import { ipOf, loginBlocked, recordLoginFailure, recordIpFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
 
 const CODE_LANGUAGES = ['javascript', 'python', 'html', 'css'];
 const TOP_GRADES = ['bac1', 'bac2'];
@@ -278,6 +278,9 @@ app.post('/auth/login', async (c) => {
   if (!user) {
     // تحقق وهمي بنفس كلفة bcrypt للحفاظ على زمن استجابة متساوٍ (ضد هجمات timing).
     await verifyPassword(String(password), await dummyPasswordHash());
+    // المعرّف غير موجود: نحتسب الفشل على IP فقط (لا على المعرّف) حتى لا
+    // يستطيع مهاجم تجميد أرقام حقيقية، وحتى لا يبقى مسح الجدول بلا حد.
+    recordIpFailure(clientIp);
     return c.json({ error: 'بيانات الدخول غير صحيحة' }, 401);
   }
   if (!(await verifyPassword(String(password), user.passwordHash))) {
