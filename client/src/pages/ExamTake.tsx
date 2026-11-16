@@ -5,7 +5,10 @@ import { useLang } from '../i18n';
 import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import ProgressBar from '../components/ProgressBar';
+import Confetti from '../components/Confetti';
 import { useExamDeadline, formatExamClock, clearExamTimer } from '../lib/useExamTimer';
+import { touchStreak } from '../lib/streak';
+import { playSuccessChime, unlockAudio } from '../lib/sound';
 
 interface Question {
   id: number;
@@ -154,11 +157,23 @@ function loadDraft(examId: string | undefined): Record<number, number> {
 }
 
 // مكوّن مشترك لعرض ملخص النتيجة + مراجعة الأخطاء (يُستخدم في شاشة النتيجة وعند إعادة الدخول)
-function ReviewPanel({ review, result, canRetake, onRetake, onBack }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void }) {
+function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = false }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void; celebrate?: boolean }) {
   const { t, lang } = useLang();
+  const [burst, setBurst] = useState(false);
+
+  // احتفال مرة واحدة فقط عند عرض نتيجة تسليم جديد (لا عند إعادة فتح نتيجة قديمة).
+  useEffect(() => {
+    if (!celebrate || !result.passed) return;
+    setBurst(true);
+    playSuccessChime();
+    const timer = window.setTimeout(() => setBurst(false), 3200);
+    return () => window.clearTimeout(timer);
+  }, [celebrate, result.passed]);
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
+      <Confetti show={burst} />
+      <motion.div role="status" aria-live="polite" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
         <motion.div
           initial={{ scale: 0.4, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -330,6 +345,8 @@ export default function ExamTake() {
 
   const submit = async () => {
     if (!id || submitting) return;
+    // نفتح سياق الصوت داخل تفاعل المستخدم حتى تُسمح نغمة النجاح بعد وصول الرد.
+    unlockAudio();
     setSubmitting(true);
     setError('');
     try {
@@ -340,6 +357,8 @@ export default function ExamTake() {
       if (!mountedRef.current) return;
       setResult(res);
       setAttemptInProgress(false);
+      // تسليم امتحان = نشاط دراسي يحسب في سلسلة الحماس اليومية.
+      touchStreak();
       if (id) {
         clearDraft(id);
         clearExamTimer(id);
@@ -451,6 +470,7 @@ export default function ExamTake() {
         canRetake={canRetake}
         onRetake={retake}
         onBack={() => navigate('/exams')}
+        celebrate
       />
     );
   }

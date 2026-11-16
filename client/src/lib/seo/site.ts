@@ -64,4 +64,4 @@ export function absoluteUrl(path = '/'): string {
 }
 
 /** صورة Open Graph افتراضية (مطلقة) لاستخدامها عند غياب صورة مخصّصة. */
-export const DEFAULT_OG_IMAGE = absoluteUrl('/login-hero.png');
+export const DEFAULT_OG_IMAGE = absoluteUrl('/og-cover.jpg');

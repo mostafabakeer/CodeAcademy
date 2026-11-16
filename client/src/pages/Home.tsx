@@ -6,6 +6,7 @@ import { useUser, useProgress } from '../store/authStore';
 import { buildCourseList, type CourseWithProgress } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal } from '../lib/localStore';
+import { getStreak } from '../lib/streak';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
@@ -22,6 +23,36 @@ export default function Home() {
     [data]
   );
   const loading = !data && !error;
+
+  // سلسلة الحماس محلية على الجهاز — تُقرأ عند فتح الرئيسية بعد أي نشاط.
+  const streak = useMemo(() => getStreak(), []);
+
+  // آخر درس لم يكتمل (بأحدث وقت مشاهدة) حتى يستأنف الطالب من نفس اللحظة،
+  // وليس من أول الدرس. نتجاهل الدروس المكتملة (≥ 92%) والدروس التي لم
+  // تُشاهد إلا ثوانٍ قليلة.
+  const resumeLesson = useMemo(() => {
+    if (!data) return null;
+    const progress = getAllVideoProgressLocal();
+    let pick: { id: number; title: string; titleEn: string; pct: number; at: number } | null = null;
+    for (const lesson of data.lessons) {
+      const p = progress[lesson.id];
+      if (!p || p.seconds <= 5) continue;
+      const duration = lesson.duration || p.duration || 0;
+      const pct = duration > 0 ? Math.min(100, Math.round((p.seconds / duration) * 100)) : 0;
+      if (duration > 0 && pct >= 92) continue;
+      if (!pick || p.updatedAt > pick.at) {
+        pick = { id: lesson.id, title: lesson.title, titleEn: lesson.titleEn, pct, at: p.updatedAt };
+      }
+    }
+    return pick;
+  }, [data]);
+
+  const streakLabel = (n: number): string => {
+    if (n === 1) return t('home.streakOne');
+    if (n === 2) return t('home.streakTwo');
+    if (n >= 3 && n <= 10) return t('home.streakMany', { count: n });
+    return t('home.streakDays', { count: n });
+  };
 
   const watchHours = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10)) / 10 : 0;
   const nextCourse = courses.filter((c) => c.progress > 0 && c.progress < 100).sort((a, b) => b.progress - a.progress)[0];
@@ -52,7 +83,7 @@ export default function Home() {
 
             <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <LevelBadge levelKey={stats?.level.key} name={stats?.level.name} nameEn={stats?.level.nameEn} size="lg" />
-              <div className="flex items-center gap-4 rounded-2xl border border-fire-500/20 bg-ink-900/70 px-5 py-3">
+              <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-fire-500/20 bg-ink-900/70 px-5 py-3">
                 <div>
                   <div className="text-xs text-gray-400">{t('home.level')}</div>
                   <div className="text-xl font-black text-fire-gradient">{levelLabel}</div>
@@ -61,6 +92,18 @@ export default function Home() {
                 <div>
                   <div className="text-xs text-gray-400">{t('home.points')}</div>
                   <div className="text-xl font-black text-fire-gradient">{stats?.points ?? 0}</div>
+                </div>
+                <div className="h-8 w-px bg-fire-500/25" />
+                <div title={t('home.streakHint')}>
+                  <div className="text-xs text-gray-400">{t('home.streak')}</div>
+                  <div className="text-xl font-black text-fire-gradient">
+                    🔥 {streak.current > 0 ? streakLabel(streak.current) : 0}
+                  </div>
+                  <div className="text-[10px] text-gray-500">
+                    {streak.current > 0
+                      ? t('home.streakBest', { count: streak.best })
+                      : t('home.streakHint')}
+                  </div>
                 </div>
               </div>
             </div>
@@ -100,6 +143,29 @@ export default function Home() {
           </div>
         </div>
       </motion.section>
+
+      {/* أكمل من حيث توقفت — الدرس نفسه لا الدورة فقط */}
+      {resumeLesson && (
+        <motion.section
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="card-fire rounded-2xl p-6"
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-extrabold">⏱ {t('home.resumeLesson')}</h2>
+            <Link to={`/lesson/${resumeLesson.id}`} className="btn-fire rounded-lg px-4 py-2 text-sm font-bold text-white">
+              {t('home.continueLesson')}
+            </Link>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-sm text-gray-400">
+            <span className="min-w-0 truncate font-semibold text-gray-200">
+              {lang === 'ar' ? resumeLesson.title : resumeLesson.titleEn || resumeLesson.title}
+            </span>
+            <span className="shrink-0">{t('home.resumeProgress', { pct: resumeLesson.pct })}</span>
+          </div>
+          <ProgressBar value={resumeLesson.pct} className="mt-2" />
+        </motion.section>
+      )}
 
       {/* أكمل التعلم */}
       {nextCourse && (

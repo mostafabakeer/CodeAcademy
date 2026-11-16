@@ -5,7 +5,6 @@ import { useLang } from '../i18n';
 import { useUser } from '../store/authStore';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
-import { downloadWatermarkedPDF } from '../lib/pdfWatermark';
 
 const Markdown = lazy(() => import('react-markdown'));
 
@@ -69,6 +68,9 @@ export default function Notes() {
       const result = await api<{ url: string }>(`/api/notes/${noteId}/pdf`, { signal: request.signal });
       if (!request.signal.aborted && result.url) {
         const fileName = noteTitle.replace(/[^a-zA-Z0-9؀-ۿ\s-]+/g, '').trim() + '.pdf';
+        // pdf-lib ~430KB: نحمّلها عند الضغط على «تحميل PDF» فقط بدل تحميلها
+        // مع صفحة الملازم لكل من يفتحها.
+        const { downloadWatermarkedPDF } = await import('../lib/pdfWatermark');
         await downloadWatermarkedPDF(result.url, fileName, {
           studentName,
           studentPhone,

@@ -1,6 +1,7 @@
 import { getLocal, setLocal } from './storage';
 import { clearAllFiles } from './localFileSystem';
 import { clearAllDrafts, clearAllVideoProgress, clearExamReviews, clearOfflineQueue } from './localStore';
+import { resetStreak } from './streak';
 import { forgetPushEndpoint } from './pushNotifications';
 
 /**
@@ -33,6 +34,8 @@ export async function claimLocalData(userId: number): Promise<boolean> {
     clearAllDrafts();
     clearExamReviews();
     clearOfflineQueue();
+    // سلسلة الحماس تخص الحساب السابق — لا نُظهرها للحساب الجديد.
+    resetStreak();
     // اشتراك الإشعارات يخص الحساب السابق؛ يجب أن يُعاد تسجيله للحساب الجديد.
     forgetPushEndpoint();
   }

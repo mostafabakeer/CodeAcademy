@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
@@ -6,6 +6,7 @@ import { useUser } from '../store/authStore';
 import { buildLessonDetail, type LessonDetailData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getVideoProgressLocal, setVideoProgressLocal } from '../lib/localStore';
+import { touchStreak } from '../lib/streak';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import VideoPlayer from '../components/VideoPlayer';
 import ProgressBar from '../components/ProgressBar';
@@ -18,6 +19,8 @@ export default function LessonPlayer() {
   const [data, setData] = useState<LessonDetailData | null>(null);
   const [duration, setDuration] = useState(0);
   const [completed, setCompleted] = useState(false);
+  // نسجّل نشاط اليوم مرة واحدة لكل جلسة درس (أول تقدم فعلي في المشاهدة).
+  const streakTouched = useRef(false);
   const [preloadedNext, setPreloadedNext] = useState(false);
   const lessonId = id ? Number(id) : null;
   const [localSeconds, setLocalSeconds] = useState(() => {
@@ -47,6 +50,10 @@ export default function LessonPlayer() {
     if (!lessonId || seconds <= 0) return;
     setLocalSeconds((s) => Math.max(s, seconds));
     setVideoProgressLocal(lessonId, seconds, duration);
+    if (!streakTouched.current && seconds >= 5) {
+      streakTouched.current = true;
+      touchStreak();
+    }
     if (duration > 0 && seconds >= duration * 0.9) {
       setCompleted(true);
     }

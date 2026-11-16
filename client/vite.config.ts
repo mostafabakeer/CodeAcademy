@@ -72,6 +72,9 @@ export default defineConfig({
           // بديلها runtimeCaching أدناه: تُخزَّن بعد أول استخدام وتبقى متاحة offline.
           '**/hls-*.js',
           '**/vendor-codemirror-*.js',
+          // react-markdown يُستخدم في صفحة الملازم فقط — لا نُخزّنه مسبقاً
+          // لكل زائر (117KB)، ويُخزَّن عند أول فتح للملازم عبر dr-assets.
+          '**/vendor-markdown-*.js',
         ],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
@@ -97,12 +100,12 @@ export default defineConfig({
             },
           },
           {
-            // الصور العامة الثابتة (شعار/رموز) — بدون مصادقة
-            urlPattern: /\/logo\.png$|\/login-hero\.png$|\/owner\.png$/,
+            // الصور العامة الثابتة (شعار/رموز/بطاقة مشاركة) — بدون مصادقة
+            urlPattern: /\/logo\.png$|\/login-hero\.png$|\/owner\.png$|\/og-cover\.jpg$|\/favicon-32\.png$|\/apple-touch-icon\.png$|\/.*\.webp$/,
             handler: 'CacheFirst',
             options: {
               cacheName: 'dr-public-img',
-              expiration: { maxEntries: 16, maxAgeSeconds: 60 * 60 * 24 * 7 },
+              expiration: { maxEntries: 24, maxAgeSeconds: 60 * 60 * 24 * 7 },
             },
           },
         ],
@@ -116,17 +119,34 @@ export default defineConfig({
     modulePreload: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-motion': ['motion'],
-          'vendor-codemirror': [
-            '@uiw/react-codemirror',
-            '@codemirror/lang-css',
-            '@codemirror/lang-html',
-            '@codemirror/lang-javascript',
-            '@codemirror/lang-python',
-          ],
-          'vendor-markdown': ['react-markdown'],
+        /**
+         * تقسيم يدوي محدود بأسماء ثابتة (نحتاجها أيضاً في globIgnores للـ SW).
+         * مهم: jsx-runtime يُنسب صراحةً إلى vendor-react. في الصيغة الكائنية
+         * القديمة كان يُنسب إلى أول chunk كسول يستورده (markdown ثم codemirror)،
+         * فيستورده الـ entry من هناك وينزّل الزائر مئات الكيلوبايتات قبل أول رسم.
+         */
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          const inPkg = (re: RegExp) => re.test(id);
+          if (
+            inPkg(/[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom)[\\/]/) ||
+            inPkg(/[\\/]node_modules[\\/]react[\\/]jsx-(dev-)?runtime/)
+          ) {
+            return 'vendor-react';
+          }
+          if (inPkg(/[\\/]node_modules[\\/]motion[\\/]/)) return 'vendor-motion';
+          if (
+            inPkg(/[\\/]node_modules[\\/](@uiw[\\/]react-codemirror|@codemirror|@lezer|style-mod|w3c-keyname|crelt)[\\/]/)
+          ) {
+            return 'vendor-codemirror';
+          }
+          if (
+            inPkg(
+              /[\\/]node_modules[\\/](react-markdown|remark-[^\\/]+|rehype-[^\\/]+|micromark[^\\/]*|mdast-[^\\/]+|unist-[^\\/]+|hast-[^\\/]+|vfile[^\\/]*|unified|bail|trough|devlop|ccount|character-entities[^\\/]*|decode-named-character-reference|markdown-table|longest-streak|zwitch|property-information|space-separated-tokens|comma-separated-tokens|style-to-object|trim-lines|html-url-attributes|escape-string-regexp)[\\/]/,
+            )
+          ) {
+            return 'vendor-markdown';
+          }
         },
       },
     },

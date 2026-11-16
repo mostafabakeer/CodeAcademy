@@ -14,6 +14,7 @@ import {
   type CodeLanguage,
 } from '../lib/localFileSystem';
 import { getCodeDraft, setCodeDraft, clearCodeDraft } from '../lib/localStore';
+import { touchStreak } from '../lib/streak';
 import { runPython, isPythonReady, warmUpPython, onPythonInitProgress } from '../lib/pythonRunner';
 import {
   syncCodeFiles,
@@ -439,6 +440,8 @@ export default function CodeLab() {
         lastSavedCodeRef.current = nextCode;
         setSaved(true);
         window.setTimeout(() => setSaved(false), 1800);
+        // حفظ كود = نشاط دراسي يحسب في سلسلة الحماس اليومية.
+        touchStreak();
 
         const ok = await pushCodeFile(updated);
         if (ok) {
