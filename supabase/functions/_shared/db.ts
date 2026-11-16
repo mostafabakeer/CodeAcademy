@@ -357,7 +357,27 @@ export async function getPasswordResetDiagnostics(): Promise<{
   today: string;
   todayUnmatched: number;
 }> {
+  const today = new Date().toISOString().slice(0, 10);
   try {
+    // استعلام واحد في القاعدة بدل 3 استعلامات (count + كل الصفوف + آخر صف).
+    const { data, error } = await sb.rpc('password_reset_diagnostics', {
+      p_unmatched_key: PRC_UNMATCHED_PREFIX + today,
+    });
+    if (!error) {
+      const row = ((data ?? []) as any[])[0];
+      if (row) {
+        return {
+          total: Number(row.total) || 0,
+          byStatus: (row.by_status ?? {}) as Record<string, number>,
+          lastRequestAt: row.last_request_at == null ? null : Number(row.last_request_at),
+          today,
+          todayUnmatched: Number(row.today_unmatched) || 0,
+        };
+      }
+    } else {
+      console.error('[db] password_reset_diagnostics RPC:', error.message);
+    }
+
     const { count } = await sb.from('password_resets').select('id', { count: 'exact', head: true });
     const { data: statusRows } = await sb.from('password_resets').select('status');
     const { data: lastRow } = await sb
@@ -371,7 +391,6 @@ export async function getPasswordResetDiagnostics(): Promise<{
       const s = String((r as any).status ?? 'pending');
       byStatus[s] = (byStatus[s] ?? 0) + 1;
     }
-    const today = new Date().toISOString().slice(0, 10);
     const todayUnmatched = await readUnmatchedPasswordReset(PRC_UNMATCHED_PREFIX + today);
     return {
       total: count ?? 0,
@@ -624,6 +643,28 @@ export async function listLessonsByCourse(courseId: number): Promise<Lesson[]> {
   return (data ?? []).map(lessonFromRow);
 }
 
+/**
+ * أعمدة الإحصاءات فقط (بلا عناوين/روابط فيديو/وصف) — تُستخدم في حساب
+ * إحصاءات كل الطلاب من لوحة الأدمن حيث تُقرأ كل الدروس مرة واحدة.
+ */
+export async function listLessonStatsForBatch(): Promise<Pick<Lesson, 'id' | 'grade' | 'duration'>[]> {
+  const { data } = await sb.from('lessons').select('id,grade,duration');
+  return (data ?? []).map((r: any) => ({
+    id: Number(r.id),
+    grade: r.grade ?? 'all',
+    duration: Number(r.duration) || 0,
+  }));
+}
+
+/** أعمدة الإحصاءات فقط من الامتحانات (المرحلة لعدّ الامتحانات المتاحة). */
+export async function listExamStatsForBatch(): Promise<Pick<Exam, 'id' | 'grade'>[]> {
+  const { data } = await sb.from('exams').select('id,grade');
+  return (data ?? []).map((r: any) => ({
+    id: Number(r.id),
+    grade: r.grade ?? 'all',
+  }));
+}
+
 export async function listLessonsByCourseAndGrade(courseId: number, grade: string): Promise<Lesson[]> {
   const { data } = await sb.from('lessons')
     .select('*')
@@ -763,27 +804,40 @@ export async function countExamsByGrade(grade?: string): Promise<number> {
   return count ?? 0;
 }
 
+/** عدد الأسئلة لكل امتحان عبر RPC تجميعي (بدل جلب exam_id لكل سؤال في الجدول). */
+async function questionCountsFor(examIds: number[]): Promise<Map<number, number>> {
+  const qByExam = new Map<number, number>();
+  if (examIds.length === 0) return qByExam;
+
+  const { data, error } = await sb.rpc('question_counts_for_exams', { p_exam_ids: examIds });
+  if (!error) {
+    for (const row of (data ?? []) as any[]) {
+      qByExam.set(Number(row.exam_id), Number(row.questions_count) || 0);
+    }
+    return qByExam;
+  }
+
+  // احتياط قبل تطبيق ميجريشن 014: نجلب الأعمدة ونعدّها محلياً.
+  console.error('[db] question_counts_for_exams RPC:', error.message);
+  const { data: rows } = await sb.from('questions').select('exam_id').in('exam_id', examIds);
+  for (const q of rows ?? []) {
+    const ex = Number((q as any).exam_id);
+    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
+  }
+  return qByExam;
+}
+
 export async function listExamsWithQuestionCounts(): Promise<(Exam & { questionsCount: number })[]> {
   // Selective projection on exams
   const exams = await listExams();
-  const { data: allQuestions } = await sb.from('questions').select('exam_id');
-  const qByExam = new Map<number, number>();
-  for (const q of allQuestions ?? []) {
-    const ex = Number(q.exam_id);
-    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
-  }
+  const qByExam = await questionCountsFor(exams.map((e) => e.id));
   return exams.map((e) => ({ ...e, questionsCount: qByExam.get(e.id) ?? 0 }));
 }
 
 export async function listExamsByGradeWithQuestionCounts(grade: string): Promise<(Exam & { questionsCount: number })[]> {
   // Selective projection on exams
   const exams = await listExamsByGrade(grade);
-  const { data: allQuestions } = await sb.from('questions').select('exam_id');
-  const qByExam = new Map<number, number>();
-  for (const q of allQuestions ?? []) {
-    const ex = Number(q.exam_id);
-    qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
-  }
+  const qByExam = await questionCountsFor(exams.map((e) => e.id));
   return exams.map((e) => ({ ...e, questionsCount: qByExam.get(e.id) ?? 0 }));
 }
 
@@ -1348,6 +1402,41 @@ const LEADERBOARD_EXAM_CAP = 30;
  * مُحسّنة: استعلام واحد لكل النتائج + تجميع في الذاكرة (بدل 30 استعلام متوازي).
  */
 export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
+  // RPC ترجع ≤ 3 صفوف لكل امتحان (بدل كل النتائج). لو الميجريشن 016 لم
+  // تُطبَّق بعد نرجع للنسخة القديمة حتى لا تتعطل الصفحة.
+  const { data: rows, error } = await sb.rpc('exam_top3_leaderboards', {
+    p_limit: LEADERBOARD_EXAM_CAP,
+  });
+  if (!error) {
+    const boards: ExamLeaderboard[] = [];
+    let current: ExamLeaderboard | null = null;
+    for (const row of (rows ?? []) as any[]) {
+      const examId = Number(row.exam_id);
+      if (!current || current.examId !== examId) {
+        current = {
+          examId,
+          examTitle: String(row.exam_title ?? ''),
+          examTitleEn: String(row.exam_title_en ?? ''),
+          examGrade: String(row.exam_grade ?? 'all'),
+          top: [],
+        };
+        boards.push(current);
+      }
+      current.top.push({
+        userId: Number(row.user_id),
+        fullName: String(row.full_name ?? ''),
+        score: Number(row.score) || 0,
+      });
+    }
+    return boards;
+  }
+
+  console.error('[db] exam_top3_leaderboards RPC:', error.message);
+  return listExamLeaderboardsLegacy();
+}
+
+/** النسخة القديمة (تجميع في الذاكرة) — احتياط فقط قبل تطبيق ميجريشن 016. */
+async function listExamLeaderboardsLegacy(): Promise<ExamLeaderboard[]> {
   const { data: examRows } = await sb
     .from('exams')
     .select('id, title, title_en, grade')
@@ -1358,7 +1447,6 @@ export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
   const exams = (examRows ?? []) as { id: number; title?: string; title_en?: string; grade?: string }[];
   if (exams.length === 0) return [];
 
-  // استعلام واحد لكل النتائج + تجميع في الذاكرة (تفادي N+1)
   const examIds = exams.map((e) => Number(e.id));
   const { data: resultRows } = await sb
     .from('exam_results')
@@ -1367,7 +1455,6 @@ export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
     .order('best', { ascending: false })
     .order('user_id', { ascending: true });
 
-  // تجميع النتائج لكل امتحان مع فلترة المرحلة
   const byExam = new Map<number, ExamTopEntryWithGrade[]>();
   for (const r of resultRows ?? []) {
     const u = (r as any).users as { full_name?: string; role?: string; grade?: string } | null;
@@ -1386,7 +1473,6 @@ export async function listExamLeaderboards(): Promise<ExamLeaderboard[]> {
   for (const exam of exams) {
     const examGrade = String(exam.grade ?? 'all');
     const allEntries = byExam.get(Number(exam.id)) ?? [];
-    // فلترة حسب المرحلة: امتحان عام (all) يأخذ الكل، امتحان مرحلة يأخذ طلابها فقط
     const filtered = allEntries.filter((e) => examGrade === 'all' || e.grade === examGrade);
     if (filtered.length === 0) continue;
     boards.push({
@@ -1423,6 +1509,33 @@ const RANK_SCAN_CAP = 2000;
  * إن تجاوز عدد النتائج السقف ولم يُعثر على الطالب يُعاد rank=null (لا نخترع رقمًا).
  */
 export async function latestExamRankForUser(userId: number, grade: string): Promise<MyExamRank> {
+  const safeGrade = (EXAM_GRADES as readonly string[]).includes(String(grade)) ? String(grade) : 'bac1';
+  const { data: rows, error } = await sb.rpc('latest_exam_rank', {
+    p_user_id: userId,
+    p_grade: safeGrade,
+  });
+  if (!error) {
+    const row = ((rows ?? []) as any[])[0];
+    if (!row) {
+      return { examId: null, examTitle: '', examTitleEn: '', score: null, rank: null, total: 0, taken: false };
+    }
+    const taken = !!row.taken;
+    return {
+      examId: Number(row.exam_id),
+      examTitle: String(row.exam_title ?? ''),
+      examTitleEn: String(row.exam_title_en ?? ''),
+      score: taken ? Number(row.score) || 0 : null,
+      rank: taken ? Number(row.rank) || null : null,
+      total: Number(row.total) || 0,
+      taken,
+    };
+  }
+
+  console.error('[db] latest_exam_rank RPC:', error.message);
+  return latestExamRankForUserLegacy(userId, safeGrade);
+}
+
+async function latestExamRankForUserLegacy(userId: number, grade: string): Promise<MyExamRank> {
   const empty: MyExamRank = { examId: null, examTitle: '', examTitleEn: '', score: null, rank: null, total: 0, taken: false };
 
   // نحصر Phase في قيم معروفة قبل استخدامها داخل or(...) لتفادي أي مدخل عشوائي
@@ -1739,15 +1852,16 @@ export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<n
 
   const [userRows, allExams, allLessons, progressRows, resultRows, { tiers }] = await Promise.all([
     sb.from('users').select('id,grade').in('id', ids),
-    listExams(),
-    listAllLessons(),
-    sb.from('progress').select('*').in('user_id', ids),
-    sb.from('exam_results').select('*').in('user_id', ids),
+    listExamStatsForBatch(),
+    listLessonStatsForBatch(),
+    sb.from('progress').select('user_id,lesson_id,seconds_watched').in('user_id', ids),
+    // لا نجلب answers/history (JSONB كبير لكل صف) — الإحصاءات تحتاج الأرقام فقط.
+    sb.from('exam_results').select('user_id,exam_id,best,score,at').in('user_id', ids),
     getLevels(),
   ]);
 
   // مجاميع تُحسب مرة واحدة لكل مرحلة بدلاً من التكرار على كل الدروس/الامتحانات لكل طالب
-  const lessonById = new Map<number, Lesson>();
+  const lessonById = new Map<number, Pick<Lesson, 'id' | 'grade' | 'duration'>>();
   let baseLessonCount = 0;
   let baseDuration = 0;
   let baseExams = 0;
@@ -1907,6 +2021,27 @@ export async function adminStats(): Promise<{
   notes: number;
   codeFiles: number;
 }> {
+  // RPC واحدة بدل 8 استعلامات count متوازية. لو الميجريشن 016 لم يُطبَّق
+  // بعد (error) نرجع للنسخة القديمة حتى لا تتعطل لوحة الأدمن.
+  const { data, error } = await sb.rpc('admin_dashboard_stats');
+  if (!error) {
+    const row = ((data ?? []) as any[])[0];
+    if (row) {
+      return {
+        students: Number(row.students) || 0,
+        admins: Number(row.admins) || 0,
+        subscribed: Number(row.subscribed) || 0,
+        courses: Number(row.courses) || 0,
+        lessons: Number(row.lessons) || 0,
+        exams: Number(row.exams) || 0,
+        notes: Number(row.notes) || 0,
+        codeFiles: Number(row.code_files) || 0,
+      };
+    }
+  } else {
+    console.error('[db] admin_dashboard_stats RPC:', error.message);
+  }
+
   const [studentsCount, adminsCount, subscribedCount, coursesCount, lessonsCount, examsCount, notesCount, codeFilesCount] = await Promise.all([
     sb.from('users').select('id', { count: 'exact', head: true }).eq('role', 'student'),
     sb.from('users').select('id', { count: 'exact', head: true }).eq('role', 'admin'),

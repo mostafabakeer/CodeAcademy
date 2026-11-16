@@ -36,11 +36,43 @@ function isRelayableCookie(cookie) {
   return !/^\s*__cf/i.test(cookie);
 }
 
-async function proxyApi(request, url) {
+/**
+ * مدة كاش الحافة (ثوانٍ) للمسارات العامة — 0 يعني بلا كاش.
+ * لا نضع هنا أي مسار يعتمد على المستخدم أو الجلسة.
+ */
+function cacheTtlFor(route, method) {
+  if (method !== 'GET') return 0;
+  const path = route.split('?')[0];
+  // المتصدّرون ولوحات الأوائل تتغيّر بعد كل امتحان — دقيقة كافية وتخفّض
+  // استدعاءات Supabase من كل طالب إلى نسخة واحدة لكل دقيقة.
+  if (path === '/top-students' || path === '/latest-exam-top' || path === '/exam-leaderboards') {
+    return 60;
+  }
+  // المحتوى العام (كتالوج الزوار) يتغيّر بتعديل الأدمن فقط.
+  if (path === '/public/courses' || path.startsWith('/public/courses/')) return 120;
+  // مفتاح VAPID شبه ثابت؛ النسخة نُبقيها دقيقة واحدة حتى لا يظهر رقم قديم بعد النشر.
+  if (path === '/push/public-key') return 600;
+  if (path === '/version') return 60;
+  return 0;
+}
+
+async function proxyApi(request, url, ctx) {
   // "/api/auth/me?x=1" ⇒ "/auth/me?x=1"
   const route = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
   const target = new URL(SUPABASE_FN_BASE + route);
   target.search = url.search;
+
+  // ===== كاش الحافة للمسارات العامة =====
+  // هذه المسارات لا تعتمد على الجلسة إطلاقاً، وكان كل طالب يوقظ دالة Supabase
+  // (وCold Start) لقراءتها. caches.default مفتاحه الرابط فقط، لذلك نُدرج
+  // هنا المسارات العامة حصراً — أي مسار مصادَق يبقى بلا كاش.
+  const cacheTtl = cacheTtlFor(route, request.method);
+  let cacheKey = null;
+  if (cacheTtl > 0) {
+    cacheKey = new Request(target.toString(), { method: 'GET' });
+    const hit = await caches.default.match(cacheKey);
+    if (hit) return hit;
+  }
 
   const headers = new Headers(request.headers);
   headers.delete('host');
@@ -111,25 +143,39 @@ async function proxyApi(request, url) {
       : [];
   const cookies = allCookies.filter(isRelayableCookie);
   for (const c of cookies) outHeaders.append('set-cookie', normalizeSetCookie(c));
-  // نُخفي الكوكي عن الصفحة ونمنع التخزين المؤقت للاستجابات المصادَقة
-  outHeaders.set('vary', 'Cookie, Origin');
-  if (cookies.length) outHeaders.set('cache-control', 'private, no-store');
+  // نُخفي الكوكي عن الصفحة ونمنع التخزين المؤقت للاستجابات المصادَقة.
+  const isCacheable = cacheTtl > 0 && upstream.ok && cookies.length === 0;
+  if (isCacheable) {
+    // مسار عام: نسمح للمتصفح وكاش الحافة بتخزينه (Vary بالمضغوط فقط).
+    outHeaders.set('cache-control', `public, max-age=${cacheTtl}, s-maxage=${cacheTtl}`);
+    outHeaders.set('vary', 'Accept-Encoding');
+  } else {
+    outHeaders.set('vary', 'Cookie, Origin');
+    if (cookies.length) outHeaders.set('cache-control', 'private, no-store');
+  }
 
-  return new Response(upstream.body, {
+  const response = new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: outHeaders,
   });
+
+  if (isCacheable && cacheKey) {
+    // بعد إرسال الرد للمستخدم — لا نؤخّره بكتابة الكاش.
+    ctx?.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
+  }
+
+  return response;
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const pathname = url.pathname;
 
     // 1) طلبات الـ API تُروَّج عبر نفس الأصل قبل أي شيء آخر
     if (pathname === '/api' || pathname.startsWith('/api/')) {
-      return proxyApi(request, url);
+      return proxyApi(request, url, ctx);
     }
 
     // مسارات الأصول الثابتة المعروفة (لا تمرّ بمنطق SPA/الـ prerender)
