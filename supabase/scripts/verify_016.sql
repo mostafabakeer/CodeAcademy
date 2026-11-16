@@ -25,6 +25,13 @@ select jsonb_pretty(jsonb_build_object(
         'idx_password_resets_created'
       )
   ),
+  'service_role_can_execute', jsonb_build_object(
+    'exam_top3_leaderboards', has_function_privilege('service_role', 'public.exam_top3_leaderboards(integer)', 'execute'),
+    'latest_exam_rank', has_function_privilege('service_role', 'public.latest_exam_rank(bigint,text)', 'execute'),
+    'admin_dashboard_stats', has_function_privilege('service_role', 'public.admin_dashboard_stats()', 'execute'),
+    'password_reset_diagnostics', has_function_privilege('service_role', 'public.password_reset_diagnostics(text)', 'execute')
+  ),
+  'anon_can_execute', has_function_privilege('anon', 'public.admin_dashboard_stats()', 'execute'),
   'top3_rows', (select count(*) from public.exam_top3_leaderboards(30)),
   'rank_rows', (select count(*) from public.latest_exam_rank(1, 'bac1')),
   'admin_stats', (select to_jsonb(s) from public.admin_dashboard_stats() s),
