@@ -173,6 +173,7 @@ export const en: TranslationKeys = {
     quality: 'Quality',
     auto: 'Auto',
     loading: 'Loading video…',
+    slowNetwork: 'Slow connection… still loading',
     invalidUrl: 'Invalid YouTube link — ask the admin to fix it',
     embedBlocked: 'The video owner disabled playback on other sites. Use the button below to watch it on YouTube.',
     notFound: 'The video was not found, was removed, or is private',

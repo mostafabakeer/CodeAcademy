@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getYouTubeThumbnail } from '../lib/youtube';
+import { useLang } from '../i18n';
 
 interface YouTubePlayerProps {
   videoId: string;
@@ -75,7 +76,9 @@ export default function YouTubePlayer({
   onProgress,
 }: YouTubePlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const [loading, setLoading] = useState(autoPlay);
   const [apiFailed, setApiFailed] = useState(false);
+  const { t } = useLang();
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
   const initialTimeRef = useRef(initialTime);
@@ -88,8 +91,21 @@ export default function YouTubePlayer({
 
     let cancelled = false;
     let timer: number | undefined;
+    let safetyTimer: number | undefined;
     let lastProgressAt = 0;
     let lastProgressSec = -1;
+
+    const stopSafety = () => {
+      if (safetyTimer !== undefined) {
+        window.clearTimeout(safetyTimer);
+        safetyTimer = undefined;
+      }
+    };
+    // المؤشر لا يختفي إلا عند PLAYING فعلياً؛ مؤقت أمان فقط لو منع المتصفح التشغيل.
+    const finishLoading = () => {
+      stopSafety();
+      if (!cancelled) setLoading(false);
+    };
 
     const emitProgress = (force = false) => {
       const p = playerRef.current;
@@ -133,25 +149,34 @@ export default function YouTubePlayer({
               const duration = Number(e.target.getDuration?.() ?? 0);
               if (duration > 0) cbRef.current.onDuration?.(duration);
               if (initialTimeRef.current > 0) e.target.seekTo(initialTimeRef.current, true);
+              stopSafety();
+              safetyTimer = window.setTimeout(() => { if (!cancelled) setLoading(false); }, 12_000);
             },
             onStateChange: (e: any) => {
               if (cancelled) return;
               const state = YT.PlayerState;
               if (e.data === state.PLAYING) {
+                finishLoading();
                 cbRef.current.onPlay?.();
                 stopTimer();
                 timer = window.setInterval(() => emitProgress(), 1000);
               } else if (e.data === state.PAUSED) {
+                finishLoading();
                 stopTimer();
                 cbRef.current.onPause?.();
                 emitProgress(true);
               } else if (e.data === state.ENDED) {
+                finishLoading();
                 stopTimer();
                 emitProgress(true);
                 cbRef.current.onEnded?.();
+              } else if (e.data === state.BUFFERING || e.data === state.UNSTARTED || e.data === state.CUED) {
+                // تقطيع/انتظار داخل المشغّل ⇒ نرجع المؤشر بدل شاشة سوداء.
+                if (!cancelled) setLoading(true);
               }
             },
             onError: () => {
+              finishLoading();
               if (!cancelled) cbRef.current.onError?.('video error');
             },
           },
@@ -160,12 +185,17 @@ export default function YouTubePlayer({
       .catch(() => {
         // فشل تحميل الـ API (شبكة بطيئة/حجب) ⇒ نرجع لـ iframe عادي:
         // الفيديو يعمل، فقط بلا تتبّع تقدّم، بدل شاشة معطّلة.
-        if (!cancelled) setApiFailed(true);
+        if (!cancelled) {
+          setApiFailed(true);
+          stopSafety();
+          safetyTimer = window.setTimeout(() => { if (!cancelled) setLoading(false); }, 12_000);
+        }
       });
 
     return () => {
       cancelled = true;
       stopTimer();
+      stopSafety();
       try {
         playerRef.current?.destroy?.();
       } catch {
@@ -188,10 +218,15 @@ export default function YouTubePlayer({
   });
   const embedUrl = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
 
+  const activate = () => {
+    setLoading(true);
+    setIsPlaying(true);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      setIsPlaying(true);
+      activate();
     }
   };
 
@@ -199,7 +234,7 @@ export default function YouTubePlayer({
     <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-ink-900 shadow-2xl">
       {!isPlaying ? (
         <button
-          onClick={() => setIsPlaying(true)}
+          onClick={activate}
           onKeyDown={handleKeyDown}
           className="absolute inset-0 z-20 flex cursor-pointer items-center justify-center bg-black/40 transition-all hover:bg-black/25"
           aria-label="تشغيل الفيديو"
@@ -227,9 +262,16 @@ export default function YouTubePlayer({
           title="YouTube video player"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           allowFullScreen
+          onLoad={() => setLoading(false)}
         />
       ) : (
         <div ref={hostRef} className="absolute inset-0 h-full w-full" />
+      )}
+      {isPlaying && loading && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-ink-900/70 pointer-events-none">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-fire-500/30 border-t-fire-500" />
+          <p className="text-xs font-bold text-gray-200">{t('video.loading')}</p>
+        </div>
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -53,6 +53,16 @@ function PageLoader() {
       <p className="text-sm text-gray-400">DR Code</p>
     </div>
   );
+}
+
+/**
+ * روابط قديمة كانت تُبنى بصيغة `/lesson/:id` (مفرد) قبل أن يصبح المسار
+ * `/lessons/:id`. نحافظ على الروابط المحفوظة عند الطلاب بدل صفحة 404.
+ */
+function LegacyLessonRedirect() {
+  const { id } = useParams();
+  const location = useLocation();
+  return <Navigate to={`/lessons/${id ?? ''}${location.search}${location.hash}`} replace />;
 }
 
 /**
@@ -111,6 +121,7 @@ function AnimatedRoutes() {
           <Route path="/" element={<VisitorRoute publicPage={<PageErrorBoundary><PublicLanding /></PageErrorBoundary>}><Home /></VisitorRoute>} />
           <Route path="/courses" element={<VisitorRoute publicPage={<PageErrorBoundary><PublicCatalog /></PageErrorBoundary>}><Courses /></VisitorRoute>} />
           <Route path="/courses/:id" element={<VisitorRoute publicPage={<PageErrorBoundary><PublicCourseDetail /></PageErrorBoundary>}><CourseDetail /></VisitorRoute>} />
+          <Route path="/lesson/:id" element={<LegacyLessonRedirect />} />
           <Route path="/lessons/:id" element={<ProtectedRoute><SubscriberGate><LessonPlayer /></SubscriberGate></ProtectedRoute>} />
           <Route path="/exams" element={<ProtectedRoute><SubscriberGate><Exams /></SubscriberGate></ProtectedRoute>} />
           <Route path="/exams/:id" element={<ProtectedRoute><SubscriberGate><ExamTake /></SubscriberGate></ProtectedRoute>} />

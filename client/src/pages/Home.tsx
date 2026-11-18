@@ -153,7 +153,7 @@ export default function Home() {
         >
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-extrabold">⏱ {t('home.resumeLesson')}</h2>
-            <Link to={`/lesson/${resumeLesson.id}`} className="btn-fire rounded-lg px-4 py-2 text-sm font-bold text-white">
+            <Link to={`/lessons/${resumeLesson.id}`} className="btn-fire rounded-lg px-4 py-2 text-sm font-bold text-white">
               {t('home.continueLesson')}
             </Link>
           </div>

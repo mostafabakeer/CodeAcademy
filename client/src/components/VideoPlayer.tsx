@@ -58,8 +58,15 @@ export default function VideoPlayer({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasStarted, setHasStarted] = useState(false);
+  const [hasPlayed, setHasPlayed] = useState(false);
+  const [slowNetwork, setSlowNetwork] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [hlsLevels, setHlsLevels] = useState<string[]>([]);
+
+  // «طُلب التشغيل» ≠ «بدأ العرض». المؤشر لا يُطفأ إلا عند حدث playing
+  // (أول فريم حقيقي)، وإلا رآه الطالب يختفي على شاشة سوداء فيظن أن الفيديو تعطّل.
+  const playRequestedRef = useRef(false);
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // أحدث callbacks في ref: الآباء يعيدون إنشاء الدوال كل render (LessonPlayer
   // يحدّث الحالة كل ثانية)، وكانت إضافتها لتبعيات الـ effect تعيد بناء
@@ -89,6 +96,20 @@ export default function VideoPlayer({
 
   const cleanupHls = useCallback(() => { if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; } setHlsLevels([]); }, []);
 
+  // بدء التحميل: المؤشر يظهر فوراً، وبعد 12 ثانية نطمئن الطالب أن التحميل مستمر.
+  const beginLoading = useCallback(() => {
+    setIsLoading(true);
+    setSlowNetwork(false);
+    if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
+    slowTimerRef.current = setTimeout(() => setSlowNetwork(true), 12_000);
+  }, []);
+
+  const endLoading = useCallback(() => {
+    setIsLoading(false);
+    if (slowTimerRef.current) { clearTimeout(slowTimerRef.current); slowTimerRef.current = null; }
+    setSlowNetwork(false);
+  }, []);
+
   const applyHlsQuality = useCallback((hls: Hls, videoEl: HTMLVideoElement, levels: string[]) => {
     const idx = levels.findIndex(l => l === quality);
     if (idx >= 0 && hls.levels[idx]) (hls as any).level = idx;
@@ -97,15 +118,15 @@ export default function VideoPlayer({
 
   const startHls = useCallback(async (srcUrl: string, videoEl: HTMLVideoElement) => {
     const mod = await import('hls.js').catch(() => null);
-    if (!mod) { setError(t('video.unavailable')); setIsLoading(false); return; }
+    if (!mod) { setError(t('video.unavailable')); endLoading(); return; }
     const HlsLib = mod.default;
-    if (!HlsLib.isSupported()) { if ('mediaSources' in videoEl) videoEl.src = srcUrl; else { setError(t('video.unavailable')); setIsLoading(false); } return; }
+    if (!HlsLib.isSupported()) { if ('mediaSources' in videoEl) videoEl.src = srcUrl; else { setError(t('video.unavailable')); endLoading(); } return; }
     const hls = new HlsLib({ maxBufferLength: 30, maxMaxBufferLength: 60, lowLatencyMode: false });
     hlsRef.current = hls;
     hls.on(HlsLib.Events.MANIFEST_PARSED, (_evt, data) => { const levels = data.levels.map(l => `${l.height}px`); setHlsLevels(levels); applyHlsQuality(hls, videoEl, levels); });
-    hls.on(HlsLib.Events.ERROR, (_evt, detail) => { if (detail.fatal) { if (detail.type === HlsLib.ErrorTypes.NETWORK_ERROR) hls.startLoad(); else if (detail.type === HlsLib.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError(); else { setError(t('video.unavailable')); setIsLoading(false); } } });
+    hls.on(HlsLib.Events.ERROR, (_evt, detail) => { if (detail.fatal) { if (detail.type === HlsLib.ErrorTypes.NETWORK_ERROR) hls.startLoad(); else if (detail.type === HlsLib.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError(); else { setError(t('video.unavailable')); endLoading(); } } });
     hls.loadSource(srcUrl); hls.attachMedia(videoEl);
-  }, [applyHlsQuality, t]);
+  }, [applyHlsQuality, endLoading, t]);
 
   // الـ effect الأساسي يجب ألا يعاد بناؤه عند تغيير الجودة/اللغة.
   const startHlsRef = useRef(startHls);
@@ -113,9 +134,30 @@ export default function VideoPlayer({
 
   const togglePlay = useCallback(async () => {
     const v = videoRef.current; if (!v) return;
-    if (!hasStarted || v.src !== effectiveSrc) { setHasStarted(true); setIsLoading(true); v.src = effectiveSrc; v.poster = poster || ''; v.load(); await new Promise<void>(resolve => { const onMeta = () => { v.removeEventListener('loadedmetadata', onMeta); resolve(); }; v.addEventListener('loadedmetadata', onMeta, { once: true }); setTimeout(resolve, 500); }); }
-    if (isPlaying) { v.pause(); setIsPlaying(false); stopTick(); } else { try { setIsLoading(true); await v.play(); setIsPlaying(true); setIsLoading(false); startTick(); } catch { setIsLoading(false); setError(t('video.error')); } }
-  }, [isPlaying, hasStarted, effectiveSrc, poster, startTick, stopTick, t]);
+    if (isPlaying) {
+      playRequestedRef.current = false;
+      v.pause();
+      setIsPlaying(false);
+      stopTick();
+      endLoading();
+      return;
+    }
+    playRequestedRef.current = true;
+    setHasStarted(true);
+    beginLoading();
+    // المصدر يُضبط مرة واحدة في الـ effect؛ نعيده فقط لو تغيّر فعلاً.
+    if (v.getAttribute('src') !== effectiveSrc) { v.src = effectiveSrc; v.poster = poster || ''; v.load(); }
+    try {
+      await v.play();
+      setIsPlaying(true);
+      startTick();
+      // لا نطفي المؤشر هنا: حدث `playing` هو الدليل على ظهور أول فريم فعلي.
+    } catch {
+      playRequestedRef.current = false;
+      endLoading();
+      setError(t('video.error'));
+    }
+  }, [isPlaying, effectiveSrc, poster, startTick, stopTick, t, beginLoading, endLoading]);
 
   const seek = useCallback((s: number) => {
     const v = videoRef.current; if (!v) return; v.currentTime = Math.max(0, Math.min(s, v.duration)); setCurrentTime(v.currentTime); cbRef.current.onTimeUpdate?.(v.currentTime);
@@ -131,7 +173,18 @@ export default function VideoPlayer({
 
   const toggleFullscreen = useCallback(() => { const el = containerRef.current; if (!el) return; if (document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen(); }, []);
 
-  const retryNative = useCallback(() => { const v = videoRef.current; setError(null); if (!v) return; setIsLoading(true); setHasStarted(false); cleanupHls(); if (/\.m3u8(\?.*)?$/.test(effectiveSrc)) void startHls(effectiveSrc, v); else v.load(); }, [effectiveSrc, startHls, cleanupHls]);
+  const retryNative = useCallback(() => {
+    const v = videoRef.current;
+    setError(null);
+    if (!v) return;
+    setHasStarted(false);
+    setHasPlayed(false);
+    playRequestedRef.current = false;
+    beginLoading();
+    cleanupHls();
+    if (/\.m3u8(\?.*)?$/.test(effectiveSrc)) void startHls(effectiveSrc, v);
+    else v.load();
+  }, [effectiveSrc, startHls, cleanupHls, beginLoading]);
 
   const handleMouseMove = useCallback(() => { setShowControls(true); if (hideTimeout.current) clearTimeout(hideTimeout.current); hideTimeout.current = setTimeout(() => { if (isPlaying) setShowControls(false); }, 3000); }, [isPlaying]);
 
@@ -143,7 +196,10 @@ export default function VideoPlayer({
 
   useEffect(() => {
     let mounted = true;
-    setError(null); setHasStarted(false); setDuration(0); setCurrentTime(0); setIsPlaying(false); setIsLoading(true); cleanupHls();
+    setError(null); setHasStarted(false); setHasPlayed(false); setDuration(0); setCurrentTime(0); setIsPlaying(false);
+    playRequestedRef.current = false;
+    beginLoading();
+    cleanupHls();
     lastUiSecRef.current = -1;
     lastProgressSecRef.current = -1;
     lastProgressAtRef.current = 0;
@@ -151,7 +207,7 @@ export default function VideoPlayer({
     const v = videoRef.current; if (!v) return;
     const srcUrl = effectiveSrc;
     if (/\.m3u8(\?.*)?$/.test(srcUrl)) void startHlsRef.current(srcUrl, v);
-    else { if (v.src !== effectiveSrc) { v.src = effectiveSrc; v.poster = poster || ''; v.load(); } }
+    else { if (v.getAttribute('src') !== effectiveSrc) { v.src = effectiveSrc; v.poster = poster || ''; v.load(); } }
 
     // إبلاغ التقدّم بحد أقصى مرة كل 5 ثوانٍ (كان timeupdate يكتب في
     // localStorage ~4 مرات/ثانية على الموبايل).
@@ -168,13 +224,58 @@ export default function VideoPlayer({
       cbRef.current.onProgress?.(whole);
     };
 
-    const onMeta = () => { const el = videoRef.current; if (!el || !mounted) return; setDuration(el.duration); cbRef.current.onDuration?.(el.duration); cbRef.current.onDurationChange?.(el.duration); if (bootResume > 0 && bootResume < el.duration) el.currentTime = bootResume; };
-    const onPlay = () => { if (!mounted) return; setIsPlaying(true); setIsLoading(false); startTick(); };
-    const onPause = () => { if (!mounted) return; setIsPlaying(false); stopTick(); emitProgress(true); };
-    const onEndedEvent = () => { if (!mounted) return; setIsPlaying(false); stopTick(); emitProgress(true); cbRef.current.onEnded?.(); };
-    const onWaiting = () => { if (!mounted) return; setIsLoading(true); };
-    const onCanPlay = () => { if (!mounted) return; setIsLoading(false); };
-    const onVideoError = () => { if (!mounted) return; setError(t('video.error')); setIsLoading(false); stopTick(); cbRef.current.onError?.(new Error(t('video.error'))); };
+    const onMeta = () => {
+      const el = videoRef.current;
+      if (!el || !mounted) return;
+      setDuration(el.duration);
+      cbRef.current.onDuration?.(el.duration);
+      cbRef.current.onDurationChange?.(el.duration);
+      if (bootResume > 0 && bootResume < el.duration) el.currentTime = bootResume;
+      // الميتاداتا جاهزة والطالب لم يطلب التشغيل بعد ⇒ البوستر + زر Play.
+      if (!playRequestedRef.current) endLoading();
+    };
+    const onPlay = () => { if (!mounted) return; setIsPlaying(true); startTick(); };
+    // أول فريم فعلي — هنا فقط يختفي مؤشر التحميل.
+    const onPlaying = () => {
+      if (!mounted) return;
+      playRequestedRef.current = true;
+      setIsPlaying(true);
+      setHasPlayed(true);
+      endLoading();
+      startTick();
+    };
+    const onPause = () => {
+      if (!mounted) return;
+      playRequestedRef.current = false;
+      setIsPlaying(false);
+      stopTick();
+      endLoading();
+      emitProgress(true);
+    };
+    const onEndedEvent = () => {
+      if (!mounted) return;
+      playRequestedRef.current = false;
+      setIsPlaying(false);
+      stopTick();
+      endLoading();
+      emitProgress(true);
+      cbRef.current.onEnded?.();
+    };
+    // أثناء التحميل/التقطيع: المؤشر يرجع ويستمر حتى يعود `playing`.
+    const onWaiting = () => { if (!mounted || !playRequestedRef.current) return; beginLoading(); };
+    const onStalled = () => { if (!mounted || !playRequestedRef.current) return; beginLoading(); };
+    const onSeeking = () => { if (!mounted || !playRequestedRef.current) return; beginLoading(); };
+    // canplay لا يعني أن الصورة ظهرت؛ يطفي المؤشر فقط في وضع الانتظار (قبل Play).
+    const onCanPlay = () => { if (!mounted) return; if (!playRequestedRef.current) endLoading(); };
+    const onLoadedData = () => { if (!mounted) return; if (!playRequestedRef.current) endLoading(); };
+    const onVideoError = () => {
+      if (!mounted) return;
+      playRequestedRef.current = false;
+      endLoading();
+      setError(t('video.error'));
+      stopTick();
+      cbRef.current.onError?.(new Error(t('video.error')));
+    };
     const onTimeUpdateEvent = () => {
       const el = videoRef.current;
       if (!el || !mounted) return;
@@ -188,13 +289,33 @@ export default function VideoPlayer({
     };
 
     v.addEventListener('loadedmetadata', onMeta, { once: true });
-    v.addEventListener('play', onPlay); v.addEventListener('pause', onPause); v.addEventListener('ended', onEndedEvent);
-    v.addEventListener('waiting', onWaiting); v.addEventListener('canplay', onCanPlay); v.addEventListener('error', onVideoError); v.addEventListener('timeupdate', onTimeUpdateEvent);
+    v.addEventListener('play', onPlay);
+    v.addEventListener('playing', onPlaying);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('ended', onEndedEvent);
+    v.addEventListener('waiting', onWaiting);
+    v.addEventListener('stalled', onStalled);
+    v.addEventListener('seeking', onSeeking);
+    v.addEventListener('canplay', onCanPlay);
+    v.addEventListener('loadeddata', onLoadedData);
+    v.addEventListener('error', onVideoError);
+    v.addEventListener('timeupdate', onTimeUpdateEvent);
 
     return () => {
       mounted = false;
-      v.removeEventListener('loadedmetadata', onMeta); v.removeEventListener('play', onPlay); v.removeEventListener('pause', onPause); v.removeEventListener('ended', onEndedEvent);
-      v.removeEventListener('waiting', onWaiting); v.removeEventListener('canplay', onCanPlay); v.removeEventListener('error', onVideoError); v.removeEventListener('timeupdate', onTimeUpdateEvent);
+      v.removeEventListener('loadedmetadata', onMeta);
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('playing', onPlaying);
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('ended', onEndedEvent);
+      v.removeEventListener('waiting', onWaiting);
+      v.removeEventListener('stalled', onStalled);
+      v.removeEventListener('seeking', onSeeking);
+      v.removeEventListener('canplay', onCanPlay);
+      v.removeEventListener('loadeddata', onLoadedData);
+      v.removeEventListener('error', onVideoError);
+      v.removeEventListener('timeupdate', onTimeUpdateEvent);
+      if (slowTimerRef.current) { clearTimeout(slowTimerRef.current); slowTimerRef.current = null; }
       cleanupHls(); stopTick();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks تُقرأ من cbRef
@@ -228,28 +349,32 @@ export default function VideoPlayer({
 
   return (
     <div ref={containerRef} tabIndex={0} className="relative aspect-video rounded-2xl overflow-hidden bg-ink-900 select-none outline-none" onMouseMove={handleMouseMove} onMouseLeave={() => isPlaying && setShowControls(false)}>
-      {!hasStarted && (
-        <div className="absolute inset-0 cursor-pointer z-20 flex items-center justify-center" onClick={togglePlay}>
+      {!hasPlayed && (
+        <div
+          className={`absolute inset-0 z-20 flex items-center justify-center ${hasStarted ? 'pointer-events-none' : 'cursor-pointer'}`}
+          onClick={hasStarted ? undefined : togglePlay}
+        >
           {poster ? <img src={poster} alt="Video" className="w-full h-full object-cover opacity-90" /> : <div className="w-full h-full bg-gradient-to-br from-ink-800 to-ink-900 opacity-90" />}
           <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-            <div className="h-20 w-20 rounded-full bg-fire-500 flex items-center justify-center hover:scale-110 transition-transform shadow-lg touch-target">
-              <svg className="h-10 w-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-            </div>
+            {!isLoading && (
+              <div className="h-20 w-20 rounded-full bg-fire-500 flex items-center justify-center hover:scale-110 transition-transform shadow-lg touch-target">
+                <svg className="h-10 w-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+              </div>
+            )}
           </div>
         </div>
       )}
-      {isLoading && !hasStarted && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink-900/60 pointer-events-none">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-fire-500/30 border-t-fire-500" />
-        </div>
-      )}
       <video ref={videoRef} playsInline preload="metadata" className="absolute inset-0 w-full h-full object-contain" />
-      {isLoading && hasStarted && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink-900/60 pointer-events-none">
+      {/* يظهر من فتح الصفحة، ويبقى حتى أول فريم حقيقي (`playing`). */}
+      {isLoading && (
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-ink-900/60 pointer-events-none">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-fire-500/30 border-t-fire-500" />
+          <p className="max-w-[80%] text-center text-xs font-bold text-gray-200">
+            {t(slowNetwork ? 'video.slowNetwork' : 'video.loading')}
+          </p>
         </div>
       )}
-      {showControls && (isPlaying || hasStarted) && (
+      {showControls && hasPlayed && (
         <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3 z-30">
           <input type="range" min={0} max={duration || 100} value={currentTime} onChange={e => seek(Number(e.target.value))} className="w-full h-1 mb-2 accent-fire-500 cursor-pointer" />
           <div className="flex items-center gap-2">
