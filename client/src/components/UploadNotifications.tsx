@@ -18,6 +18,7 @@ interface UploadNotification {
 const gradeLabels: Record<string, string> = {
   bac1: 'البكالوريا 1',
   bac2: 'البكالوريا 2',
+  cs: 'حاسبات ومعلومات',
   all: 'جميع المراحل',
 };
 

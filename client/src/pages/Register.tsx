@@ -6,6 +6,7 @@ import { useLang } from '../i18n';
 import { useAuthStore } from '../store/authStore';
 import Sparkles from '../components/Sparkles';
 import Seo from '../components/Seo';
+import { GRADE_KEYS, GRADE_LABEL_KEY } from '../lib/grades';
 
 export default function Register() {
   const { t } = useLang();
@@ -104,8 +105,11 @@ export default function Register() {
             <div>
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('auth.grade')}</label>
               <select className="input-fire w-full rounded-xl px-4 py-3" value={grade} onChange={(e) => setGrade(e.target.value)}>
-                <option value="bac1">{t('auth.bac1')}</option>
-                <option value="bac2">{t('auth.bac2')}</option>
+                {GRADE_KEYS.map((g) => (
+                  <option key={g} value={g}>
+                    {t(GRADE_LABEL_KEY[g])}
+                  </option>
+                ))}
               </select>
             </div>
             <div>

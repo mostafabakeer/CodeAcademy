@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
+import AdminPageHeader from './AdminPageHeader';
 import { api } from '../../api/client';
 import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
@@ -102,12 +103,15 @@ const submit = async (e: FormEvent) => {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-black">📚 {t('admin.courses')}</h1>
-        <button onClick={openNew} className="btn-fire shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold text-white">
-          + {t('admin.addCourse')}
-        </button>
-      </div>
+      <AdminPageHeader
+        icon="📚"
+        title={t('admin.courses')}
+        action={
+          <button onClick={openNew} className="btn-fire w-full rounded-xl px-4 py-2.5 text-sm font-bold text-white sm:w-auto">
+            + {t('admin.addCourse')}
+          </button>
+        }
+      />
 
       {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
 

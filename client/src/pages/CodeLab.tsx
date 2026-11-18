@@ -410,9 +410,22 @@ export default function CodeLab() {
         // استعادة آخر ملف مفتوح مرة واحدة فقط عند أول تحميل.
         if (!didInitRef.current) {
           didInitRef.current = true;
-          const lastId = await getLastOpenedFileId();
-          const target = lastId ? all.find((f) => f.id === lastId) : undefined;
-          if (target) await selectFile(target.id);
+          // ?file=<اسم> قادم من «الكود المحفوظ» في الملف الشخصي: نفتح الملف المطلوب.
+          const wantedName = (() => {
+            try {
+              return new URLSearchParams(window.location.search).get('file');
+            } catch {
+              return null;
+            }
+          })();
+          const byName = wantedName ? all.find((f) => f.name === wantedName) : undefined;
+          if (byName) {
+            await selectFile(byName.id);
+          } else {
+            const lastId = await getLastOpenedFileId();
+            const target = lastId ? all.find((f) => f.id === lastId) : undefined;
+            if (target) await selectFile(target.id);
+          }
         }
       } catch (e) {
         setError((e as Error).message);

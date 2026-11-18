@@ -13,6 +13,7 @@ import {
   type MyExamRank,
 } from '../lib/content';
 import { StaleNotice, LoadError } from '../components/PageStatus';
+import { GRADE_ACCENT, GRADE_KEYS, gradeLabelKey } from '../lib/grades';
 import DoctorCode from '../components/DoctorCode';
 import Sparkles from '../components/Sparkles';
 import { MEDALS, TopStudentCard, LatestExamCard } from '../components/TopStudentsShared';
@@ -95,7 +96,7 @@ export default function TopStudentsPrivate() {
   const watchHours = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10)) / 10 : 0;
 
   const examName = myRank && (lang === 'ar' || !myRank.examTitleEn) ? myRank.examTitle : myRank?.examTitleEn || myRank?.examTitle;
-  const gradeLabel = grade === 'bac1' ? t('auth.bac1') : t('auth.bac2');
+  const gradeLabel = t(gradeLabelKey(grade));
 
   // المتصدر في آخر امتحان لنفس المرحلة (من نفس المصدر official)
   const myExamEntry = grade ? examTop?.[grade] : undefined;
@@ -310,23 +311,18 @@ export default function TopStudentsPrivate() {
           </span>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <LatestExamCard
-            entry={examTop?.bac1}
-            loading={loadingTop}
-            error={topError}
-            accent="sky"
-            grade="bac1"
-            highlightUserId={grade === 'bac1' ? (userId ?? undefined) : undefined}
-          />
-          <LatestExamCard
-            entry={examTop?.bac2}
-            loading={loadingTop}
-            error={topError}
-            accent="ember"
-            grade="bac2"
-            highlightUserId={grade === 'bac2' ? (userId ?? undefined) : undefined}
-          />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {GRADE_KEYS.map((g) => (
+            <LatestExamCard
+              key={g}
+              entry={examTop?.[g]}
+              loading={loadingTop}
+              error={topError}
+              accent={GRADE_ACCENT[g]}
+              grade={g}
+              highlightUserId={grade === g ? (userId ?? undefined) : undefined}
+            />
+          ))}
         </div>
       </motion.section>
 

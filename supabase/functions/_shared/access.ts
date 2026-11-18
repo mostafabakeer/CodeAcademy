@@ -3,9 +3,10 @@ import type { ContentGrade } from './types.ts';
 export const GRADES: Record<string, { name: string; nameEn: string }> = {
   bac1: { name: 'أولى باكلوريه', nameEn: '1st Baccalaureate' },
   bac2: { name: 'تانية باكلوريه', nameEn: '2nd Baccalaureate' },
+  cs: { name: 'حاسبات ومعلومات', nameEn: 'Computers & Information' },
 };
 
-export const GRADES_LIST: ContentGrade[] = ['bac1', 'bac2', 'all'];
+export const GRADES_LIST: ContentGrade[] = ['bac1', 'bac2', 'cs', 'all'];
 
 export function isContentGrade(v: unknown): v is ContentGrade {
   return typeof v === 'string' && (GRADES_LIST as string[]).includes(v);

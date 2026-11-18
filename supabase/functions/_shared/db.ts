@@ -1315,7 +1315,7 @@ export interface LatestExamTop {
   top: ExamTopEntry[];
 }
 
-const EXAM_GRADES = ['bac1', 'bac2'] as const;
+const EXAM_GRADES = ['bac1', 'bac2', 'cs'] as const;
 
 /**
  * Top 3 per grade from the "latest exam" (subsidiary):

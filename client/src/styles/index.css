@@ -37,6 +37,14 @@
   --animate-fade-up: fadeUp 0.5s ease-out both;
 }
 
+:root {
+  /*
+   * ارتفاع هيدر الموقع. القيمة هنا احتياطية فقط — الـ Navbar يقيس ارتفاعه
+   * الحقيقي ويحدّث المتغير، فتعتمد عليه العناصر اللاصقة (هيدر الأدمن).
+   */
+  --app-header-h: 5rem;
+}
+
 html {
   scroll-behavior: smooth;
 }
@@ -536,9 +544,13 @@ h1, h2, h3 {
 
 /* Ensure buttons have adequate touch targets on mobile */
 @media (max-width: 767px) {
+  /*
+   * ارتفاع فقط، بلا min-width: فرض 44px عرضاً على كل زر كان يمدّ الأزرار
+   * النصية الصغيرة والـ chips ويكسر تخطيط الصفوف. من يحتاج 44×44 يستخدم
+   * الصنف .touch-target صراحةً.
+   */
   button, [role="button"], .btn-fire, .btn-ghost-fire {
     min-height: 44px;
-    min-width: 44px;
   }
 
   /* Better spacing for admin grids on mobile */
@@ -550,6 +562,13 @@ h1, h2, h3 {
   .input-fire, select.input-fire {
     padding-top: 14px;
     padding-bottom: 14px;
+  }
+}
+
+/* على الهواتف العريضة/الصغيرة أفقياً: عمودان للكروت بدل عمود واحد طويل */
+@media (min-width: 480px) and (max-width: 767px) {
+  .grid-cols-admin-mobile {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 

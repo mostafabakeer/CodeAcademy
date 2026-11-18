@@ -1,5 +1,6 @@
 import type { FC } from 'react';
 import { useLang } from '../i18n';
+import { GRADE_KEYS, GRADE_LABEL_KEY } from '../lib/grades';
 
 interface StudentSearchProps {
   query: string;
@@ -39,8 +40,7 @@ export const StudentSearch: FC<StudentSearchProps> = ({
       >
         {[
           { key: 'all', tKey: 'admin.gradeAll' },
-          { key: 'bac1', tKey: 'auth.bac1' },
-          { key: 'bac2', tKey: 'auth.bac2' },
+          ...GRADE_KEYS.map((g) => ({ key: g, tKey: GRADE_LABEL_KEY[g] })),
         ].map((g) => (
           <option key={g.key} value={g.key}>
             {t(g.tKey)}

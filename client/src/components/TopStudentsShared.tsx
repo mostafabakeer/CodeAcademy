@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
+import { gradeLabelKey, type GradeAccent, type GradeKey } from '../lib/grades';
 import type { TopStudent, LatestExamTop, ExamLeaderboard } from '../lib/content';
 
 export const MEDALS: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
@@ -72,18 +73,20 @@ export function LatestExamCard({
   entry: LatestExamTop | undefined;
   loading: boolean;
   error: string;
-  accent: 'sky' | 'ember';
-  grade: 'bac1' | 'bac2';
+  accent: GradeAccent;
+  grade: GradeKey;
   highlightUserId?: number;
 }) {
   const { t, lang } = useLang();
   const badge =
     accent === 'sky'
       ? 'bg-sky-500/15 text-sky-300 border-sky-500/40'
-      : 'bg-ember-500/15 text-ember-300 border-ember-500/40';
-  const pill = accent === 'sky' ? 'text-sky-300' : 'text-ember-300';
+      : accent === 'ember'
+        ? 'bg-ember-500/15 text-ember-300 border-ember-500/40'
+        : 'bg-violet-500/15 text-violet-300 border-violet-500/40';
+  const pill = accent === 'sky' ? 'text-sky-300' : accent === 'ember' ? 'text-ember-300' : 'text-violet-300';
   const examName = entry && (lang === 'ar' || !entry.examTitleEn) ? entry.examTitle : entry?.examTitleEn || entry?.examTitle;
-  const gradeLabel = grade === 'bac1' ? t('auth.bac1') : t('auth.bac2');
+  const gradeLabel = t(gradeLabelKey(grade));
 
   return (
     <motion.div
@@ -176,9 +179,7 @@ export function ExamLeaderboardCard({
     ? lang === 'ar'
       ? 'مشترك'
       : 'Shared'
-    : board.examGrade === 'bac1'
-      ? t('auth.bac1')
-      : t('auth.bac2');
+    : t(gradeLabelKey(board.examGrade));
 
   return (
     <motion.div

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
+import AdminPageHeader from './AdminPageHeader';
 import { api } from '../../api/client';
 import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import GradeBadge from '../../components/GradeBadge';
+import { GRADE_KEYS, GRADE_LABEL_KEY } from '../../lib/grades';
 
 interface TopStudent {
   id: number;
@@ -91,12 +93,15 @@ export default function TopStudentsAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-black">🏆 {t('admin.topStudents')}</h1>
-        <button onClick={openNew} className="btn-fire rounded-xl px-4 py-2 text-sm font-bold text-white">
-          + {t('admin.addTopStudent')}
-        </button>
-      </div>
+      <AdminPageHeader
+        icon="🏆"
+        title={t('admin.topStudents')}
+        action={
+          <button onClick={openNew} className="btn-fire w-full rounded-xl px-4 py-2.5 text-sm font-bold text-white sm:w-auto">
+            + {t('admin.addTopStudent')}
+          </button>
+        }
+      />
 
       {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
 
@@ -195,8 +200,11 @@ export default function TopStudentsAdmin() {
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.topGrade')} *</label>
             <select className="input-fire w-full rounded-xl px-4 py-2.5" value={form.grade} onChange={(e) => setForm({ ...form, grade: e.target.value })}>
-              <option value="bac1">{t('auth.bac1')}</option>
-              <option value="bac2">{t('auth.bac2')}</option>
+              {GRADE_KEYS.map((g) => (
+                <option key={g} value={g}>
+                  {t(GRADE_LABEL_KEY[g])}
+                </option>
+              ))}
             </select>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">

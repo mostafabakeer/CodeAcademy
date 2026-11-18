@@ -135,8 +135,8 @@ const StudentTable: FC<StudentTableProps> = ({
 
   return (
     <>
-      {/* ===== موبايل: بطاقات (لا تمرير أفقي ولا تصغير خط) ===== */}
-      <div className="space-y-3 md:hidden">
+      {/* ===== موبايل/تابلت: بطاقات (الجدول 900px لا يدخل قبل lg) ===== */}
+      <div className="space-y-3 lg:hidden">
         {students.map((s, i) => (
           <article
             key={s.id}
@@ -168,8 +168,8 @@ const StudentTable: FC<StudentTableProps> = ({
         ))}
       </div>
 
-      {/* ===== تابلت/كمبيوتر: الجدول ===== */}
-      <div className="card-fire hidden overflow-x-auto rounded-2xl md:block">
+      {/* ===== كمبيوتر: الجدول ===== */}
+      <div className="card-fire hidden overflow-x-auto rounded-2xl lg:block">
         <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="border-b border-ink-600 text-start text-gray-400">

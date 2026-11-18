@@ -485,7 +485,7 @@ export function loadLatestExamTop(force = false): Promise<Record<string, LatestE
       const leaderboards =
         lb && typeof lb === 'object' && !Array.isArray(lb)
           ? (lb as Record<string, LatestExamTop>)
-          : d && typeof d === 'object' && !Array.isArray(d) && ('bac1' in d || 'bac2' in d || 'all' in d)
+          : d && typeof d === 'object' && !Array.isArray(d) && ('bac1' in d || 'bac2' in d || 'cs' in d || 'all' in d)
             ? (d as unknown as Record<string, LatestExamTop>)
             : {};
       setCached(LATEST_TOP_KEY, leaderboards);

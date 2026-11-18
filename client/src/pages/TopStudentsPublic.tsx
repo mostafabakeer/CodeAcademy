@@ -7,6 +7,7 @@ import Sparkles from '../components/Sparkles';
 import DoctorCode from '../components/DoctorCode';
 import Seo from '../components/Seo';
 import { TopStudentCard, LatestExamCard, ExamLeaderboardCard } from '../components/TopStudentsShared';
+import { GRADE_ACCENT, GRADE_KEYS } from '../lib/grades';
 
 export default function TopStudentsPublic() {
   const { t, lang } = useLang();
@@ -167,9 +168,17 @@ export default function TopStudentsPublic() {
           </span>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <LatestExamCard entry={latestTop?.bac1} loading={loading} error={error} accent="sky" grade="bac1" />
-          <LatestExamCard entry={latestTop?.bac2} loading={loading} error={error} accent="ember" grade="bac2" />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {GRADE_KEYS.map((g) => (
+            <LatestExamCard
+              key={g}
+              entry={latestTop?.[g]}
+              loading={loading}
+              error={error}
+              accent={GRADE_ACCENT[g]}
+              grade={g}
+            />
+          ))}
         </div>
       </motion.section>
 

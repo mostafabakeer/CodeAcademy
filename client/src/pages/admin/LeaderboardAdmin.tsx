@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
+import AdminPageHeader from './AdminPageHeader';
 import { api } from '../../api/client';
 import GradeBadge from '../../components/GradeBadge';
 
@@ -114,21 +115,24 @@ export default function LeaderboardAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-black">📈 {t('admin.examResults')}</h1>
-        <select
-          className="input-fire min-w-52 rounded-xl px-4 py-2.5 text-sm"
-          value={examId ?? ''}
-          onChange={(e) => setExamId(Number(e.target.value))}
-        >
-          {exams.length === 0 && <option value="">{t('admin.selectExam')}</option>}
-          {exams.map((e) => (
-            <option key={e.id} value={e.id}>
-              {lang === 'ar' || !e.titleEn ? e.title : e.titleEn || e.title}
-            </option>
-          ))}
-        </select>
-      </div>
+      <AdminPageHeader
+        icon="📈"
+        title={t('admin.examResults')}
+        action={
+          <select
+            className="input-fire w-full rounded-xl px-4 py-2.5 text-sm sm:w-auto sm:min-w-52"
+            value={examId ?? ''}
+            onChange={(e) => setExamId(Number(e.target.value))}
+          >
+            {exams.length === 0 && <option value="">{t('admin.selectExam')}</option>}
+            {exams.map((e) => (
+              <option key={e.id} value={e.id}>
+                {lang === 'ar' || !e.titleEn ? e.title : e.titleEn || e.title}
+              </option>
+            ))}
+          </select>
+        }
+      />
 
       {error && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">

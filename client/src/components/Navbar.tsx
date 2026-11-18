@@ -27,6 +27,29 @@ export default function Navbar() {
     user && (user.role === 'admin' || (user.role === 'student' && user.subscription)) ? user.id : null;
   const { data: content } = useBootstrapData(contentUserId);
   const [now, setNow] = useState(() => Date.now());
+  const headerRef = useRef<HTMLElement | null>(null);
+
+  /*
+   * ننشر ارتفاع الهيدر الفعلي في متغير CSS ليعتمد عليه أي عنصر لاصق تحته
+   * (هيدر الأدمن) بدل رقم ثابت. الرقم الثابت كان يخرب عند ظهور بانر
+   * «غير متصل» أو اختلاف الـ safe-area أو التفاف محتوى الهيدر.
+   */
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const publish = () => {
+      const h = Math.round(el.getBoundingClientRect().height);
+      if (h > 0) document.documentElement.style.setProperty('--app-header-h', `${h}px`);
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    window.addEventListener('orientationchange', publish);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('orientationchange', publish);
+    };
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60_000);
@@ -155,7 +178,11 @@ export default function Navbar() {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-fire-900/30 bg-ink-950/85 backdrop-blur-xl print:hidden" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+    <header
+      ref={headerRef}
+      className="sticky top-0 z-40 border-b border-fire-900/30 bg-ink-950/85 backdrop-blur-xl print:hidden"
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+    >
       {offline && user && (
         <div className="border-b border-fire-900/30 bg-fire-950/50 px-4 py-1.5 text-center text-xs font-semibold text-fire-200">
           ⚡ {t('app.reconnectBanner')}
@@ -168,7 +195,7 @@ export default function Navbar() {
             alt="DR Code"
             width={56}
             height={56}
-            className="h-14 w-14 rounded-bl-full rounded-b-full object-contain shadow-xl shadow-fire-900/40 transition-transform group-hover:scale-110"
+            className="h-11 w-11 rounded-bl-full rounded-b-full object-contain shadow-xl shadow-fire-900/40 transition-transform group-hover:scale-110 sm:h-14 sm:w-14"
           />
           <span className="text-xl font-black tracking-tight">
             DR <span className="text-fire-gradient">Code</span>

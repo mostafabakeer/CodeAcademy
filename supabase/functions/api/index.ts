@@ -98,7 +98,7 @@ import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared
 import { ipOf, loginBlocked, recordLoginFailure, recordIpFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
 
 const CODE_LANGUAGES = ['javascript', 'python', 'html', 'css'];
-const TOP_GRADES = ['bac1', 'bac2'];
+const TOP_GRADES = ['bac1', 'bac2', 'cs'];
 
 /**
  * تنفيذ مهمة خلفية (مثل إرسال Push) دون أن يقتلها الـ runtime.

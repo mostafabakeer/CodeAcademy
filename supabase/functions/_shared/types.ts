@@ -1,7 +1,7 @@
 /** أنواع النطاق المشترك بين كل الـ Edge Functions والعميل. */
 
 export type Role = 'student' | 'admin';
-export type ContentGrade = 'bac1' | 'bac2' | 'all';
+export type ContentGrade = 'bac1' | 'bac2' | 'cs' | 'all';
 
 export interface LevelTier {
   min: number;

@@ -39,19 +39,17 @@ export const StudentHeader: FC<StudentHeaderProps> = ({
   isResetsLoading,
 }) => {
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-3">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-          <h1 className="text-2xl sm:text-3xl font-fire text-fire-400">
-            👨‍🎓 {t('admin.studentsList')}{' '}
-            <span className="text-base sm:text-xl font-bold text-fire-200">({filteredLength})</span>
-          </h1>
-        </div>
-        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full">
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="flex min-w-0 items-baseline gap-2 font-fire text-xl text-fire-400 sm:text-3xl">
+          <span className="truncate">👨‍🎓 {t('admin.studentsList')}</span>
+          <span className="shrink-0 text-sm font-bold text-fire-200 sm:text-xl">({filteredLength})</span>
+        </h1>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
           <button
             onClick={onRefresh}
             disabled={isRefreshing}
-            className="btn-fire-rounded inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold fire-shadow hover:fire-bright transition-shadow disabled:cursor-not-allowed disabled:opacity-60 w-full sm:w-auto"
+            className="btn-fire-rounded inline-flex flex-1 items-center justify-center gap-2 rounded-full px-3 py-2 text-xs font-bold fire-shadow transition-shadow hover:fire-bright disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none sm:py-1.5"
           >
             {isRefreshing ? (
               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-fire-400 border-t-transparent" />
@@ -65,7 +63,7 @@ export const StudentHeader: FC<StudentHeaderProps> = ({
               onToggleResetPanel();
               onToggleResetPanelLoad();
             }}
-            className="btn-fire-rounded inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold fire-shadow disabled:cursor-not-allowed disabled:opacity-60 w-full sm:w-auto"
+            className="btn-fire-rounded inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold fire-shadow disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none sm:py-1.5"
           >
             🔑 {t('admin.resetListTitle')}
             {pendingResetCount > 0 && (
@@ -74,23 +72,25 @@ export const StudentHeader: FC<StudentHeaderProps> = ({
               </span>
             )}
           </button>
-          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
-            {FILTERS.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => onChangeFilter(f.key)}
-                className={`btn-fire-rounded inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition-colors fire-shadow ${
-                  currentFilter === f.key ? 'bg-fire-500/20 text-fire-300 ring-1 ring-fire-500/40' : 'bg-ink-800 text-gray-400 hover:text-white'
-                }`}
-              >
-                {t(f.tKey)}
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${currentFilter === f.key ? 'bg-fire-500/30 text-fire-100' : 'bg-ink-700 text-gray-300'}`}>
-                  {filterCounts[f.key]}
-                </span>
-              </button>
-            ))}
-          </div>
         </div>
+      </div>
+
+      {/* فلاتر أفقية قابلة للتمرير — بدل صفوف متراصة تأكل نصف الشاشة */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            onClick={() => onChangeFilter(f.key)}
+            className={`btn-fire-rounded inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition-colors fire-shadow ${
+              currentFilter === f.key ? 'bg-fire-500/20 text-fire-300 ring-1 ring-fire-500/40' : 'bg-ink-800 text-gray-400 hover:text-white'
+            }`}
+          >
+            {t(f.tKey)}
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${currentFilter === f.key ? 'bg-fire-500/30 text-fire-100' : 'bg-ink-700 text-gray-300'}`}>
+              {filterCounts[f.key]}
+            </span>
+          </button>
+        ))}
       </div>
     </div>
   );

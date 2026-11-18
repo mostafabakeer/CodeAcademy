@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
+import AdminPageHeader from './AdminPageHeader';
 import { api } from '../../api/client';
 
 interface Tier {
@@ -41,15 +42,16 @@ export default function SettingsAdmin() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-black">⚙️ {t('admin.settings')}</h1>
-          <p className="text-sm text-gray-400">{t('admin.levelsConfig')}</p>
-        </div>
-        <button onClick={save} className="btn-fire shrink-0 rounded-xl px-5 py-2.5 font-bold text-white">
-          {saved ? `✓ ${t('admin.synced')}` : t('admin.saveLevels')}
-        </button>
-      </div>
+      <AdminPageHeader
+        icon="⚙️"
+        title={t('admin.settings')}
+        subtitle={t('admin.levelsConfig')}
+        action={
+          <button onClick={save} className="btn-fire w-full rounded-xl px-5 py-2.5 font-bold text-white sm:w-auto">
+            {saved ? `✓ ${t('admin.synced')}` : t('admin.saveLevels')}
+          </button>
+        }
+      />
 
       {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
 

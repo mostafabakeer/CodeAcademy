@@ -3,6 +3,8 @@
  * وجودها هنا يمنع تكرار النوع بين الصفحة (مصدر الحقيقة) والمكونات.
  */
 
+import type { GradeKey } from '../lib/grades';
+
 /** يطابق استجابة GET /admin/password-resets. */
 export interface PasswordRequest {
   id: number;
@@ -27,7 +29,7 @@ export type PasswordRequestStatus = PasswordRequest['status'];
 export type StudentFilter = 'all' | 'subscribed' | 'unsubscribed' | 'blocked';
 
 /** فلاتر الصفوف — تُستخدم في StudentsAdmin و StudentHeader. */
-export type GradeFilter = 'all' | 'bac1' | 'bac2';
+export type GradeFilter = 'all' | GradeKey;
 
 /** الحد الأدنى من بيانات المستخدم الذي يحتاجه شارة الحالة. */
 export interface BadgeUser {

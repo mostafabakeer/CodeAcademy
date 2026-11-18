@@ -47,7 +47,7 @@ export default function Modal({ open, onClose, title, children }: { open: boolea
           exit={{ opacity: 0 }}
           onClick={onClose}
           role="presentation"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-6 backdrop-blur-sm overflow-y-auto"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/80 backdrop-blur-sm sm:items-center sm:p-6"
         >
           <motion.div
             ref={panelRef}
@@ -63,8 +63,9 @@ export default function Modal({ open, onClose, title, children }: { open: boolea
             onKeyDown={(e) => {
               if (e.key === 'Escape') onClose();
             }}
-            className="card-fire max-h-[90vh] w-full max-w-md sm:max-w-xl overflow-y-auto rounded-3xl p-4 sm:p-6 outline-none shadow-2xl mx-auto my-auto"
+            className="card-fire max-h-[88dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-3xl p-4 pb-[calc(1rem_+_env(safe-area-inset-bottom))] shadow-2xl outline-none sm:max-w-xl sm:rounded-3xl sm:p-6"
           >
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-ink-600 sm:hidden" aria-hidden="true" />
             <div className="mb-4 sm:mb-5 flex items-center justify-between gap-2">
               <h2 className="text-base sm:text-lg font-black shrink-0">{title}</h2>
               <button onClick={onClose} className="btn-ghost-fire rounded-lg px-3 py-1.5 text-sm font-bold shrink-0">

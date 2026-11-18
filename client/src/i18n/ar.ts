@@ -45,6 +45,7 @@ export const ar = {
     password: 'كلمة المرور',
     bac1: 'أولى باكلوريه',
     bac2: 'تانية باكلوريه',
+    cs: 'حاسبات ومعلومات',
     loginBtn: 'دخول',
     registerBtn: 'إنشاء الحساب',
     haveAccount: 'لديك حساب بالفعل؟',
@@ -515,6 +516,7 @@ export const ar = {
     obQuickAudit: 'مراجعة الطلاب',
     obQuickSettings: 'إعدادات المستويات',
     obRefresh: 'تحديث البيانات',
+    moreNav: 'المزيد',
     imageUrlHint: 'رابط الصورة سيكون متاحاً للطلاب فوراً',
   },
   top: {

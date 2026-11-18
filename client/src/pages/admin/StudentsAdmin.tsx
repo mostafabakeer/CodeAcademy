@@ -11,6 +11,7 @@ import ResetPanel from '../../components/ResetPanel';
 import LevelBadge from '../../components/LevelBadge';
 import ExamScores from '../../components/ExamScores';
 import type { GradeFilter, PasswordRequest, StudentFilter } from '../../types/admin';
+import { GRADE_KEYS, GRADE_LABEL_KEY } from '../../lib/grades';
 
 const PAGE_SIZE = 25;
 const CACHE_KEY = 'dr_admin_students_cache';
@@ -140,8 +141,7 @@ const FILTERS: ReadonlyArray<{ key: StudentFilter; tKey: string }> = [
 
 const GRADES: ReadonlyArray<{ key: GradeFilter; tKey: string }> = [
   { key: 'all', tKey: 'admin.gradeAll' },
-  { key: 'bac1', tKey: 'auth.bac1' },
-  { key: 'bac2', tKey: 'auth.bac2' },
+  ...GRADE_KEYS.map((g) => ({ key: g as GradeFilter, tKey: GRADE_LABEL_KEY[g] })),
 ];
 
 function readCache(): Student[] | null {
