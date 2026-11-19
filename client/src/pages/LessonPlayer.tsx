@@ -6,6 +6,7 @@ import { useAuthStore, useUser } from '../store/authStore';
 import { buildLessonDetail, type BootstrapData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal, getVideoProgressLocal, setVideoProgressLocal } from '../lib/localStore';
+import { WatchTracker } from '../lib/watchTracker';
 import { ensureProgressPulled, flushProgress, PROGRESS_PULLED_EVENT, queueProgress } from '../lib/progressSync';
 import { watchTotals } from '../lib/stats';
 import { formatDurationLabel, watchedOf } from '../lib/format';
@@ -85,10 +86,18 @@ function LessonView({
   const initialLocal = useMemo(() => getVideoProgressLocal(lessonId), [lessonId]);
   const initialTotals = useMemo(() => watchTotals(boot.lessons, getAllVideoProgressLocal()), [boot.lessons]);
 
+  // متتبّع مشاهدة واحد لكل درس: يحتسب الفترات الحقيقية فقط (السحب/التقفيل لا يُحتسب).
+  const trackerRef = useRef<WatchTracker | null>(null);
+  if (!trackerRef.current) {
+    trackerRef.current = new WatchTracker(lessonId, detail?.lesson.duration || initialLocal?.duration || 0);
+  }
+  const initialCovered = trackerRef.current.coveredSeconds();
+
   const [duration, setDuration] = useState(() => detail?.lesson.duration || initialLocal?.duration || 0);
   const [completed, setCompleted] = useState(() => !!detail?.lesson.completed);
-  const [localSeconds, setLocalSeconds] = useState(() => initialLocal?.seconds ?? 0);
-  const [resumeAt, setResumeAt] = useState(() => initialLocal?.seconds ?? 0);
+  const [localSeconds, setLocalSeconds] = useState(initialCovered);
+  // الاستئناف من آخر موضع تشغيل (وليس من التغطية) حتى لا تتأثر التجربة بمنع احتساب السحب.
+  const [resumeAt, setResumeAt] = useState(() => initialLocal?.position ?? initialCovered);
   const [celebration, setCelebration] = useState<{
     watchedSeconds: number;
     durationSeconds: number;
@@ -97,7 +106,8 @@ function LessonView({
   } | null>(null);
   const [pointToast, setPointToast] = useState<number | null>(null);
 
-  const localSecondsRef = useRef(initialLocal?.seconds ?? 0);
+  const localSecondsRef = useRef(initialCovered);
+  const lastPersistRef = useRef(0);
   const lastPointsRef = useRef(initialTotals.progressPoints);
   const sessionStartPointsRef = useRef(initialTotals.progressPoints);
   const celebratedRef = useRef(!!detail?.lesson.completed);
@@ -105,19 +115,34 @@ function LessonView({
   const preloadedNext = useRef(false);
   const pointToastTimer = useRef<number | null>(null);
 
+  /**
+   * يحفظ التغطية الحقيقية + فترات المشاهدة + موضع التشغيل، ويحدّث الإحصائيات.
+   * `covered` = الثواني المُشاهدة فعلاً (من WatchTracker)، وليس موضع الفيديو.
+   */
   const reportProgress = useCallback(
-    (seconds: number) => {
-      if (seconds <= 0) return;
+    (covered: number, durationOverride?: number) => {
+      const tracker = trackerRef.current;
+      const lessonDuration = durationOverride || duration || detail?.lesson.duration || 0;
+      const known = Math.max(localSecondsRef.current, Math.max(0, covered));
 
-      const known = Math.max(localSecondsRef.current, seconds);
-      localSecondsRef.current = known;
-      setLocalSeconds(known);
+      if (known !== localSecondsRef.current) {
+        localSecondsRef.current = known;
+        setLocalSeconds(known);
+      }
 
-      const lessonDuration = duration || detail?.lesson.duration || 0;
-      setVideoProgressLocal(lessonId, known, lessonDuration);
+      // الموضع يُحفظ دائماً (حتى لو التغطية صفر) كي يستأنف الطالب من مكانه.
+      setVideoProgressLocal(
+        lessonId,
+        known,
+        lessonDuration,
+        tracker ? { segments: tracker.getSegments(), position: tracker.getPosition() } : undefined,
+      );
+
+      if (known <= 0) return;
+
       queueProgress(lessonId, known);
 
-      if (!streakTouched.current && seconds >= 5) {
+      if (!streakTouched.current && known >= 5) {
         streakTouched.current = true;
         touchStreak();
       }
@@ -156,9 +181,41 @@ function LessonView({
     [boot.lessons, detail, duration, lessonId, recomputeStats],
   );
 
-  // عند مغادرة الدرس: أرسل ما تبقّى وحدّث الإحصائيات المعروضة.
+  /** نبضة المشغّل: نغذّي المتتبّع دائماً، ونحفظ/نزامن كل ~5 ثوانٍ وعند التوقف. */
+  const handleTick = useCallback(
+    (position: number, playing: boolean, rate: number) => {
+      const tracker = trackerRef.current;
+      if (!tracker) return;
+      tracker.tick(position, playing, rate);
+
+      const now = Date.now();
+      if (!playing || now - lastPersistRef.current >= 5000) {
+        lastPersistRef.current = now;
+        reportProgress(Math.floor(tracker.coveredSeconds()));
+      }
+    },
+    [reportProgress],
+  );
+
+  // حفظ فوري عند إخفاء الصفحة/إغلاق التبويب (يمنع فقدان آخر ثوانٍ).
+  const persistRef = useRef<() => void>(() => {});
+  persistRef.current = () => {
+    const tracker = trackerRef.current;
+    if (tracker) reportProgress(Math.floor(tracker.coveredSeconds()));
+  };
+
+  // عند مغادرة الدرس أو إخفاء الصفحة: احفظ آخر نبضة، أرسل ما تبقّى، وحدّث الإحصائيات.
   useEffect(() => {
+    const persist = () => persistRef.current();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') persist();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', persist);
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', persist);
+      persist();
       void flushProgress(true);
       recomputeStats();
       if (pointToastTimer.current) window.clearTimeout(pointToastTimer.current);
@@ -175,8 +232,11 @@ function LessonView({
       if (seconds <= 0) return;
       localSecondsRef.current = seconds;
       setLocalSeconds(seconds);
-      setResumeAt(seconds);
+      setResumeAt(fresh?.position ?? seconds);
       const d = duration || detail?.lesson.duration || fresh?.duration || 0;
+      // المتتبّع أُنشئ قبل وصول التقدّم: نعيد بناءه من التخزين الجديد حتى
+      // تعتمد تغطيته على فترات الخادم بدل البدء من صفر.
+      trackerRef.current = new WatchTracker(lessonId, d);
       if (d > 0 && seconds >= d * 0.9) {
         celebratedRef.current = true;
         setCompleted(true);
@@ -230,11 +290,13 @@ function LessonView({
         videoType={lesson.videoType}
         videoUrl={lesson.videoUrl}
         initialTime={resumeAt}
-        onProgress={reportProgress}
+        onTick={handleTick}
         onDuration={(d) => {
           setDuration(d);
-          if (d > 0 && localSecondsRef.current > 0) {
-            setVideoProgressLocal(lessonId, localSecondsRef.current, d);
+          const tracker = trackerRef.current;
+          if (tracker) {
+            tracker.setDuration(d);
+            reportProgress(Math.floor(tracker.coveredSeconds()), d);
           }
         }}
         onEnded={() => void flushProgress(true)}

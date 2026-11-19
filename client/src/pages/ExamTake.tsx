@@ -9,6 +9,7 @@ import Confetti from '../components/Confetti';
 import { useExamDeadline, formatExamClock, clearExamTimer } from '../lib/useExamTimer';
 import { touchStreak } from '../lib/streak';
 import { playSuccessChime, unlockAudio } from '../lib/sound';
+import { EXAM_MAX_POINTS, examPointsForScore, examPointsFromResults } from '../lib/stats';
 
 interface Question {
   id: number;
@@ -157,7 +158,7 @@ function loadDraft(examId: string | undefined): Record<number, number> {
 }
 
 // مكوّن مشترك لعرض ملخص النتيجة + مراجعة الأخطاء (يُستخدم في شاشة النتيجة وعند إعادة الدخول)
-function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = false, pointsGained = 0 }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void; celebrate?: boolean; pointsGained?: number }) {
+function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = false, pointsGained = 0, examPoints = null }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void; celebrate?: boolean; pointsGained?: number; examPoints?: { earned: number; thisExam: number; total: number } | null }) {
   const { t, lang } = useLang();
   const [burst, setBurst] = useState(false);
 
@@ -196,6 +197,18 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = 
               ? t('celebration.pointsAdded', { points: pointsGained })
               : t('celebration.pointsRecorded')}
           </p>
+        )}
+        {examPoints && (
+          <div className="mt-2 space-y-1">
+            <p className="text-sm font-bold text-fire-300">
+              {examPoints.earned > 0
+                ? t('celebration.examPointsEarned', { points: examPoints.earned, max: EXAM_MAX_POINTS })
+                : t('celebration.examPointsBest', { points: examPoints.thisExam, max: EXAM_MAX_POINTS })}
+            </p>
+            <p className="text-xs font-semibold text-gray-400">
+              {t('celebration.examPointsTotal', { points: examPoints.total })}
+            </p>
+          </div>
         )}
         <div className="mx-auto mt-4 max-w-xs">
           <ProgressBar value={result.score} />
@@ -303,6 +316,7 @@ export default function ExamTake() {
   const [answers, setAnswers] = useState<Record<number, number>>(() => loadDraft(id));
   const [result, setResult] = useState<Result | null>(null);
   const [pointsGained, setPointsGained] = useState(0);
+  const [examPoints, setExamPoints] = useState<{ earned: number; thisExam: number; total: number } | null>(null);
   const [showSavedReview, setShowSavedReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -373,6 +387,7 @@ export default function ExamTake() {
       }
       if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
       const before = useAuthStore.getState().stats?.points ?? 0;
+      const examPointsBefore = examPointsFromResults(useAuthStore.getState().examResults);
       applyExamResult({
         examId: Number(id),
         best: res.best,
@@ -382,7 +397,13 @@ export default function ExamTake() {
         attempts: res.attempts ?? (data?.lastResult?.attempts ?? 0) + 1,
       });
       const after = useAuthStore.getState().stats?.points ?? 0;
+      const examPointsAfter = examPointsFromResults(useAuthStore.getState().examResults);
       setPointsGained(Math.max(0, after - before));
+      setExamPoints({
+        earned: Math.max(0, examPointsAfter - examPointsBefore),
+        thisExam: examPointsForScore(res.best),
+        total: examPointsAfter,
+      });
     } catch (e) {
       if (mountedRef.current) setError((e as Error).message);
     } finally {
@@ -397,6 +418,7 @@ export default function ExamTake() {
     }
     setResult(null);
     setPointsGained(0);
+    setExamPoints(null);
     setAnswers({});
     setError('');
     setSubmitting(false);
@@ -484,6 +506,7 @@ export default function ExamTake() {
         onBack={() => navigate('/exams')}
         celebrate
         pointsGained={pointsGained}
+        examPoints={examPoints}
       />
     );
   }

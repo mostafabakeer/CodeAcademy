@@ -47,9 +47,46 @@ export function setNotifPromptDismissed(): void {
 }
 
 export interface VideoProgressLocal {
+  /** الثواني المُشاهدة فعلاً (تغطية الفترات الحقيقية) — المرجع لكل الحسابات. */
   seconds: number;
   duration: number;
   updatedAt: number;
+  /** آخر موضع تشغيل — للاستئناف فقط، ولا يعني أن الجزء شُوهد. */
+  position?: number;
+  /** فترات المشاهدة الحقيقية المدمجة [بداية, نهاية] بالثواني. */
+  segments?: [number, number][];
+}
+
+/** الحد الأقصى لعدد الفترات المحفوظة (حماية من نمو لا نهائي بعد ساعات مشاهدة). */
+const MAX_WATCH_SEGMENTS = 400;
+
+/** يدمج فترات متقاطعة/متلاصقة ويرتّبها (يُستخدم قبل الحفظ). */
+export function mergeWatchSegments(segments: [number, number][]): [number, number][] {
+  const sorted = segments
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b > a)
+    .map(([a, b]) => [Math.max(0, a), Math.max(0, b)] as [number, number])
+    .sort((x, y) => x[0] - y[0]);
+
+  const out: [number, number][] = [];
+  for (const [start, end] of sorted) {
+    const last = out[out.length - 1];
+    if (last && start <= last[1] + 0.5) {
+      if (end > last[1]) last[1] = end;
+    } else {
+      out.push([start, end]);
+    }
+  }
+  return out.length > MAX_WATCH_SEGMENTS ? keepLongestSegments(out, MAX_WATCH_SEGMENTS) : out;
+}
+
+/** عند تجاوز الحد: نحتفظ بأطول الفترات (أكبر تغطية) ثم نعيد ترتيبها زمنياً. */
+function keepLongestSegments(segments: [number, number][], max: number): [number, number][] {
+  return segments
+    .map((segment, index) => ({ segment, index, length: segment[1] - segment[0] }))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, max)
+    .sort((a, b) => a.index - b.index)
+    .map((x) => x.segment);
 }
 
 /** كاش بسيط لـ getAllVideoProgressLocal لتجنب قراءة localStorage المتكررة */
@@ -98,8 +135,39 @@ export function getVideoProgressLocal(lessonId: number): VideoProgressLocal | nu
   }
 }
 
-export function setVideoProgressLocal(lessonId: number, seconds: number, duration: number): void {
-  setLocal(VIDEO_PREFIX + lessonId, JSON.stringify({ seconds, duration, updatedAt: Date.now() }));
+export function setVideoProgressLocal(
+  lessonId: number,
+  seconds: number,
+  duration: number,
+  patch?: { segments?: [number, number][]; position?: number },
+): void {
+  const prev = getVideoProgressLocal(lessonId);
+  const nextSeconds = Math.max(0, Number(seconds) || 0);
+  const nextDuration = Number(duration) || prev?.duration || 0;
+
+  let segments: [number, number][] | undefined;
+  if (patch?.segments) {
+    segments = mergeWatchSegments(patch.segments);
+  } else if (prev?.segments?.length) {
+    const prevCovered = prev.segments.reduce((sum, [a, b]) => sum + Math.max(0, b - a), 0);
+    // تقدّم أكبر وصل من الخادم/جهاز آخر: يُعامل كأساس مشاهدة بدل تركه غير متسق مع الفترات.
+    segments = nextSeconds > prevCovered + 0.5 ? [[0, nextSeconds]] : prev.segments;
+  } else if (nextSeconds > (prev?.seconds ?? 0)) {
+    // تقدّم قديم/قادم من الخادم بلا فترات ⇒ يُعامل كأساس مشاهدة
+    // (قرار: لا نصفّر التقدّم القديم، والتصحيح يسري على المشاهدة الجديدة فقط).
+    segments = [[0, nextSeconds]];
+  }
+
+  const position = patch?.position ?? prev?.position;
+  const record: VideoProgressLocal = {
+    seconds: nextSeconds,
+    duration: nextDuration,
+    updatedAt: Date.now(),
+  };
+  if (segments?.length) record.segments = segments;
+  if (position !== undefined && Number.isFinite(position)) record.position = Math.max(0, position);
+
+  setLocal(VIDEO_PREFIX + lessonId, JSON.stringify(record));
   videoProgressCache = null; // إبطال الكاش عند التحديث
 }
 

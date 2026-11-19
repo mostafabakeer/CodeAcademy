@@ -19,6 +19,7 @@ import LevelBadge from '../components/LevelBadge';
 import StatCard from '../components/StatCard';
 import ProgressBar from '../components/ProgressBar';
 import { getAllFiles } from '../lib/localFileSystem';
+import { grandTotalPoints } from '../lib/stats';
 import { gradeLabelKey } from '../lib/grades';
 import {
   isNotificationSoundMuted,
@@ -186,10 +187,12 @@ export default function Profile() {
         </div>
       </motion.div>
 
-      <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard icon="📝" label={t('profile.examAvg')} value={`${stats?.examAvg ?? 0}%`} />
         <StatCard icon="🎬" label={t('profile.watchTime')} value={`${watchMins} ${t('course.min')}`} />
         <StatCard icon="🏅" label={t('profile.progressPoints')} value={stats?.progressPoints ?? 0} />
+        <StatCard icon="🧮" label={t('profile.examPoints')} value={stats?.examPoints ?? 0} />
+        <StatCard icon="🏆" label={t('profile.totalPoints')} value={stats ? grandTotalPoints(stats) : 0} />
         <StatCard icon="✅" label={t('profile.completedLessons')} value={`${stats?.completedLessons ?? 0}/${stats?.totalLessons ?? 0}`} />
         <StatCard icon="💻" label={t('profile.codeFiles')} value={codeFiles.length} />
       </section>
@@ -202,12 +205,13 @@ export default function Profile() {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="font-extrabold">{t('profile.levelProgress')}</h2>
                 <span className="text-sm text-gray-400">
-                  {t('profile.progressPoints')}: {stats.progressPoints} · {t('level.pointsNeeded')}: {stats.points}/100
+                  {t('profile.progressPoints')}: {stats.progressPoints} · {t('profile.examPoints')}: {stats.examPoints} · {t('level.pointsNeeded')}: {stats.points}/100
                 </span>
               </div>
               <ProgressBar value={stats.points} />
               <p className="mt-3 text-sm text-gray-500">{t('profile.levelHint')}</p>
               <p className="mt-1 text-xs text-gray-500">{t('profile.progressPointsHint')}</p>
+              <p className="mt-1 text-xs text-gray-500">{t('profile.examPointsHint')}</p>
             </div>
           )}
 

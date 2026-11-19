@@ -19,6 +19,8 @@ interface VideoPlayerProps {
   initialTime?: number;
   onProgress?: (seconds: number) => void;
   onDuration?: (duration: number) => void;
+  /** نبضة مشاهدة حقيقية: الموضع + هل يعمل الآن + سرعة التشغيل. */
+  onTick?: (position: number, playing: boolean, rate: number) => void;
 }
 
 const RATES = [1, 1.25, 1.5, 2];
@@ -35,7 +37,7 @@ function resolveMode(videoType: string | undefined, videoUrl: string): 'youtube'
 
 export default function VideoPlayer({
   src, poster, autoPlay = false, onTimeUpdate, onDurationChange, onEnded, onError,
-  resumeAt = 0, videoType, videoUrl, initialTime, onProgress, onDuration,
+  resumeAt = 0, videoType, videoUrl, initialTime, onProgress, onDuration, onTick,
 }: VideoPlayerProps) {
   const { t } = useLang();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -72,8 +74,8 @@ export default function VideoPlayer({
   // أحدث callbacks في ref: الآباء يعيدون إنشاء الدوال كل render (LessonPlayer
   // يحدّث الحالة كل ثانية)، وكانت إضافتها لتبعيات الـ effect تعيد بناء
   // عنصر الفيديو والمستمعين كل ثانية.
-  const cbRef = useRef({ onTimeUpdate, onDurationChange, onEnded, onError, onProgress, onDuration });
-  cbRef.current = { onTimeUpdate, onDurationChange, onEnded, onError, onProgress, onDuration };
+  const cbRef = useRef({ onTimeUpdate, onDurationChange, onEnded, onError, onProgress, onDuration, onTick });
+  cbRef.current = { onTimeUpdate, onDurationChange, onEnded, onError, onProgress, onDuration, onTick };
   const lastUiSecRef = useRef(-1);
   const lastProgressSecRef = useRef(-1);
   const lastProgressAtRef = useRef(0);
@@ -89,6 +91,8 @@ export default function VideoPlayer({
           lastUiSecRef.current = whole;
           setCurrentTime(v.currentTime);
         }
+        // نبضة المشاهدة الحقيقية: الموضع يتقدّم بمعدل طبيعي فقط.
+        cbRef.current.onTick?.(v.currentTime, !v.paused && !v.seeking, v.playbackRate || 1);
       }
     }, 1000);
   }, []);
@@ -253,6 +257,8 @@ export default function VideoPlayer({
       setIsPlaying(false);
       stopTick();
       endLoading();
+      const el = videoRef.current;
+      if (el) cbRef.current.onTick?.(el.currentTime, false, el.playbackRate || 1);
       emitProgress(true);
     };
     const onEndedEvent = () => {
@@ -261,6 +267,8 @@ export default function VideoPlayer({
       setIsPlaying(false);
       stopTick();
       endLoading();
+      const el = videoRef.current;
+      if (el) cbRef.current.onTick?.(el.currentTime, false, el.playbackRate || 1);
       emitProgress(true);
       cbRef.current.onEnded?.();
     };
@@ -287,6 +295,7 @@ export default function VideoPlayer({
         lastUiSecRef.current = whole;
         setCurrentTime(el.currentTime);
       }
+      cbRef.current.onTick?.(el.currentTime, !el.paused && !el.seeking, el.playbackRate || 1);
       cbRef.current.onTimeUpdate?.(el.currentTime);
       emitProgress();
     };
@@ -337,6 +346,7 @@ export default function VideoPlayer({
         onDuration={(d) => { cbRef.current.onDuration?.(d); cbRef.current.onDurationChange?.(d); }}
         onTimeUpdate={(s) => cbRef.current.onTimeUpdate?.(s)}
         onProgress={(s) => cbRef.current.onProgress?.(s)}
+        onTick={(p, playing, rate) => cbRef.current.onTick?.(p, playing, rate)}
         onEnded={() => cbRef.current.onEnded?.()}
         onError={(m) => cbRef.current.onError?.(new Error(m))}
       />

@@ -14,6 +14,8 @@ interface YouTubePlayerProps {
   onDuration?: (duration: number) => void;
   onTimeUpdate?: (seconds: number) => void;
   onProgress?: (seconds: number) => void;
+  /** نبضة مشاهدة حقيقية: الموضع + هل يعمل الآن + سرعة التشغيل. */
+  onTick?: (position: number, playing: boolean, rate: number) => void;
   playbackRate?: number;
   muted?: boolean;
   autoPlay?: boolean;
@@ -75,6 +77,7 @@ export default function YouTubePlayer({
   onDuration,
   onTimeUpdate,
   onProgress,
+  onTick,
 }: YouTubePlayerProps) {
   const [isPlaying, setIsPlaying] = useState(autoPlay);
   const [loading, setLoading] = useState(autoPlay);
@@ -84,8 +87,8 @@ export default function YouTubePlayer({
   const playerRef = useRef<any>(null);
   const initialTimeRef = useRef(initialTime);
   initialTimeRef.current = initialTime;
-  const cbRef = useRef({ onReady, onPlay, onPause, onEnded, onError, onDuration, onTimeUpdate, onProgress });
-  cbRef.current = { onReady, onPlay, onPause, onEnded, onError, onDuration, onTimeUpdate, onProgress };
+  const cbRef = useRef({ onReady, onPlay, onPause, onEnded, onError, onDuration, onTimeUpdate, onProgress, onTick });
+  cbRef.current = { onReady, onPlay, onPause, onEnded, onError, onDuration, onTimeUpdate, onProgress, onTick };
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -120,6 +123,15 @@ export default function YouTubePlayer({
       lastProgressAt = now;
       lastProgressSec = whole;
       cbRef.current.onProgress?.(whole);
+    };
+
+    // نبضة المشاهدة الحقيقية (تُقيَّم في WatchTracker بزمن حقيقي).
+    const emitTick = (playing: boolean) => {
+      const p = playerRef.current;
+      if (!p?.getCurrentTime) return;
+      const pos = Number(p.getCurrentTime()) || 0;
+      const rate = Number(p.getPlaybackRate?.() ?? 1) || 1;
+      cbRef.current.onTick?.(pos, playing, rate);
     };
 
     const stopTimer = () => {
@@ -160,15 +172,20 @@ export default function YouTubePlayer({
                 finishLoading();
                 cbRef.current.onPlay?.();
                 stopTimer();
-                timer = window.setInterval(() => emitProgress(), 1000);
+                timer = window.setInterval(() => {
+                  emitProgress();
+                  emitTick(true);
+                }, 1000);
               } else if (e.data === state.PAUSED) {
                 finishLoading();
                 stopTimer();
                 cbRef.current.onPause?.();
+                emitTick(false);
                 emitProgress(true);
               } else if (e.data === state.ENDED) {
                 finishLoading();
                 stopTimer();
+                emitTick(false);
                 emitProgress(true);
                 cbRef.current.onEnded?.();
               } else if (e.data === state.BUFFERING || e.data === state.UNSTARTED || e.data === state.CUED) {
@@ -197,6 +214,7 @@ export default function YouTubePlayer({
       cancelled = true;
       stopTimer();
       stopSafety();
+      emitTick(false);
       try {
         playerRef.current?.destroy?.();
       } catch {

@@ -6,7 +6,7 @@ import { useUser, useProgress } from '../store/authStore';
 import { buildCourseList, type CourseWithProgress } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal } from '../lib/localStore';
-import { watchedOf } from '../lib/format';
+import { grandTotalPoints } from '../lib/stats';
 import { getStreak } from '../lib/streak';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import LevelBadge from '../components/LevelBadge';
@@ -27,26 +27,6 @@ export default function Home() {
 
   // سلسلة الحماس محلية على الجهاز — تُقرأ عند فتح الرئيسية بعد أي نشاط.
   const streak = useMemo(() => getStreak(), []);
-
-  // آخر درس لم يكتمل (بأحدث وقت مشاهدة) حتى يستأنف الطالب من نفس اللحظة،
-  // وليس من أول الدرس. نتجاهل الدروس المكتملة (≥ 92%) والدروس التي لم
-  // تُشاهد إلا ثوانٍ قليلة.
-  const resumeLesson = useMemo(() => {
-    if (!data) return null;
-    const progress = getAllVideoProgressLocal();
-    let pick: { id: number; title: string; titleEn: string; pct: number; seconds: number; duration: number; at: number } | null = null;
-    for (const lesson of data.lessons) {
-      const p = progress[lesson.id];
-      if (!p || p.seconds <= 5) continue;
-      const duration = lesson.duration || p.duration || 0;
-      const pct = duration > 0 ? Math.min(100, Math.round((p.seconds / duration) * 100)) : 0;
-      if (duration > 0 && pct >= 92) continue;
-      if (!pick || p.updatedAt > pick.at) {
-        pick = { id: lesson.id, title: lesson.title, titleEn: lesson.titleEn, pct, seconds: p.seconds, duration, at: p.updatedAt };
-      }
-    }
-    return pick;
-  }, [data]);
 
   const streakLabel = (n: number): string => {
     if (n === 1) return t('home.streakOne');
@@ -146,34 +126,11 @@ export default function Home() {
             <StatCard icon="🎬" label={t('home.stats.watchTime')} value={`${watchHours} ${t('home.stats.watchUnit')}`} delay={0.05} />
             <StatCard icon="✅" label={t('home.stats.completedLessons')} value={`${stats?.completedLessons ?? 0}/${stats?.totalLessons ?? 0}`} delay={0.1} />
             <StatCard icon="💻" label={t('home.stats.examsTaken')} value={`${stats?.examsTaken ?? 0}/${stats?.totalExams ?? 0}`} delay={0.15} />
+            <StatCard icon="🧮" label={t('home.examPoints')} value={stats?.examPoints ?? 0} delay={0.2} />
+            <StatCard icon="🏆" label={t('home.totalPoints')} value={stats ? grandTotalPoints(stats) : 0} delay={0.25} />
           </div>
         </div>
       </motion.section>
-
-      {/* أكمل من حيث توقفت — الدرس نفسه لا الدورة فقط */}
-      {resumeLesson && (
-        <motion.section
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card-fire rounded-2xl p-6"
-        >
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-extrabold">⏱ {t('home.resumeLesson')}</h2>
-            <Link to={`/lessons/${resumeLesson.id}`} className="btn-fire rounded-lg px-4 py-2 text-sm font-bold text-white">
-              {t('home.continueLesson')}
-            </Link>
-          </div>
-          <div className="flex items-center justify-between gap-3 text-sm text-gray-400">
-            <span className="min-w-0 truncate font-semibold text-gray-200">
-              {lang === 'ar' ? resumeLesson.title : resumeLesson.titleEn || resumeLesson.title}
-            </span>
-            <span className="shrink-0">
-              {watchedOf(resumeLesson.seconds, resumeLesson.duration, t)} · {resumeLesson.pct}%
-            </span>
-          </div>
-          <ProgressBar value={resumeLesson.pct} className="mt-2" />
-        </motion.section>
-      )}
 
       {/* أكمل التعلم */}
       {nextCourse && (
