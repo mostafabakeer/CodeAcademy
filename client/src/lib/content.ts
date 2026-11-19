@@ -1,5 +1,5 @@
 import { api } from '../api/client';
-import { getCached, getCachedStale, setCached, removeCached } from './cache';
+import { getCached, getCachedAge, getCachedStale, setCached, removeCached } from './cache';
 import { getAllVideoProgressLocal, type VideoProgressLocal } from './localStore';
 
 // ===== جلب المحتوى الكامل دفعة واحدة (bootstrap) مع كاش محلي =====
@@ -142,7 +142,11 @@ const inFlightByUser = new Map<number, InFlightBootstrap>();
 
 /** ذاكرة الكاش في الذاكرة (Map) — قراءة فورية بدون localStorage parsing. */
 const memoryCache = new Map<number, { data: BootstrapData; at: number }>();
-const MEMORY_CACHE_TTL = 5 * 60_000; // 5 دقائق في الذاكرة
+/**
+ * 30 دقيقة — مطابق لـ BOOTSTRAP_TTL. كان 5 دقائق، فكان كل تنقّل بعد 5 دقائق
+ * يطلق طلب bootstrap جديداً رغم أن البيانات ما زالت صالحة في localStorage.
+ */
+export const MEMORY_CACHE_TTL = 30 * 60_000;
 
 function subscribeToBootstrap(
   userId: number,
@@ -258,6 +262,16 @@ export function getBootstrapSync(userId: number): BootstrapData | null {
   const mem = memoryCache.get(userId);
   if (mem) return mem.data;
   return getCachedStale<BootstrapData>(bootstrapKey(userId));
+}
+
+/**
+ * عمر نسخة المحتوى المحفوظة (ذاكرة أو localStorage) بالمللي ثانية.
+ * null = لا توجد نسخة. تُستخدم لتجنّب طلب bootstrap عند كل mount.
+ */
+export function bootstrapAgeMs(userId: number): number | null {
+  const mem = memoryCache.get(userId);
+  if (mem) return Math.max(0, Date.now() - mem.at);
+  return getCachedAge(bootstrapKey(userId));
 }
 
 export function invalidateBootstrap(userId: number): void {
@@ -429,6 +443,8 @@ export interface ExamListItem extends Exam {
   taken: boolean;
   bestScore: number | null;
   attempts: number;
+  /** محاولة مقالية قيد المراجعة — تمنع بدء محاولة جديدة حتى الاعتماد. */
+  pending?: boolean;
 }
 
 /* =================== أوائل الطلبة (عام / متاح بدون اشتراك) =================== */

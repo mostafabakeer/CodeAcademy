@@ -64,6 +64,13 @@ import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared
   listProgressByUser,
   mergeProgressBatch,
   getResult,
+  getLatestEssaySubmission,
+  listEssaySubmissionsByUserExam,
+  listPendingEssayExamIds,
+  createEssaySubmission,
+  findEssaySubmissionById,
+  listEssaySubmissionsForAdmin,
+  publishEssayResult,
   listResultsByUser,
   listResultSummariesByUser,
   listCodeFilesByUser,
@@ -76,6 +83,7 @@ import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared
   getLevels,
   setLevels,
   adminStats,
+  gradeMcqAnswers,
   submitExam,
   createPasswordReset,
   findActivePasswordResetByUser,
@@ -94,6 +102,11 @@ import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared
   latestExamRankForUser,
   listExamResultsPage,
   type MyExamRank,
+  type EssayGrade,
+  type EssayQuestionSnapshot,
+  type EssaySubmission,
+  type ExamResult,
+  type Question,
   type Course,
 } from '../_shared/db.ts';
 import { ipOf, loginBlocked, recordLoginFailure, recordIpFailure, clearLoginFailures, registerAllowed, recordRegister, genericRateLimit } from '../_shared/rateLimit.ts';
@@ -167,7 +180,7 @@ app.onError((err, c) => {
  * أي تعديل ناجح من الأدمن على المحتوى يُبطل كاش bootstrap في نسخة الدالة الحالية
  * حتى يرى الطلاب التحديث فوراً بدل انتظار انتهاء الـ TTL (نسخ أخرى تنتهي تلقائياً).
  */
-const CONTENT_MUTATION_PATH = /^\/(courses|lessons|exams|notes)(\/|$)/;
+const CONTENT_MUTATION_PATH = /^\/(courses|lessons|exams|questions|notes)(\/|$)/;
 app.use('*', async (c, next) => {
   await next();
   if (
@@ -184,6 +197,10 @@ app.use('*', async (c, next) => {
 
 function bodyText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function getUser(c: Context<{ Variables: Variables }>): AuthUser {
@@ -315,7 +332,11 @@ app.post('/auth/login', async (c) => {
 app.get('/auth/me', requireAuth, async (c) => {
   const user = await findUserById(getUser(c).id);
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
-  const [levels, results] = await Promise.all([getLevels(), listResultSummariesByUser(user.id)]);
+  const [levels, results, pendingExamIds] = await Promise.all([
+    getLevels(),
+    listResultSummariesByUser(user.id),
+    listPendingEssayExamIds(user.id),
+  ]);
   const examResults = results.map((r) => ({
     examId: r.examId,
     best: r.best,
@@ -329,7 +350,7 @@ app.get('/auth/me', requireAuth, async (c) => {
   // ويُعاد التوكن في الجسم ليحفظه العميل كنسخة احتياطية. بهذا لا تنتهي جلسة
   // مستخدم نشط أبداً، وتعود الجلسة كاملة لو ضاع الكوكي أو التخزين المحلي.
   const token = await signToken({ id: user.id, role: user.role, fullName: user.fullName, phone: user.phone, grade: user.grade }, user.tokenVersion ?? 0);
-  return c.json({ user: safeUser(user), levels: levels.tiers, examResults, token }, 200, {
+  return c.json({ user: safeUser(user), levels: levels.tiers, examResults, pendingExamIds, token }, 200, {
     'Set-Cookie': authCookieHeader(token, c.req.header('host') ?? ''),
   });
 });
@@ -491,9 +512,108 @@ function contentFingerprint(str: string): string {
   return `${hash.toString(36)}.${str.length.toString(36)}`;
 }
 
-/** إبطال كاش المحتوى فور أي تعديل من الأدمن (دروس/امتحانات/مذكرات/كورسات). */
+/**
+ * كاش أسئلة الامتحان (60 ثانية لكل امتحان، مشترك بين كل الطلاب).
+ * كل من يفتح الامتحان كان يعيد استعلام نفس الصفوف؛ الآن يُقرأ مرة واحدة
+ * لكل نسخة دالة خلال الدقيقة. يُبطَل فوراً عند أي تعديل على الأسئلة/الامتحانات.
+ */
+const EXAM_QUESTIONS_TTL = 60_000;
+const examQuestionsCache = new Map<number, { at: number; data: Question[] }>();
+
+/** إبطال كاش المحتوى فور أي تعديل من الأدمن (دروس/امتحانات/مذكرات/كورسات/أسئلة). */
 export function clearBootstrapCache(): void {
   bootstrapCache.clear();
+  examQuestionsCache.clear();
+}
+
+export async function getExamQuestions(examId: number): Promise<Question[]> {
+  const cached = examQuestionsCache.get(examId);
+  if (cached && Date.now() - cached.at < EXAM_QUESTIONS_TTL) return cached.data;
+  const questions = await listQuestionsByExam(examId);
+  examQuestionsCache.set(examId, { at: Date.now(), data: questions });
+  return questions;
+}
+
+/**
+ * يعتمد نتيجة محاولة مقالية واحدة (يدوياً من الأدمن أو تلقائياً عند تسليم فارغ)
+ * ويحسب النتيجة بنظام نقاط موحّد: (نقاط MCQ + نقاط المقالي) / (أقصى MCQ + أقصى المقالي).
+ * يعيد نفس الحقول التي تتوقعها شاشة الطالب بعد التسليم.
+ */
+async function finalizeEssaySubmission(
+  submission: EssaySubmission,
+  exam: { passingScore?: number | null },
+  grades: Record<string, EssayGrade>,
+  existing: ExamResult | null,
+) {
+  const essayMax = submission.essayQuestions.reduce((sum, question) => sum + (Number(question.points) || 0), 0);
+  const essayScore = Object.values(grades).reduce((sum, grade) => sum + (Number(grade.score) || 0), 0);
+  // محاولات قديمة (قبل تخزين نقاط MCQ): كانت النسبة 0–100 هي المكتسب والأقصى.
+  const legacyMcq = submission.mcqTotal > 0 && submission.mcqMaxPoints <= 0;
+  const mcqMax = submission.mcqTotal > 0 ? (legacyMcq ? 100 : submission.mcqMaxPoints) : 0;
+  const mcqEarned = submission.mcqTotal > 0 ? (legacyMcq ? submission.mcqScore : submission.mcqEarnedPoints) : 0;
+  const maximumPoints = mcqMax + essayMax;
+  if (maximumPoints <= 0) throw new Error('NO_MAX_SCORE');
+
+  const earnedPoints = mcqEarned + essayScore;
+  const score = Math.max(0, Math.min(100, Math.round((earnedPoints / maximumPoints) * 100)));
+
+  const allSubmissions = await listEssaySubmissionsByUserExam(submission.userId, submission.examId);
+  const otherEssayBest = allSubmissions
+    .filter((item) => item.id !== submission.id && item.status === 'graded' && item.score !== null)
+    .reduce((best, item) => Math.max(best, item.score ?? 0), 0);
+  const best = Math.max(submission.baselineBest, otherEssayBest, score);
+  const latestSubmission = allSubmissions
+    .filter((item) => item.status === 'graded' || item.id === submission.id)
+    .reduce<(typeof allSubmissions)[number] | null>(
+      (latest, item) => (!latest || item.attemptNumber > latest.attemptNumber ? item : latest),
+      null,
+    );
+  if (!latestSubmission) throw new Error('NO_SUBMISSION');
+
+  const latestScore = latestSubmission.id === submission.id ? score : latestSubmission.score ?? 0;
+  const history = [
+    ...(existing?.history ?? []).filter((item) => item.submissionId !== submission.id),
+    {
+      at: submission.submittedAt,
+      score,
+      correct: submission.mcqCorrect,
+      total: submission.mcqTotal,
+      submissionId: submission.id,
+    },
+  ].slice(-20);
+  const result: ExamResult = {
+    userId: submission.userId,
+    examId: submission.examId,
+    best,
+    score: latestScore,
+    correct: latestSubmission.mcqCorrect,
+    total: latestSubmission.mcqTotal,
+    attempts: Math.max(existing?.attempts ?? 0, submission.attemptNumber),
+    answers: latestSubmission.mcqAnswers,
+    history,
+    at: latestSubmission.submittedAt,
+  };
+
+  await publishEssayResult(submission.id, grades, score, result, earnedPoints, maximumPoints, Date.now());
+
+  // مراجعة أسئلة MCQ لعرضها للطالب فور التسليم (النصوص من كاش الأسئلة، بلا استعلام إضافي).
+  const graded = gradeMcqAnswers(
+    (await getExamQuestions(submission.examId)).filter((question) => question.type === 'mcq'),
+    submission.mcqAnswers,
+  );
+
+  return {
+    score,
+    currentScore: latestScore,
+    best,
+    earnedPoints,
+    maximumPoints,
+    passed: best >= (exam.passingScore ?? 50),
+    correct: submission.mcqCorrect,
+    total: submission.mcqTotal,
+    attempts: result.attempts,
+    review: graded.review,
+  };
 }
 
 function bootstrapJson(json: string, etag: string, c: Context) {
@@ -547,12 +667,27 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
     ? await sb.rpc('question_counts_for_exams', { p_exam_ids: examIds })
     : { data: [], error: null };
   if (questionCountsError) {
+    // لا نُسقط الصفحة كلها بسبب عدّاد: نرجع للعدّ المباشر، وإلا 0.
     console.error('[api] bootstrap question counts:', questionCountsError.message);
-    return c.json({ error: 'تعذّر تحميل الامتحانات الآن' }, 503);
   }
   const qByExam = new Map<number, number>();
   for (const row of questionCounts ?? []) {
     qByExam.set(Number(row.exam_id), Number(row.questions_count) || 0);
+  }
+  if (questionCountsError && examIds.length) {
+    const { data: fallbackRows, error: fallbackError } = await sb
+      .from('questions')
+      .select('exam_id,question_type,correct_index')
+      .in('exam_id', examIds);
+    if (fallbackError) {
+      console.error('[api] bootstrap question counts fallback:', fallbackError.message);
+    } else {
+      for (const row of fallbackRows ?? []) {
+        if (row.question_type !== 'essay' && Number(row.correct_index) < 0) continue;
+        const examId = Number(row.exam_id);
+        qByExam.set(examId, (qByExam.get(examId) ?? 0) + 1);
+      }
+    }
   }
 
   const students = topItems
@@ -606,7 +741,9 @@ app.get('/progress', requireAuth, async (c) => {
 
 app.post('/progress/sync', requireAuth, async (c) => {
   const me = getUser(c);
-  if (!genericRateLimit(`progress-sync:${me.id}`, 6, 60_000)) {
+  // 10/دقيقة: المزامنة كل 180 ثانية + إرسال فوري عند الإخفاء/الإكمال.
+  // الحد القديم (6) كان يُرجع 429 عند تنقّل سريع بين الدروس.
+  if (!genericRateLimit(`progress-sync:${me.id}`, 10, 60_000)) {
     return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
   }
 
@@ -831,23 +968,54 @@ app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
   if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
     return c.json({ error: 'الامتحان غير موجود' }, 404);
   }
-  const lastResult = await getResult(reqUser.id, id);
-  const questions = (await listQuestionsByExam(id))
-    .filter((q) => q.correctIndex >= 0)
+  // ثلاثة استعلامات متوازية بدل تسلسل (محاولة مقالية + نتيجة + أسئلة).
+  const [latestSubmission, existingResult, allQuestions] = await Promise.all([
+    getLatestEssaySubmission(reqUser.id, id),
+    getResult(reqUser.id, id),
+    getExamQuestions(id),
+  ]);
+  const pendingSubmission = latestSubmission?.status === 'pending_review'
+    ? { id: latestSubmission.id, status: latestSubmission.status, submittedAt: latestSubmission.submittedAt }
+    : null;
+  const lastResult = pendingSubmission ? null : existingResult;
+  // لا نكشف الإجابة الصحيحة/الشرح إلا لمن يعرض مراجعة محاولة سابقة.
+  // في امتحان مسموح بإعادته تُطلب المراجعة صراحةً بـ ?review=1، وإلا استطاع
+  // الطالب قراءة الحلول من الشبكة قبل بدء محاولة جديدة.
+  const reviewAllowed = !exam.allowRetake || c.req.query('review') === '1';
+  const questions = allQuestions
+    .filter((q) => q.type === 'essay' || q.correctIndex >= 0)
     .map((q) => ({
     id: q.id,
+    type: q.type,
+    points: q.points,
     text: q.text,
     textEn: q.textEn,
-    options: q.options,
+    options: q.type === 'mcq' ? q.options : [],
     hasImage: !!q.image,
     image: q.image,
-    explanation: lastResult ? q.explanation : undefined,
-    explanationEn: lastResult ? q.explanationEn : undefined,
+    explanation: reviewAllowed && lastResult ? q.explanation : undefined,
+    explanationEn: reviewAllowed && lastResult ? q.explanationEn : undefined,
     order: q.order,
-    // نكشف الإجابة الصحيحة والشرح فقط لمن أدّى الامتحان بالفعل (لا يُكشف قبل بدء الامتحان)
-    correctIndex: lastResult ? q.correctIndex : undefined,
+    // نكشف الإجابة الصحيحة والشرح فقط عند عرض المراجعة (لا قبل بدء الامتحان)
+    correctIndex: q.type === 'mcq' && reviewAllowed && lastResult ? q.correctIndex : undefined,
   }));
-  return c.json({ exam, questions, lastResult });
+  const lastSubmission = latestSubmission?.status === 'graded' && lastResult?.at === latestSubmission.submittedAt
+    ? {
+        id: latestSubmission.id,
+        status: latestSubmission.status,
+        attemptNumber: latestSubmission.attemptNumber,
+        submittedAt: latestSubmission.submittedAt,
+        score: latestSubmission.score,
+        mcqScore: latestSubmission.mcqScore,
+        mcqTotal: latestSubmission.mcqTotal,
+        earnedPoints: latestSubmission.earnedPoints,
+        maximumPoints: latestSubmission.maximumPoints,
+        essayQuestions: latestSubmission.essayQuestions,
+        essayAnswers: latestSubmission.essayAnswers,
+        essayGrades: latestSubmission.essayGrades,
+      }
+    : null;
+  return c.json({ exam, questions, lastResult, pendingSubmission, lastSubmission });
 });
 
 app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
@@ -859,20 +1027,135 @@ app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
     return c.json({ error: 'الامتحان غير موجود' }, 404);
   }
 
-  const existing = await getResult(reqUser.id, id);
+  const [existing, pending] = await Promise.all([
+    getResult(reqUser.id, id),
+    getLatestEssaySubmission(reqUser.id, id),
+  ]);
+  if (pending?.status === 'pending_review') {
+    return c.json({ error: 'الامتحان قيد المراجعة ولا يمكن إعادة المحاولة قبل اعتماد النتيجة' }, 409);
+  }
   if (existing && !exam.allowRetake) {
     return c.json({ error: 'لقد أديت هذا الامتحان بالفعل ولا يمكنك إعادته' }, 403);
   }
 
-  const { answers } = await c.req.json().catch(() => ({}));
-  const outcome = await submitExam(reqUser.id, exam, (answers as Record<string, number>) ?? {});
+  const body = await c.req.json().catch(() => ({}));
+  if (!isRecord(body)) return c.json({ error: 'بيانات الإجابات غير صحيحة' }, 400);
+  const rawAnswers = body.answers === undefined ? {} : body.answers;
+  const rawEssayAnswers = body.essayAnswers === undefined ? {} : body.essayAnswers;
+  if (!isRecord(rawAnswers) || !isRecord(rawEssayAnswers)) {
+    return c.json({ error: 'بيانات الإجابات غير صحيحة' }, 400);
+  }
+
+  const questions = await getExamQuestions(id);
+  const mcqQuestions = questions.filter((q) => q.type === 'mcq' && q.correctIndex >= 0);
+  const essayQuestions = questions.filter((q) => q.type === 'essay');
+  // عميل قديم لا يرسل essayAnswers إطلاقاً: نرفض بوضوح بدل إنشاء محاولة مقالية
+  // فارغة تُقفل الامتحان إلى الأبد (كان هذا سبب تعطّل صفحة الامتحانات بعد تحديث الخادم).
+  if (essayQuestions.length > 0 && body.essayAnswers === undefined) {
+    return c.json({ error: 'هذا الامتحان يحتوي أسئلة مقالية — حدّث الصفحة ثم أعد المحاولة' }, 400);
+  }
+  const questionsById = new Map(questions.map((question) => [String(question.id), question]));
+  const answers: Record<string, number> = {};
+  for (const [questionId, answer] of Object.entries(rawAnswers)) {
+    const question = questionsById.get(questionId);
+    if (!question || question.type !== 'mcq' || !Number.isInteger(answer) || Number(answer) < 0 || Number(answer) >= question.options.length) {
+      return c.json({ error: 'إجابة اختيار من متعدد غير صحيحة' }, 400);
+    }
+    answers[questionId] = Number(answer);
+  }
+  const essayAnswers: Record<string, string> = {};
+  for (const [questionId, answer] of Object.entries(rawEssayAnswers)) {
+    const question = questionsById.get(questionId);
+    if (!question || question.type !== 'essay' || typeof answer !== 'string') {
+      return c.json({ error: 'إجابة مقالية غير صحيحة' }, 400);
+    }
+    essayAnswers[questionId] = answer;
+  }
+
+  if (essayQuestions.length > 0) {
+    const graded = gradeMcqAnswers(mcqQuestions, answers);
+    const submittedAt = Date.now();
+    const attemptNumber = (existing?.attempts ?? 0) + 1;
+    const essayQuestionSnapshots: EssayQuestionSnapshot[] = essayQuestions.map((question) => ({
+      id: question.id,
+      text: question.text,
+      textEn: question.textEn,
+      points: question.points,
+    }));
+    const blankEssayCount = essayQuestions.filter(
+      (question) => (essayAnswers[String(question.id)] ?? '').trim().length === 0,
+    ).length;
+    try {
+      const submission = await createEssaySubmission({
+        userId: reqUser.id,
+        examId: id,
+        attemptNumber,
+        status: 'pending_review',
+        mcqScore: graded.score,
+        mcqCorrect: graded.correct,
+        mcqTotal: graded.total,
+        mcqEarnedPoints: graded.earnedPoints,
+        mcqMaxPoints: graded.maximumPoints,
+        mcqAnswers: answers,
+        essayQuestions: essayQuestionSnapshots,
+        essayAnswers: Object.fromEntries(essayQuestions.map((question) => [
+          String(question.id),
+          essayAnswers[String(question.id)] ?? '',
+        ])),
+        essayGrades: {},
+        score: null,
+        earnedPoints: 0,
+        maximumPoints: 0,
+        // الأساس = أفضل نتيجة حالية (تشمل المقالي المعتمدة سابقاً)، لا أساس أقدم محاولة.
+        baselineBest: existing?.best ?? 0,
+        submittedAt,
+        gradedAt: null,
+      });
+      // كل الإجابات المقالية فارغة ⇒ لا يوجد ما يُراجع بشرياً: اعتمد صفراً فوراً
+      // بدل تعليق الامتحان في انتظار الأدمن.
+      if (blankEssayCount === essayQuestions.length) {
+        try {
+          const zeroGrades: Record<string, EssayGrade> = Object.fromEntries(
+            essayQuestions.map((question) => [String(question.id), { score: 0, comment: '' }]),
+          );
+          const finalized = await finalizeEssaySubmission(submission, exam, zeroGrades, existing);
+          clearLatestExamTopCache();
+          return c.json({ status: 'graded', ...finalized });
+        } catch (autoError) {
+          // تعذّر الاعتماد التلقائي (بيانات درجات غير مكتملة/خطأ مؤقت): لا نفشل الطلب
+          // فتظل المحاولة معلّقة ونُظهرها للمدرّس بدل صفحة خطأ للطالب.
+          console.error('[api] auto-finalize blank essay submission:', (autoError as Error).message);
+          return c.json({
+            status: submission.status,
+            submissionId: submission.id,
+            submittedAt: submission.submittedAt,
+          });
+        }
+      }
+      return c.json({
+        status: submission.status,
+        submissionId: submission.id,
+        submittedAt: submission.submittedAt,
+      });
+    } catch (error) {
+      if ((error as Error & { code?: string }).code === '23505') {
+        return c.json({ error: 'لديك محاولة قيد المراجعة بالفعل' }, 409);
+      }
+      throw error;
+    }
+  }
+
+  const outcome = await submitExam(reqUser.id, exam, answers, questions);
   clearLatestExamTopCache();
   return c.json({
+    status: 'graded',
     score: outcome.score,
     best: outcome.best,
     correct: outcome.correct,
     total: outcome.total,
     passed: outcome.passed,
+    earnedPoints: outcome.earnedPoints,
+    maximumPoints: outcome.maximumPoints,
     attempts: (existing?.attempts ?? 0) + 1,
     review: outcome.review,
   });
@@ -933,18 +1216,31 @@ app.delete('/exams/:id', requireAuth, requireAdmin, async (c) => {
 app.post('/exams/:id/questions', requireAuth, requireAdmin, async (c) => {
   const examId = Number(c.req.param('id'));
   const b = await c.req.json().catch(() => ({}));
-  if (!bodyText(b.text) || !Array.isArray(b.options) || b.options.length < 2 || b.correctIndex === undefined) {
+  if (!isRecord(b) || !bodyText(b.text)) return c.json({ error: 'نص السؤال مطلوب' }, 400);
+  const type = b.type === undefined ? 'mcq' : b.type;
+  if (type !== 'mcq' && type !== 'essay') return c.json({ error: 'نوع السؤال غير صحيح' }, 400);
+  const points = b.points === undefined ? 1 : Number(b.points);
+  if (!Number.isInteger(points) || points <= 0) return c.json({ error: 'الدرجة القصوى يجب أن تكون عدداً صحيحاً أكبر من صفر' }, 400);
+  const options = type === 'mcq' && Array.isArray(b.options) ? b.options : [];
+  const correctIndex = type === 'mcq' ? Number(b.correctIndex) : -1;
+  if (type === 'mcq' && (!Array.isArray(b.options) || options.length < 2 || b.correctIndex === undefined)) {
     return c.json({ error: 'نص السؤال والخيارات والإجابة الصحيحة مطلوبة' }, 400);
   }
-  if (b.correctIndex < 0 || b.correctIndex >= b.options.length) {
+  if (type === 'mcq' && !options.every((option) => isRecord(option) && !!bodyText(option.text))) {
+    return c.json({ error: 'كل الخيارات يجب أن تحتوي على نص' }, 400);
+  }
+  // -1 مسموح: سؤال MCQ بلا إجابة صحيحة (مسودة) — يُستبعد من الامتحان ومن العدّاد.
+  if (type === 'mcq' && (!Number.isInteger(correctIndex) || correctIndex < -1 || correctIndex >= options.length)) {
     return c.json({ error: 'الإجابة الصحيحة خارج نطاق الخيارات' }, 400);
   }
   const question = await createQuestion({
     examId,
+    type,
+    points,
     text: bodyText(b.text),
     textEn: bodyText(b.textEn),
-    options: b.options.map((o: any) => ({ text: bodyText(o.text), textEn: bodyText(o.textEn) })),
-    correctIndex: Number(b.correctIndex),
+    options: options.map((o: any) => ({ text: bodyText(o.text), textEn: bodyText(o.textEn) })),
+    correctIndex,
     image: bodyText(b.image),
     explanation: bodyText(b.explanation),
     explanationEn: bodyText(b.explanationEn),
@@ -958,18 +1254,29 @@ app.put('/questions/:id', requireAuth, requireAdmin, async (c) => {
   const q = await findQuestionById(id);
   if (!q) return c.json({ error: 'السؤال غير موجود' }, 404);
   const b = await c.req.json().catch(() => ({}));
-  const options = b.options !== undefined ? b.options.map((o: any) => ({ text: bodyText(o.text), textEn: bodyText(o.textEn) })) : q.options;
-  if (b.correctIndex !== undefined) {
-    const idx = Number(b.correctIndex);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= options.length) {
+  if (!isRecord(b)) return c.json({ error: 'بيانات السؤال غير صحيحة' }, 400);
+  const type = b.type === undefined ? q.type : b.type;
+  if (type !== 'mcq' && type !== 'essay') return c.json({ error: 'نوع السؤال غير صحيح' }, 400);
+  const points = b.points === undefined ? q.points : Number(b.points);
+  if (!Number.isInteger(points) || points <= 0) return c.json({ error: 'الدرجة القصوى يجب أن تكون عدداً صحيحاً أكبر من صفر' }, 400);
+  const options = type === 'essay' ? [] : (
+    b.options !== undefined
+      ? Array.isArray(b.options)
+        ? b.options.map((o: any) => ({ text: bodyText(o?.text), textEn: bodyText(o?.textEn) }))
+        : []
+      : q.options
+  );
+  const correctIndex = type === 'essay' ? -1 : (b.correctIndex === undefined ? q.correctIndex : Number(b.correctIndex));
+  if (type === 'mcq' && (options.length < 2 || !Number.isInteger(correctIndex) || correctIndex < -1 || correctIndex >= options.length)) {
       return c.json({ error: 'الإجابة الصحيحة خارج نطاق الخيارات' }, 400);
-    }
   }
   const updated = await updateQuestion(id, {
+    type,
+    points,
     text: b.text !== undefined ? bodyText(b.text) : q.text,
     textEn: b.textEn !== undefined ? bodyText(b.textEn) : q.textEn,
     options,
-    correctIndex: b.correctIndex !== undefined ? Number(b.correctIndex) : q.correctIndex,
+    correctIndex,
     image: b.image !== undefined ? bodyText(b.image) : q.image,
     explanation: b.explanation !== undefined ? bodyText(b.explanation) : q.explanation,
     explanationEn: b.explanationEn !== undefined ? bodyText(b.explanationEn) : q.explanationEn,
@@ -1487,6 +1794,124 @@ app.get('/admin/users/:id', requireAuth, requireAdmin, async (c) => {
 app.get('/admin/exams/:id/questions', requireAuth, requireAdmin, async (c) => {
   const questions = await listQuestionsByExam(Number(c.req.param('id')));
   return c.json({ questions });
+});
+
+app.get('/admin/essay-submissions', requireAuth, requireAdmin, async (c) => {
+  const requestedStatus = c.req.query('status') ?? 'pending_review';
+  if (!['pending_review', 'graded', 'all'].includes(requestedStatus)) {
+    return c.json({ error: 'حالة المراجعة غير صحيحة' }, 400);
+  }
+  const page = Math.max(1, Number(c.req.query('page')) || 1);
+  const limit = Math.min(100, Math.max(1, Number(c.req.query('limit')) || 30));
+  const result = await listEssaySubmissionsForAdmin(
+    requestedStatus as 'pending_review' | 'graded' | 'all',
+    page,
+    limit,
+  );
+  return c.json(result);
+});
+
+app.get('/admin/essay-submissions/:id', requireAuth, requireAdmin, async (c) => {
+  const submissionId = Number(c.req.param('id'));
+  if (!Number.isInteger(submissionId) || submissionId <= 0) {
+    return c.json({ error: 'رقم المحاولة غير صحيح' }, 400);
+  }
+  const submission = await findEssaySubmissionById(submissionId);
+  if (!submission) return c.json({ error: 'المحاولة غير موجودة' }, 404);
+  const [student, exam] = await Promise.all([
+    findUserById(submission.userId),
+    findExamById(submission.examId),
+  ]);
+  if (!student || !exam) return c.json({ error: 'بيانات المحاولة غير مكتملة' }, 404);
+  const questions = submission.essayQuestions.map((question) => ({
+    ...question,
+    answer: submission.essayAnswers[String(question.id)] ?? '',
+    grade: submission.essayGrades[String(question.id)] ?? null,
+  }));
+  return c.json({
+    submission: {
+      id: submission.id,
+      examId: submission.examId,
+      attemptNumber: submission.attemptNumber,
+      status: submission.status,
+      mcqScore: submission.mcqScore,
+      mcqCorrect: submission.mcqCorrect,
+      mcqTotal: submission.mcqTotal,
+      score: submission.score,
+      earnedPoints: submission.earnedPoints,
+      maximumPoints: submission.maximumPoints,
+      submittedAt: submission.submittedAt,
+      gradedAt: submission.gradedAt,
+    },
+    student: { id: student.id, fullName: student.fullName, phone: student.phone, grade: student.grade },
+    exam: { id: exam.id, title: exam.title, titleEn: exam.titleEn },
+    questions,
+  });
+});
+
+app.post('/admin/essay-submissions/:id/approve', requireAuth, requireAdmin, async (c) => {
+  const submissionId = Number(c.req.param('id'));
+  if (!Number.isInteger(submissionId) || submissionId <= 0) {
+    return c.json({ error: 'رقم المحاولة غير صحيح' }, 400);
+  }
+  const submission = await findEssaySubmissionById(submissionId);
+  if (!submission) return c.json({ error: 'المحاولة غير موجودة' }, 404);
+  const exam = await findExamById(submission.examId);
+  if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  if (!isRecord(body) || !Array.isArray(body.grades)) {
+    return c.json({ error: 'درجات الأسئلة المقالية غير صحيحة' }, 400);
+  }
+  const questionById = new Map(submission.essayQuestions.map((question) => [question.id, question]));
+  const grades: Record<string, EssayGrade> = {};
+  for (const rawGrade of body.grades) {
+    if (!isRecord(rawGrade)) return c.json({ error: 'درجة السؤال غير صحيحة' }, 400);
+    const questionId = Number(rawGrade.questionId);
+    const question = questionById.get(questionId);
+    const score = rawGrade.score;
+    const comment = rawGrade.comment === undefined ? '' : rawGrade.comment;
+    if (
+      !question ||
+      !Number.isFinite(score) ||
+      Number(score) < 0 ||
+      Number(score) > question.points ||
+      typeof comment !== 'string' ||
+      comment.length > 5000 ||
+      Object.prototype.hasOwnProperty.call(grades, String(questionId))
+    ) {
+      return c.json({ error: 'تأكد من أن درجة كل سؤال بين صفر والدرجة القصوى' }, 400);
+    }
+    grades[String(questionId)] = { score: Number(score), comment };
+  }
+  if (Object.keys(grades).length !== submission.essayQuestions.length) {
+    return c.json({ error: 'يجب إدخال درجة لكل سؤال مقالي' }, 400);
+  }
+
+  const existing = await getResult(submission.userId, submission.examId);
+  let finalized: Awaited<ReturnType<typeof finalizeEssaySubmission>>;
+  try {
+    finalized = await finalizeEssaySubmission(submission, exam, grades, existing);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message === 'NO_MAX_SCORE') {
+      return c.json({ error: 'لا توجد درجات قصوى صالحة لهذا الامتحان' }, 400);
+    }
+    if (message === 'NO_SUBMISSION') {
+      return c.json({ error: 'المحاولة غير متاحة للاعتماد' }, 409);
+    }
+    throw error;
+  }
+  clearLatestExamTopCache();
+  return c.json({
+    status: 'graded',
+    score: finalized.score,
+    currentScore: finalized.currentScore,
+    best: finalized.best,
+    earnedPoints: finalized.earnedPoints,
+    maximumPoints: finalized.maximumPoints,
+    passed: finalized.passed,
+  });
 });
 
 app.put('/admin/users/:id/role', requireAuth, requireAdmin, async (c) => {

@@ -25,6 +25,22 @@ export function getCached<T>(key: string, ttlMs: number): T | null {
   }
 }
 
+/**
+ * عمر المدخل بالمللي ثانية (0 = الآن)، أو null إن لم يوجد مدخل صالح البنية.
+ * يسمح للواجهة بمعرفة هل البيانات حديثة بما يكفي قبل إطلاق طلب شبكة.
+ */
+export function getCachedAge(key: string): number | null {
+  const raw = getLocal(CACHE_PREFIX + key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as CacheEntry<unknown>;
+    if (typeof parsed.at !== 'number') return null;
+    return Math.max(0, Date.now() - parsed.at);
+  } catch {
+    return null;
+  }
+}
+
 /** قراءة الكاش حتى لو انتهت صلاحيته — بدون حذفه — لاستخدامه كـ"آخر بيانات معروفة" عند فشل الشبكة. */
 export function getCachedStale<T>(key: string): T | null {
   const raw = getLocal(CACHE_PREFIX + key);

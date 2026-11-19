@@ -818,9 +818,14 @@ async function questionCountsFor(examIds: number[]): Promise<Map<number, number>
   }
 
   // احتياط قبل تطبيق ميجريشن 014: نجلب الأعمدة ونعدّها محلياً.
+  // نستبعد MCQ بلا إجابة صحيحة (correct_index = -1) لأنها لا تُعرض في الامتحان.
   console.error('[db] question_counts_for_exams RPC:', error.message);
-  const { data: rows } = await sb.from('questions').select('exam_id').in('exam_id', examIds);
+  const { data: rows } = await sb
+    .from('questions')
+    .select('exam_id,question_type,correct_index')
+    .in('exam_id', examIds);
   for (const q of rows ?? []) {
+    if ((q as any).question_type !== 'essay' && Number((q as any).correct_index) < 0) continue;
     const ex = Number((q as any).exam_id);
     qByExam.set(ex, (qByExam.get(ex) ?? 0) + 1);
   }
@@ -867,6 +872,8 @@ export async function deleteExam(id: number): Promise<void> {
 export interface Question {
   id: number;
   examId: number;
+  type: 'mcq' | 'essay';
+  points: number;
   text: string;
   textEn: string;
   options: { text: string; textEn: string }[];
@@ -881,6 +888,8 @@ function questionFromRow(r: any): Question {
   return {
     id: r.id,
     examId: r.exam_id ?? 0,
+    type: r.question_type === 'essay' ? 'essay' : 'mcq',
+    points: Number(r.points) || 1,
     text: r.text ?? '',
     textEn: r.text_en ?? '',
     options: Array.isArray(r.options) ? r.options : [],
@@ -895,6 +904,8 @@ function questionFromRow(r: any): Question {
 function questionToRow(q: Partial<Question>): Record<string, any> {
   const row: Record<string, any> = {};
   if (q.examId !== undefined) row.exam_id = q.examId;
+  if (q.type !== undefined) row.question_type = q.type;
+  if (q.points !== undefined) row.points = q.points;
   if (q.text !== undefined) row.text = q.text;
   if (q.textEn !== undefined) row.text_en = q.textEn;
   if (q.options !== undefined) row.options = q.options;
@@ -932,6 +943,230 @@ export async function updateQuestion(id: number, patch: Partial<Omit<Question, '
 
 export async function deleteQuestion(id: number): Promise<void> {
   await sb.from('questions').delete().eq('id', id);
+}
+
+/* =================== إجابات الامتحانات المقالية =================== */
+
+export interface EssayGrade {
+  score: number;
+  comment: string;
+}
+
+export interface EssayQuestionSnapshot {
+  id: number;
+  text: string;
+  textEn: string;
+  points: number;
+}
+
+export interface EssaySubmission {
+  id: number;
+  userId: number;
+  examId: number;
+  attemptNumber: number;
+  status: 'pending_review' | 'graded';
+  mcqScore: number;
+  mcqCorrect: number;
+  mcqTotal: number;
+  /** نقاط MCQ المكتسبة/القصوى وقت التسليم — تُستخدم لحساب النتيجة النهائية بنظام نقاط موحّد. */
+  mcqEarnedPoints: number;
+  mcqMaxPoints: number;
+  mcqAnswers: Record<string, number>;
+  essayQuestions: EssayQuestionSnapshot[];
+  essayAnswers: Record<string, string>;
+  essayGrades: Record<string, EssayGrade>;
+  score: number | null;
+  earnedPoints: number;
+  maximumPoints: number;
+  baselineBest: number;
+  submittedAt: number;
+  gradedAt: number | null;
+}
+
+function essaySubmissionFromRow(r: any): EssaySubmission {
+  return {
+    id: Number(r.id),
+    userId: Number(r.user_id),
+    examId: Number(r.exam_id),
+    attemptNumber: Number(r.attempt_number),
+    status: r.status === 'graded' ? 'graded' : 'pending_review',
+    mcqScore: Number(r.mcq_score) || 0,
+    mcqCorrect: Number(r.mcq_correct) || 0,
+    mcqTotal: Number(r.mcq_total) || 0,
+    mcqEarnedPoints: Number(r.mcq_earned_points) || 0,
+    mcqMaxPoints: Number(r.mcq_max_points) || 0,
+    mcqAnswers: r.mcq_answers && typeof r.mcq_answers === 'object' ? r.mcq_answers : {},
+    essayQuestions: Array.isArray(r.essay_questions) ? r.essay_questions : [],
+    essayAnswers: r.essay_answers && typeof r.essay_answers === 'object' ? r.essay_answers : {},
+    essayGrades: r.essay_grades && typeof r.essay_grades === 'object' ? r.essay_grades : {},
+    score: Number.isInteger(r.score) ? Number(r.score) : null,
+    earnedPoints: Number(r.earned_points) || 0,
+    maximumPoints: Number(r.maximum_points) || 0,
+    baselineBest: Number(r.baseline_best) || 0,
+    submittedAt: Number(r.submitted_at) || 0,
+    gradedAt: Number.isInteger(r.graded_at) ? Number(r.graded_at) : null,
+  };
+}
+
+function essaySubmissionToRow(s: Partial<EssaySubmission>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  if (s.userId !== undefined) row.user_id = s.userId;
+  if (s.examId !== undefined) row.exam_id = s.examId;
+  if (s.attemptNumber !== undefined) row.attempt_number = s.attemptNumber;
+  if (s.status !== undefined) row.status = s.status;
+  if (s.mcqScore !== undefined) row.mcq_score = s.mcqScore;
+  if (s.mcqCorrect !== undefined) row.mcq_correct = s.mcqCorrect;
+  if (s.mcqTotal !== undefined) row.mcq_total = s.mcqTotal;
+  if (s.mcqEarnedPoints !== undefined) row.mcq_earned_points = s.mcqEarnedPoints;
+  if (s.mcqMaxPoints !== undefined) row.mcq_max_points = s.mcqMaxPoints;
+  if (s.mcqAnswers !== undefined) row.mcq_answers = s.mcqAnswers;
+  if (s.essayQuestions !== undefined) row.essay_questions = s.essayQuestions;
+  if (s.essayAnswers !== undefined) row.essay_answers = s.essayAnswers;
+  if (s.essayGrades !== undefined) row.essay_grades = s.essayGrades;
+  if (s.score !== undefined) row.score = s.score;
+  if (s.earnedPoints !== undefined) row.earned_points = s.earnedPoints;
+  if (s.maximumPoints !== undefined) row.maximum_points = s.maximumPoints;
+  if (s.baselineBest !== undefined) row.baseline_best = s.baselineBest;
+  if (s.submittedAt !== undefined) row.submitted_at = s.submittedAt;
+  if (s.gradedAt !== undefined) row.graded_at = s.gradedAt;
+  return row;
+}
+
+export async function getLatestEssaySubmission(userId: number, examId: number): Promise<EssaySubmission | null> {
+  const { data, error } = await sb
+    .from('exam_submissions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('exam_id', examId)
+    .order('attempt_number', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getLatestEssaySubmission: ${error.message}`);
+  return data ? essaySubmissionFromRow(data) : null;
+}
+
+export async function listEssaySubmissionsByUserExam(userId: number, examId: number): Promise<EssaySubmission[]> {
+  const { data, error } = await sb
+    .from('exam_submissions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('exam_id', examId)
+    .order('attempt_number', { ascending: true });
+  if (error) throw new Error(`listEssaySubmissionsByUserExam: ${error.message}`);
+  return (data ?? []).map(essaySubmissionFromRow);
+}
+
+/**
+ * معرّفات الامتحانات التي لديها محاولة مقالية قيد المراجعة.
+ * تُستخدم في /auth/me لعرض حالة "قيد المراجعة" في قائمة الامتحانات.
+ * لا ترمي خطأً: غياب الجدول (مهاجرة غير مطبّقة) يجب ألا يُسقط الإقلاع.
+ */
+export async function listPendingEssayExamIds(userId: number): Promise<number[]> {
+  const { data, error } = await sb
+    .from('exam_submissions')
+    .select('exam_id')
+    .eq('user_id', userId)
+    .eq('status', 'pending_review');
+  if (error) {
+    console.error('[db] listPendingEssayExamIds:', error.message);
+    return [];
+  }
+  return [...new Set((data ?? []).map((row: any) => Number(row.exam_id)))];
+}
+
+export async function createEssaySubmission(input: Omit<EssaySubmission, 'id'>): Promise<EssaySubmission> {
+  const { data, error } = await sb.from('exam_submissions').insert(essaySubmissionToRow(input)).select().single();
+  if (error) {
+    const failure = new Error(`createEssaySubmission: ${error.message}`) as Error & { code?: string };
+    failure.code = error.code;
+    throw failure;
+  }
+  return essaySubmissionFromRow(data);
+}
+
+export async function findEssaySubmissionById(id: number): Promise<EssaySubmission | null> {
+  const { data, error } = await sb.from('exam_submissions').select('*').eq('id', id).maybeSingle();
+  if (error) throw new Error(`findEssaySubmissionById: ${error.message}`);
+  return data ? essaySubmissionFromRow(data) : null;
+}
+
+export async function publishEssayResult(
+  submissionId: number,
+  grades: Record<string, EssayGrade>,
+  submissionScore: number,
+  result: ExamResult,
+  earnedPoints: number,
+  maximumPoints: number,
+  gradedAt: number,
+): Promise<void> {
+  const { error } = await sb.rpc('approve_essay_submission', {
+    p_submission_id: submissionId,
+    p_essay_grades: grades,
+    p_score: submissionScore,
+    p_result_score: result.score,
+    p_earned_points: earnedPoints,
+    p_maximum_points: maximumPoints,
+    p_best: result.best,
+    p_attempts: result.attempts,
+    p_result_correct: result.correct,
+    p_result_total: result.total,
+    p_result_answers: result.answers,
+    p_history: result.history,
+    p_result_at: result.at,
+    p_graded_at: gradedAt,
+  });
+  if (error) throw new Error(`publishEssayResult: ${error.message}`);
+}
+
+export async function listEssaySubmissionsForAdmin(
+  status: 'pending_review' | 'graded' | 'all',
+  page = 1,
+  limit = 30,
+) {
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30));
+  let query = sb
+    .from('exam_submissions')
+    .select('*', { count: 'exact' })
+    .order('submitted_at', { ascending: false })
+    .range((safePage - 1) * safeLimit, safePage * safeLimit - 1);
+  if (status !== 'all') query = query.eq('status', status);
+  const { data, error, count } = await query;
+  if (error) throw new Error(`listEssaySubmissionsForAdmin: ${error.message}`);
+
+  const rows = (data ?? []).map(essaySubmissionFromRow);
+  const userIds = [...new Set(rows.map((row) => row.userId))];
+  const examIds = [...new Set(rows.map((row) => row.examId))];
+  const [usersResult, examsResult] = await Promise.all([
+    userIds.length
+      ? sb.from('users').select('id,full_name,phone').in('id', userIds)
+      : Promise.resolve({ data: [], error: null }),
+    examIds.length
+      ? sb.from('exams').select('id,title,title_en').in('id', examIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (usersResult.error) throw new Error(`listEssaySubmissionsForAdmin users: ${usersResult.error.message}`);
+  if (examsResult.error) throw new Error(`listEssaySubmissionsForAdmin exams: ${examsResult.error.message}`);
+
+  const users = new Map((usersResult.data ?? []).map((user: any) => [Number(user.id), user]));
+  const exams = new Map((examsResult.data ?? []).map((exam: any) => [Number(exam.id), exam]));
+  return {
+    submissions: rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      examId: row.examId,
+      attemptNumber: row.attemptNumber,
+      status: row.status,
+      submittedAt: row.submittedAt,
+      fullName: users.get(row.userId)?.full_name ?? '',
+      phone: users.get(row.userId)?.phone ?? '',
+      examTitle: exams.get(row.examId)?.title ?? '',
+      examTitleEn: exams.get(row.examId)?.title_en ?? '',
+    })),
+    total: count ?? 0,
+    page: safePage,
+    limit: safeLimit,
+  };
 }
 
 /* =================== المذكرات =================== */
@@ -1199,7 +1434,7 @@ export interface ExamResult {
   total: number;
   attempts: number;
   answers: Record<string, number>;
-  history: { at: number; score: number; correct: number; total: number }[];
+  history: { at: number; score: number; correct: number; total: number; submissionId?: number }[];
   at: number;
 }
 
@@ -2032,17 +2267,34 @@ export interface SubmitOutcome {
   correct: number;
   total: number;
   passed: boolean;
+  earnedPoints: number;
+  maximumPoints: number;
   review: { id: number; text: string; textEn: string; options: { text: string; textEn: string }[]; given?: number; correctIndex: number; isCorrect: boolean; explanation: string; explanationEn: string }[];
 }
 
-export async function submitExam(userId: number, exam: Exam, answers: Record<string, number>): Promise<SubmitOutcome> {
-  const questions = (await listQuestionsByExam(exam.id)).filter((q) => q.correctIndex >= 0);
-
+/**
+ * تصحيح أسئلة الاختيار من متعدد بنظام نقاط موحّد:
+ * كل سؤال يساوي `points` (افتراضياً 1)، والنسبة = المكتسب / الأقصى.
+ * بهذا يصبح وزن أسئلة MCQ متسقاً مع الأسئلة المقالية داخل الامتحان المختلط،
+ * بدل أن يُحسب MCQ كنسبة 0–100 منفصلة عن نقاط المقالي.
+ */
+export function gradeMcqAnswers(
+  questions: Question[],
+  answers: Record<string, number>,
+): Pick<SubmitOutcome, 'score' | 'correct' | 'total' | 'review' | 'earnedPoints' | 'maximumPoints'> {
+  const mcqQuestions = questions.filter((q) => q.type === 'mcq' && q.correctIndex >= 0);
   let correct = 0;
-  const review = questions.map((q) => {
+  let earnedPoints = 0;
+  let maximumPoints = 0;
+  const review = mcqQuestions.map((q) => {
     const given = answers[String(q.id)];
     const isCorrect = given === q.correctIndex;
-    if (isCorrect) correct++;
+    const points = Number(q.points) > 0 ? Number(q.points) : 1;
+    maximumPoints += points;
+    if (isCorrect) {
+      correct++;
+      earnedPoints += points;
+    }
     return {
       id: q.id,
       text: q.text,
@@ -2056,7 +2308,27 @@ export async function submitExam(userId: number, exam: Exam, answers: Record<str
     };
   });
 
-  const score = questions.length ? Math.round((correct / questions.length) * 100) : 0;
+  const score = maximumPoints > 0 ? Math.round((earnedPoints / maximumPoints) * 100) : 0;
+  return {
+    score,
+    correct,
+    total: mcqQuestions.length,
+    review,
+    earnedPoints,
+    maximumPoints,
+  };
+}
+
+export async function submitExam(
+  userId: number,
+  exam: Exam,
+  answers: Record<string, number>,
+  /** أسئلة جُلبت مسبقاً (من كاش الامتحان) — تمريرها يوفّر استعلاماً مكرراً. */
+  preloadedQuestions?: Question[],
+): Promise<SubmitOutcome> {
+  const questions = preloadedQuestions ?? await listQuestionsByExam(exam.id);
+  const graded = gradeMcqAnswers(questions, answers);
+  const { score, correct, total, review, earnedPoints, maximumPoints } = graded;
 
   const existing = await getResult(userId, exam.id);
   const prev = existing ?? { userId, examId: exam.id, best: 0, score: 0, correct: 0, total: 0, attempts: 0, answers: {}, history: [], at: 0 };
@@ -2068,10 +2340,10 @@ export async function submitExam(userId: number, exam: Exam, answers: Record<str
     score,
     best,
     correct,
-    total: questions.length,
+    total,
     answers,
     attempts: (prev.attempts ?? 0) + 1,
-    history: [...(prev.history ?? []).slice(-19), { at: now(), score, correct, total: questions.length }],
+    history: [...(prev.history ?? []).slice(-19), { at: now(), score, correct, total }],
     at: now(),
   };
   await upsertResult(result);
@@ -2080,8 +2352,12 @@ export async function submitExam(userId: number, exam: Exam, answers: Record<str
     score,
     best,
     correct,
-    total: questions.length,
-    passed: score >= (exam.passingScore ?? 50),
+    total,
+    // النجاح يُحسب على أفضل نتيجة (best) — نفس القاعدة المعروضة في قائمة الامتحانات،
+    // حتى لا تقول القائمة "ناجح" وشاشة النتيجة "راسب" بعد إعادة محاولة أقل درجة.
+    passed: best >= (exam.passingScore ?? 50),
+    earnedPoints,
+    maximumPoints,
     review,
   };
 }

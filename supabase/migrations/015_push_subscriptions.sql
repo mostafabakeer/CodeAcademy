@@ -18,15 +18,6 @@ create unique index if not exists idx_push_subscriptions_endpoint on public.push
 -- تمكين RLS
 alter table public.push_subscriptions enable row level security;
 
--- سياسة: المستخدم يرى اشتراكاته فقط، الخدمة تدير הכל
-create policy "Users can view own subscriptions" on public.push_subscriptions
-  for select using (auth.uid() = user_id);
-
-create policy "Users can insert own subscriptions" on public.push_subscriptions
-  for insert with check (auth.uid() = user_id);
-
-create policy "Users can delete own subscriptions" on public.push_subscriptions
-  for delete using (auth.uid() = user_id);
-
--- خدمة الحافة (service_role) تدير הכל بدون قيود
+-- لا ترتبط معرفات مستخدمي المنصة بمعرفات auth.uid()؛ كل الوصول يمر عبر
+-- Edge Functions باستخدام service_role، وRLS يمنع الوصول المباشر للمستخدمين.
 grant all on public.push_subscriptions to service_role;

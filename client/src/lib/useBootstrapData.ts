@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getBootstrapSync, loadBootstrap, type BootstrapData } from './content';
+import {
+  bootstrapAgeMs,
+  getBootstrapSync,
+  loadBootstrap,
+  MEMORY_CACHE_TTL,
+  type BootstrapData,
+} from './content';
+
+/** بعد هذه المدة نعتبر المحتوى قديماً بما يكفي للتحديث في الخلفية. */
+const REFRESH_AFTER_MS = MEMORY_CACHE_TTL;
 
 export interface BootstrapState {
   data: BootstrapData | null;
@@ -67,8 +76,15 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
       // Use setTimeout to avoid synchronous setState in effect
       setTimeout(() => setData(sync), 0);
     }
-    // Use setTimeout to avoid synchronous setState in effect (run calls setReloading)
-    setTimeout(() => run(false), 0);
+    // لا نطلق طلب bootstrap عند كل mount: البيانات الحديثة (أقل من 30 دقيقة)
+    // تُعرض فوراً بلا شبكة. الجلب يحدث فقط عند انتهاء صلاحيتها، أو عند العودة
+    // للتبويب بعد انتهائها (انظر effect أدناه).
+    const age = bootstrapAgeMs(userId);
+    const fresh = sync !== null && age !== null && age < REFRESH_AFTER_MS;
+    if (!fresh) {
+      // Use setTimeout to avoid synchronous setState in effect (run calls setReloading)
+      setTimeout(() => run(false), 0);
+    }
 
     // تنظيف عند unmount
     return () => {
@@ -76,6 +92,18 @@ export function useBootstrapData(userId: number | null | undefined): BootstrapSt
         abortRef.current.abort();
       }
     };
+  }, [userId, run]);
+
+  // العودة للتبويب بعد فترة: حدّث فقط إذا انتهت صلاحية النسخة المحفوظة.
+  useEffect(() => {
+    if (userId == null || typeof document === 'undefined') return;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const age = bootstrapAgeMs(userId);
+      if (age === null || age >= REFRESH_AFTER_MS) run(false);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [userId, run]);
 
   const retry = useCallback(() => run(true), [run]);

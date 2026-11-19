@@ -40,6 +40,8 @@ interface MeResponse {
   user: User;
   levels: LevelTier[];
   examResults: ExamResultSummary[];
+  /** امتحانات لديها محاولة مقالية قيد المراجعة — لعرض الحالة في القائمة. */
+  pendingExamIds?: number[];
 }
 
 function statsFor(user: User, levels: LevelTier[], examResults: ExamResultSummary[]): StudentStats {
@@ -81,6 +83,7 @@ interface AuthState {
   user: User | null;
   levels: LevelTier[];
   examResults: ExamResultSummary[];
+  pendingExamIds: number[];
   stats: StudentStats | null;
   loading: boolean;
   /** خطأ شبكة/خادم مؤقت — نقف على شاشة إعادة اتصال بدل صفحة الدخول ولا نمسح التوكن. */
@@ -97,6 +100,8 @@ interface AuthState {
   logoutAll: () => Promise<void>;
   /** يُحدِّث نتيجة امتحان محلياً (بعد التسليم) ويعيد حساب الإحصائيات فوراً. */
   applyExamResult: (r: ExamResultSummary) => void;
+  /** يسجّل أن محاولة الامتحان صارت "قيد المراجعة" محلياً قبل مزامنة الإقلاع التالي. */
+  markExamPending: (examId: number) => void;
   /** يعيد حساب الإحصائيات من التقدّم المحلي الحالي (بعد مزامنة/مشاهدة). */
   recomputeStats: () => void;
 }
@@ -105,6 +110,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   levels: [],
   examResults: [],
+  pendingExamIds: [],
   stats: null,
   loading: true,
   offline: false,
@@ -127,7 +133,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         ? (prevSnap.levels as LevelTier[])
         : [];
     saveSessionSnapshot(me.user, levels, me.examResults);
-    set({ offline: false, user: me.user, levels, examResults: me.examResults, loading: false });
+    const pendingExamIds = Array.isArray(me.pendingExamIds) ? me.pendingExamIds : [];
+    set({ offline: false, user: me.user, levels, examResults: me.examResults, pendingExamIds, loading: false });
     void (async () => {
       // نجلب تقدّم المشاهدة من الخادم قبل حساب الإحصائيات (مرة واحدة لكل جلسة،
       // وبشرط ألا يكون التخزين المحلي أحدث). فشل الشبكة لا يعطّل شيئاً.
@@ -172,7 +179,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         if (status !== 401) recordAuthFailure(status, null);
         clearSessionSnapshot();
         clearStoredToken();
-        set({ offline: false, user: null, stats: null, examResults: [], levels: [], loading: false });
+        set({ offline: false, user: null, stats: null, examResults: [], pendingExamIds: [], levels: [], loading: false });
         return;
       }
 
@@ -258,7 +265,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     clearExamReviews();
     clearSessionSnapshot();
     clearBootstrapCache(get().user?.id ?? null);
-    set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });
+    set({ user: null, stats: null, examResults: [], pendingExamIds: [], levels: [], offline: false, loading: false });
     broadcastAuth('logout');
   },
 
@@ -275,7 +282,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     clearExamReviews();
     clearSessionSnapshot();
     clearBootstrapCache(get().user?.id ?? null);
-    set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });
+    set({ user: null, stats: null, examResults: [], pendingExamIds: [], levels: [], offline: false, loading: false });
     broadcastAuth('logout');
   },
 
@@ -288,12 +295,17 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   applyExamResult: (r) => {
     const prev = get().examResults;
     const next = [...prev.filter((x) => x.examId !== r.examId), r].sort((a, b) => a.examId - b.examId);
-    set({ examResults: next });
+    set({ examResults: next, pendingExamIds: get().pendingExamIds.filter((id) => id !== r.examId) });
     const u = get().user;
     if (u) {
       set({ stats: statsFor(u, get().levels, next) });
       saveSessionSnapshot(u, get().levels, next);
     }
+  },
+
+  markExamPending: (examId) => {
+    const next = [...new Set([...get().pendingExamIds, examId])];
+    set({ pendingExamIds: next });
   },
 }));
 
@@ -331,13 +343,17 @@ export function useSession(): {
 export function useProgress(): {
   stats: StudentStats | null;
   examResults: ExamResultSummary[];
+  pendingExamIds: number[];
   applyExamResult: (r: ExamResultSummary) => void;
+  markExamPending: (examId: number) => void;
 } {
   return useAuthStore(
     useShallow((s) => ({
       stats: s.stats,
       examResults: s.examResults,
+      pendingExamIds: s.pendingExamIds,
       applyExamResult: s.applyExamResult,
+      markExamPending: s.markExamPending,
     }))
   );
 }

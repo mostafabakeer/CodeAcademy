@@ -11,20 +11,22 @@ import DoctorCode from '../components/DoctorCode';
 export default function Exams() {
   const { t, lang } = useLang();
   const user = useUser();
-  const { examResults } = useProgress();
+  const { examResults, pendingExamIds } = useProgress();
   const { data: boot, error: bootError, retry } = useBootstrapData(user?.id);
 
   // قائمة الامتحانات تُبنى محليًا من الكاش (bootstrap) + نتائج المستخدم —
   // لا طلب شبكة إضافي: تُقدم فورًا بعد إعادة التحميل وتحتمل انقطاع الخادم.
   const exams = useMemo<ExamListItem[]>(() => {
     const map = new Map(examResults.map((r) => [r.examId, r]));
+    const pending = new Set(pendingExamIds);
     return (boot?.exams ?? []).map((e: Exam) => ({
       ...e,
       taken: !!map.get(e.id),
       bestScore: map.get(e.id)?.best ?? null,
       attempts: map.get(e.id)?.attempts ?? 0,
+      pending: pending.has(e.id),
     }));
-  }, [boot, examResults]);
+  }, [boot, examResults, pendingExamIds]);
 
   const loading = !boot && !bootError;
 
@@ -69,20 +71,26 @@ export default function Exams() {
                 <Link to={`/exams/${e.id}`} className="card-fire card-fire-hover flex h-full flex-col rounded-3xl p-6">
                   <div className="mb-3 flex items-center justify-between">
                     <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-fire-600/30 to-ember-500/30 text-2xl">📋</div>
-                    {e.taken && (
+                    {e.pending ? (
+                      <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-xs font-bold text-amber-300">
+                        ⏳ {t('exam.pendingReview')}
+                      </span>
+                    ) : e.taken ? (
                       <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${passed ? 'bg-emerald-500/20 text-emerald-300' : 'bg-fire-500/20 text-fire-300'}`}>
                         {passed ? '✓ ' + t('exam.passed') : t('exam.failed')}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                   <h2 className="font-extrabold">{lang === 'ar' ? e.title : e.titleEn}</h2>
                   <div className="mt-3 space-y-1 text-sm text-gray-400">
                     <div>❓ {e.questionsCount} {t('exam.questionsCount')}</div>
                     {e.timeLimit && <div>⏱️ {e.timeLimit} {t('exam.timeLimit')}</div>}
                     <div>
-                      {e.taken ? (
+                      {e.pending ? (
+                        <span className="font-bold text-amber-300">⏳ {t('exam.pendingReview')}</span>
+                      ) : e.taken ? (
                         <>
-                          🏆 {t('exam.bestScore')}: <span className="font-bold text-fire-400">{e.bestScore}%</span> · {e.attempts} {t('exam.attempts')}
+                          🏆 {t('exam.bestScore')}: <span className="font-bold text-fire-400">{e.bestScore ?? 0}%</span> · {e.attempts} {t('exam.attempts')}
                         </>
                       ) : (
                         t('exam.notTaken')
@@ -90,7 +98,11 @@ export default function Exams() {
                     </div>
                   </div>
                   <div className="mt-4 flex-1" />
-                  {e.taken && !canRetake ? (
+                  {e.pending ? (
+                    <span className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-center text-sm font-bold text-amber-300">
+                      {t('exam.pendingReview')}
+                    </span>
+                  ) : e.taken && !canRetake ? (
                     <span className="rounded-xl border border-ink-600 bg-ink-900 px-4 py-2 text-center text-sm font-bold text-gray-400">
                       {t('exam.doneOnce')}
                     </span>

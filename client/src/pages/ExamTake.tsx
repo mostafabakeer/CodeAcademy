@@ -13,6 +13,8 @@ import { EXAM_MAX_POINTS, examPointsForScore, examPointsFromResults } from '../l
 
 interface Question {
   id: number;
+  type: 'mcq' | 'essay';
+  points: number;
   text: string;
   textEn: string;
   options: { text: string; textEn: string }[];
@@ -24,14 +26,40 @@ interface Question {
 interface SavedResult {
   best?: number;
   score?: number;
+  correct?: number;
+  total?: number;
   attempts?: number;
   answers?: Record<string, number>;
+}
+
+interface EssayQuestionResult {
+  id: number;
+  text: string;
+  textEn: string;
+  points: number;
+  answer: string;
+  grade: { score: number; comment: string } | null;
 }
 
 interface ExamData {
   exam: { id: number; title: string; titleEn: string; timeLimit: number | null; passingScore: number; allowRetake?: boolean };
   questions: Question[];
   lastResult?: SavedResult | null;
+  pendingSubmission?: { id: number; status: 'pending_review'; submittedAt: number } | null;
+  lastSubmission?: {
+    id: number;
+    status: 'graded';
+    attemptNumber: number;
+    submittedAt: number;
+    score: number | null;
+    mcqScore: number;
+    mcqTotal: number;
+    earnedPoints: number;
+    maximumPoints: number;
+    essayQuestions: { id: number; text: string; textEn: string; points: number }[];
+    essayAnswers: Record<string, string>;
+    essayGrades: Record<string, { score: number; comment: string }>;
+  } | null;
 }
 
 interface ReviewItem {
@@ -53,7 +81,20 @@ interface Result {
   total: number;
   attempts: number;
   review: ReviewItem[];
+  essayReview?: EssayQuestionResult[];
+  mcqScore?: number;
+  earnedPoints?: number;
+  maximumPoints?: number;
 }
+
+interface ExamDraft {
+  answers: Record<number, number>;
+  essayAnswers: Record<number, string>;
+}
+
+type SubmissionResponse =
+  | (Result & { status?: 'graded' })
+  | { status: 'pending_review'; submissionId: number; submittedAt: number };
 
 // يبني المراجعة من الأسئلة + إجابات محفوظة (يُستخدم لمراجعة النتيجة عند العودة).
 // المراجعة تُبنى دائماً من إجابات الطالب (لا تختفي). الإجابة الصحيحة تُحدَّد إن توفرت،
@@ -139,21 +180,26 @@ function clearDraft(examId: string): void {
 }
 
 /** يقرأ إجابات محفوظة لامتحان جارٍ — مع تحقق كامل من الأنواع لمنع أي قيمة خاطئة. */
-function loadDraft(examId: string | undefined): Record<number, number> {
-  if (!examId) return {};
+function loadDraft(examId: string | undefined): ExamDraft {
+  if (!examId) return { answers: {}, essayAnswers: {} };
   try {
     const raw = localStorage.getItem(draftKey(examId));
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as { answers?: Record<string, unknown> };
-    if (!parsed || typeof parsed !== 'object' || typeof parsed.answers !== 'object' || parsed.answers === null) return {};
-    const out: Record<number, number> = {};
-    for (const [k, v] of Object.entries(parsed.answers)) {
+    if (!raw) return { answers: {}, essayAnswers: {} };
+    const parsed = JSON.parse(raw) as { answers?: Record<string, unknown>; essayAnswers?: Record<string, unknown> };
+    if (!parsed || typeof parsed !== 'object') return { answers: {}, essayAnswers: {} };
+    const answers: Record<number, number> = {};
+    for (const [k, v] of Object.entries(parsed.answers ?? {})) {
       const qid = Number(k);
-      if (Number.isInteger(qid) && typeof v === 'number' && v >= 0) out[qid] = v;
+      if (Number.isInteger(qid) && typeof v === 'number' && v >= 0) answers[qid] = v;
     }
-    return out;
+    const essayAnswers: Record<number, string> = {};
+    for (const [k, v] of Object.entries(parsed.essayAnswers ?? {})) {
+      const qid = Number(k);
+      if (Number.isInteger(qid) && typeof v === 'string') essayAnswers[qid] = v;
+    }
+    return { answers, essayAnswers };
   } catch {
-    return {};
+    return { answers: {}, essayAnswers: {} };
   }
 }
 
@@ -189,8 +235,32 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = 
           {result.passed ? t('exam.passed') : t('exam.failed')} — {result.score}%
         </h1>
         <p className="mt-2 text-gray-400">
-          {t('exam.results')}: {result.correct}/{result.total} ({result.score}%)
+          {result.essayReview?.length
+            ? `${t('exam.mcqScore')}: ${result.correct}/${result.total}`
+            : `${t('exam.results')}: ${result.correct}/${result.total}`}
+          {' · '}
+          {result.score}%
         </p>
+        {(result.mcqScore !== undefined || result.essayReview?.length) && (
+          <div className="mx-auto mt-4 max-w-md rounded-xl border border-ink-700 bg-ink-900/70 p-4 text-start">
+            <h2 className="mb-2 text-sm font-bold text-gray-200">{t('exam.resultBreakdown')}</h2>
+            {result.earnedPoints !== undefined && result.maximumPoints !== undefined && (
+              <p className="text-sm font-bold text-white">
+                {t('exam.finalScore')}: {result.earnedPoints} / {result.maximumPoints} ({result.score}%)
+              </p>
+            )}
+            {result.mcqScore !== undefined && (
+              <p className="text-sm text-gray-300">{t('exam.mcqScore')}: {result.mcqScore}%</p>
+            )}
+            {!!result.essayReview?.length && (
+              <p className="mt-1 text-sm text-gray-300">
+                {t('exam.essaySection')}: {result.essayReview.reduce((sum, item) => sum + (item.grade?.score ?? 0), 0)}
+                {' / '}
+                {result.essayReview.reduce((sum, item) => sum + item.points, 0)}
+              </p>
+            )}
+          </div>
+        )}
         {celebrate && result.passed && (
           <p className="mt-2 text-sm font-bold text-emerald-300">
             {pointsGained > 0
@@ -225,7 +295,31 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = 
         </div>
       </motion.div>
 
-      <div className="card-fire rounded-2xl p-6">
+      {!!result.essayReview?.length && (
+        <div className="card-fire rounded-2xl p-6">
+          <h2 className="mb-4 text-lg font-extrabold">✍️ {t('exam.essayFeedback')}</h2>
+          <div className="space-y-4">
+            {result.essayReview.map((item, index) => (
+              <article key={item.id} className="rounded-xl border border-ink-700 bg-ink-900 p-4">
+                <p className="font-bold">{index + 1}. {lang === 'ar' ? item.text : item.textEn || item.text}</p>
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm text-gray-300">
+                  {t('exam.yourAnswer')}: {item.answer || '—'}
+                </p>
+                <p className="mt-2 text-sm font-bold text-emerald-300">
+                  {t('exam.essayPoints')}: {item.grade?.score ?? 0} / {item.points}
+                </p>
+                {item.grade?.comment && (
+                  <p className="mt-2 rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-gray-300">
+                    <span className="font-bold">{t('exam.essayComment')}: </span>{item.grade.comment}
+                  </p>
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {review.length > 0 && <div className="card-fire rounded-2xl p-6">
         <h2 className="mb-4 text-lg font-extrabold">📋 {t('exam.review')}</h2>
         <div className="space-y-4">
           {review.map((q, i) => (
@@ -259,7 +353,7 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = 
             </div>
           ))}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -312,12 +406,18 @@ export default function ExamTake() {
   const { t, lang } = useLang();
   const navigate = useNavigate();
   const applyExamResult = useAuthStore((s) => s.applyExamResult);
+  const markExamPending = useAuthStore((s) => s.markExamPending);
   const [data, setData] = useState<ExamData | null>(null);
-  const [answers, setAnswers] = useState<Record<number, number>>(() => loadDraft(id));
+  const [answers, setAnswers] = useState<Record<number, number>>(() => loadDraft(id).answers);
+  const [essayAnswers, setEssayAnswers] = useState<Record<number, string>>(() => loadDraft(id).essayAnswers);
   const [result, setResult] = useState<Result | null>(null);
+  const [pendingReview, setPendingReview] = useState(false);
   const [pointsGained, setPointsGained] = useState(0);
   const [examPoints, setExamPoints] = useState<{ earned: number; thisExam: number; total: number } | null>(null);
   const [showSavedReview, setShowSavedReview] = useState(false);
+  const [reviewData, setReviewData] = useState<ExamData | null>(null);
+  const [loadingReview, setLoadingReview] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [attemptInProgress, setAttemptInProgress] = useState(false);
@@ -329,14 +429,30 @@ export default function ExamTake() {
     mountedRef.current = true;
     setLoading(true);
     setError('');
+    setReviewData(null);
+    setShowSavedReview(false);
     const draft = loadDraft(id);
-    setAnswers(draft);
+    setAnswers(draft.answers);
+    setEssayAnswers(draft.essayAnswers);
     api<ExamData>(`/api/exams/${id}`)
       .then((d) => {
         if (active) {
           setData(d);
+          setPendingReview(!!d.pendingSubmission);
+          if (d.lastResult) {
+            applyExamResult({
+              examId: Number(id),
+              best: d.lastResult.best ?? d.lastResult.score ?? 0,
+              score: d.lastResult.score ?? 0,
+              correct: d.lastResult.correct ?? 0,
+              total: d.lastResult.total ?? 0,
+              attempts: d.lastResult.attempts ?? 0,
+            });
+          }
           // مسودة موجودة = محاولة جارية (ربما إعادة) بعد إعادة تحميل الصفحة → نستأنفها.
-          setAttemptInProgress(!d.lastResult || Object.keys(draft).length > 0);
+          // أول فتح بلا مسودة = شاشة بداية؛ المؤقّت لا يبدأ إلا بعد ضغط "ابدأ".
+          const hasDraft = Object.keys(draft.answers).length + Object.keys(draft.essayAnswers).length > 0;
+          setAttemptInProgress(!d.pendingSubmission && hasDraft);
         }
       })
       .catch((e) => {
@@ -349,21 +465,27 @@ export default function ExamTake() {
       active = false;
       mountedRef.current = false;
     };
-  }, [id]);
+  }, [id, applyExamResult, reloadKey]);
 
-  const answeredCount = Object.keys(answers).length;
+  const answeredCount = data?.questions.filter((question) =>
+    question.type === 'mcq' ? answers[question.id] !== undefined : !!essayAnswers[question.id]?.trim(),
+  ).length ?? 0;
   const remaining = data ? data.questions.length - answeredCount : 0;
 
   // حفظ تلقائي للإجابات أثناء الكتابة (مسودة جارية بعد إعادة التحميل) — تُمسح عند التسليم.
   // لا نكتب مسودة إلا في محاولة جارية فعلية، حتى لا تُنشأ مسودة فارغة تُشوّش الاستئناف.
+  // مؤجّل 400ms: الكتابة على كل ضغطة مفتاح كانت تسبب ركوداً في الأسئلة المقالية الطويلة.
   useEffect(() => {
     if (!id || !attemptInProgress) return;
-    try {
-      localStorage.setItem(draftKey(id), JSON.stringify({ answers }));
-    } catch {
-      /* تجاهل أخطاء التخزين */
-    }
-  }, [id, answers, attemptInProgress]);
+    const handle = window.setTimeout(() => {
+      try {
+        localStorage.setItem(draftKey(id), JSON.stringify({ answers, essayAnswers }));
+      } catch {
+        /* تجاهل أخطاء التخزين */
+      }
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [id, answers, essayAnswers, attemptInProgress]);
 
   const submit = async () => {
     if (!id || submitting) return;
@@ -372,12 +494,11 @@ export default function ExamTake() {
     setSubmitting(true);
     setError('');
     try {
-      const res = await api<Result>(`/api/exams/${id}/submit`, {
+      const res = await api<SubmissionResponse>(`/api/exams/${id}/submit`, {
         method: 'POST',
-        body: JSON.stringify({ answers }),
+        body: JSON.stringify({ answers, essayAnswers }),
       });
       if (!mountedRef.current) return;
-      setResult(res);
       setAttemptInProgress(false);
       // تسليم امتحان = نشاط دراسي يحسب في سلسلة الحماس اليومية.
       touchStreak();
@@ -385,6 +506,15 @@ export default function ExamTake() {
         clearDraft(id);
         clearExamTimer(id);
       }
+      if (res.status === 'pending_review') {
+        markExamPending(Number(id));
+        setPendingReview(true);
+        setResult(null);
+        return;
+      }
+
+      setPendingReview(false);
+      setResult(res);
       if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
       const before = useAuthStore.getState().stats?.points ?? 0;
       const examPointsBefore = examPointsFromResults(useAuthStore.getState().examResults);
@@ -420,10 +550,36 @@ export default function ExamTake() {
     setPointsGained(0);
     setExamPoints(null);
     setAnswers({});
+    setEssayAnswers({});
+    setPendingReview(false);
     setError('');
     setSubmitting(false);
     setShowSavedReview(false);
     setAttemptInProgress(true);
+  };
+
+  /**
+   * عرض مراجعة المحاولة السابقة. في الامتحانات المسموح بإعادتها لا يُرسل الخادم
+   * الإجابات الصحيحة/الشرح إلا عند طلب المراجعة صراحةً (‎?review=1) — وإلا استطاع
+   * الطالب قراءتها من الشبكة قبل بدء محاولة جديدة.
+   */
+  const openSavedReview = async () => {
+    if (!id) return;
+    if (reviewData) {
+      setShowSavedReview(true);
+      return;
+    }
+    setLoadingReview(true);
+    setError('');
+    try {
+      const d = await api<ExamData>(`/api/exams/${id}?review=1`);
+      setReviewData(d);
+      setShowSavedReview(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingReview(false);
+    }
   };
 
   // عدّاد الامتحان المرن: مهلة من timeLimit (دقائق)، تُستأنف من موعدها المحفوظ
@@ -432,34 +588,112 @@ export default function ExamTake() {
   const { deadline } = useExamDeadline({
     examId: id,
     durationMinutes: data?.exam.timeLimit ?? null,
-    active: attemptInProgress && !!data && !result && !showSavedReview,
+    active: attemptInProgress && !!data && !result && !pendingReview && !showSavedReview,
   });
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
-  if (!data) return <p className="text-gray-400">{error || t('errors.generic')}</p>;
+  if (!data) {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 rounded-3xl border border-ink-600 bg-ink-900 p-8 text-center">
+        <p className="text-gray-300">{error || t('errors.generic')}</p>
+        <div className="flex flex-wrap justify-center gap-3">
+          <button onClick={() => setReloadKey((key) => key + 1)} className="btn-fire rounded-xl px-5 py-2.5 font-bold text-white">
+            {t('common.retry')}
+          </button>
+          <button onClick={() => navigate('/exams')} className="btn-ghost-fire rounded-xl px-5 py-2.5 font-bold">
+            {t('common.back')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const { exam, questions } = data;
   const canRetake = !!exam.allowRetake;
+  const essayMaxPoints = questions
+    .filter((question) => question.type === 'essay')
+    .reduce((sum, question) => sum + question.points, 0);
+
+  if (pendingReview || data.pendingSubmission) {
+    return (
+      <div className="mx-auto max-w-xl">
+        <motion.div role="status" aria-live="polite" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="card-fire rounded-3xl p-8 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-amber-500/20 text-4xl">⏳</div>
+          <h1 className="text-2xl font-black">{t('exam.underReview')}</h1>
+          <p className="mt-3 leading-relaxed text-gray-300">{t('exam.underReviewDetails')}</p>
+          <button onClick={() => navigate('/exams')} className="btn-ghost-fire mt-6 w-full rounded-xl px-6 py-2.5 font-bold">
+            {t('common.back')}
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // شاشة البداية: المؤقّت لا يبدأ إلا بعد ضغط "ابدأ" — كان يبدأ بمجرد فتح الرابط،
+  // فخسارة وقت بسبب تنقّل خاطئ كانت ممكنة.
+  if (!attemptInProgress && !data.lastResult) {
+    return (
+      <div className="mx-auto max-w-lg">
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="card-fire rounded-3xl p-8 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-fire-500/20 text-4xl">📝</div>
+          <h1 className="text-2xl font-black">{lang === 'ar' ? exam.title : exam.titleEn}</h1>
+          <div className="mt-5 space-y-2 rounded-xl bg-ink-900 p-4 text-start text-sm text-gray-300">
+            <p>❓ {questions.length} {t('exam.questionsCount')}</p>
+            {essayMaxPoints > 0 && <p>✍️ {t('exam.essaySection')}: {essayMaxPoints} {t('admin.maxPoints')}</p>}
+            {exam.timeLimit ? <p>⏱️ {exam.timeLimit} {t('exam.timeLimit')}</p> : null}
+            <p>🎯 {t('admin.passingScore')}: {exam.passingScore}%</p>
+          </div>
+          {error && <div className="mt-4 rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-3 text-sm text-fire-300">{error}</div>}
+          <button
+            onClick={() => { setError(''); setAttemptInProgress(true); }}
+            disabled={questions.length === 0}
+            className="btn-fire mt-6 w-full rounded-xl px-6 py-3 font-bold text-white disabled:opacity-50"
+          >
+            {t('common.start')}
+          </button>
+          {questions.length === 0 && <p className="mt-3 text-sm text-gray-400">{t('exam.noQuestions')}</p>}
+          <button onClick={() => navigate('/exams')} className="btn-ghost-fire mt-3 w-full rounded-xl px-6 py-2.5 font-bold">
+            {t('common.back')}
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
 
   // نتيجة/مراجعة مُخزّنة من آخر محاولة.
   // أولوية: تصحيح المحاولة المحفوظ محلياً عند التسليم (دقيق — يتضمن الأجوبة الصحيحة + الشرح).
   // fallback: نبنيه في المتصفح من lastResult.answers — يُعرض دائماً (لا يختفي)،
   //           وتُحدَّد الإجابة الصحيحة ضمن المراجعة إن توفرت، وإلا نشير إلى عدم توفرها.
-  const localReviews = data.lastResult ? loadReviewLocally(String(id)) : null;
+  const reviewSource = reviewData ?? data;
+  const localReviews = reviewSource.lastResult ? loadReviewLocally(String(id)) : null;
   const savedReview = localReviews && localReviews.length
     ? localReviews
-    : data.lastResult?.answers
-      ? buildReview(questions, data.lastResult.answers)
+    : reviewSource.lastResult?.answers
+      ? buildReview(reviewSource.questions, reviewSource.lastResult.answers)
       : null;
-  const savedResult: Result | null = data.lastResult && savedReview
+  const savedEssayReview: EssayQuestionResult[] = reviewSource.lastSubmission?.status === 'graded'
+    ? reviewSource.lastSubmission.essayQuestions.map((question) => ({
+        ...question,
+        answer: reviewSource.lastSubmission?.essayAnswers[String(question.id)] ?? '',
+        grade: reviewSource.lastSubmission?.essayGrades[String(question.id)] ?? null,
+      }))
+    : [];
+  const savedResult: Result | null = reviewSource.lastResult && (savedReview !== null || reviewSource.lastSubmission?.status === 'graded')
     ? {
-        score: data.lastResult.score ?? 0,
-        best: data.lastResult.best ?? data.lastResult.score ?? 0,
-        passed: (data.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
-        correct: savedReview.filter((r) => r.isCorrect).length,
-        total: savedReview.length,
-        attempts: data.lastResult.attempts ?? 1,
-        review: savedReview,
+        score: reviewSource.lastResult.score ?? 0,
+        best: reviewSource.lastResult.best ?? reviewSource.lastResult.score ?? 0,
+        // النجاح على أفضل نتيجة — نفس قاعدة قائمة الامتحانات.
+        passed: (reviewSource.lastResult.best ?? reviewSource.lastResult.score ?? 0) >= (exam.passingScore ?? 50),
+        correct: savedReview?.filter((r) => r.isCorrect).length ?? reviewSource.lastResult.correct ?? 0,
+        total: savedReview?.length ?? reviewSource.lastResult.total ?? 0,
+        attempts: reviewSource.lastResult.attempts ?? 1,
+        review: savedReview ?? [],
+        essayReview: savedEssayReview,
+        mcqScore: reviewSource.lastSubmission?.status === 'graded' && reviewSource.lastSubmission.mcqTotal > 0
+          ? reviewSource.lastSubmission.mcqScore
+          : undefined,
+        earnedPoints: reviewSource.lastSubmission?.status === 'graded' ? reviewSource.lastSubmission.earnedPoints : undefined,
+        maximumPoints: reviewSource.lastSubmission?.status === 'graded' ? reviewSource.lastSubmission.maximumPoints : undefined,
       }
     : null;
 
@@ -543,8 +777,8 @@ export default function ExamTake() {
               <div className="text-2xl font-black text-gray-200">{data.lastResult.attempts ?? 1}</div>
             </div>
           </div>
-          <button onClick={() => setShowSavedReview(true)} className="btn-fire mt-6 w-full rounded-xl px-6 py-2.5 font-bold text-white">
-            🔍 {t('exam.viewLastReview')}
+          <button onClick={() => void openSavedReview()} disabled={loadingReview} className="btn-fire mt-6 w-full rounded-xl px-6 py-2.5 font-bold text-white disabled:opacity-50">
+            🔍 {loadingReview ? t('common.loading') : t('exam.viewLastReview')}
           </button>
           <button onClick={retake} className="btn-ghost-fire mt-3 w-full rounded-xl px-6 py-2.5 font-bold">
             {t('exam.retake')}
@@ -569,6 +803,11 @@ export default function ExamTake() {
           </div>
         </div>
         <ProgressBar value={questions.length ? (answeredCount / questions.length) * 100 : 0} className="mt-3" />
+        {essayMaxPoints > 0 && (
+          <p className="mt-2 text-xs font-bold text-amber-300">
+            {t('exam.essaySection')}: {essayMaxPoints} {t('admin.maxPoints')}
+          </p>
+        )}
         {remaining > 0 && <p className="mt-1 text-xs text-ember-400">{t('exam.unansweredWarning')} ({remaining})</p>}
       </div>
 
@@ -578,27 +817,48 @@ export default function ExamTake() {
         {questions.map((q, qi) => (
           <motion.div key={q.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: qi * 0.05 }} className="card-fire rounded-2xl p-5">
             <p className="font-bold">
-              <span className="text-fire-400">{t('exam.question')} {qi + 1} {t('exam.of')} {questions.length}.</span> {lang === 'ar' ? q.text : q.textEn}
+              <span className="text-fire-400">{t('exam.question')} {qi + 1} {t('exam.of')} {questions.length}.</span> {lang === 'ar' ? q.text : q.textEn || q.text}
             </p>
-            <div className="mt-4 space-y-2">
-              {q.options.map((opt, oi) => {
-                const selected = answers[q.id] === oi;
-                return (
-                  <button
-                    key={oi}
-                    onClick={() => setAnswers((a) => ({ ...a, [q.id]: oi }))}
-                    className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-start text-sm transition-all ${
-                      selected ? 'border-fire-500 bg-fire-500/15 font-bold' : 'border-ink-600 bg-ink-900 hover:border-fire-500/50'
-                    }`}
-                  >
-                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black ${selected ? 'bg-gradient-to-br from-fire-600 to-ember-500 text-white' : 'bg-ink-700 text-gray-300'}`}>
-                      {String.fromCharCode(65 + oi)}
+            {q.type === 'essay' ? (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-bold text-amber-300">{t('exam.essayMaxPoints', { points: q.points })}</p>
+                <div className="relative rounded-xl bg-emerald-500/5 border border-emerald-500/30 p-1">
+                  <div className="absolute top-2 right-2 left-2 flex items-center justify-between pointer-events-none">
+                    <span className="text-xs font-bold text-emerald-300/80 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                      ✍️ {t('exam.essayAnswerArea')}
                     </span>
-                    {lang === 'ar' ? opt.text : opt.textEn}
-                  </button>
-                );
-              })}
-            </div>
+                  </div>
+                  <textarea
+                    rows={8}
+                    value={essayAnswers[q.id] ?? ''}
+                    onChange={(event) => setEssayAnswers((current) => ({ ...current, [q.id]: event.target.value }))}
+                    placeholder={t('exam.essayAnswer')}
+                    aria-label={lang === 'ar' ? q.text : q.textEn || q.text}
+                    className="input-fire w-full rounded-xl px-4 py-4 leading-relaxed bg-transparent focus:ring-emerald-500/30 focus:border-emerald-500 resize-y min-h-[160px]"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 space-y-2">
+                {q.options.map((opt, oi) => {
+                  const selected = answers[q.id] === oi;
+                  return (
+                    <button
+                      key={oi}
+                      onClick={() => setAnswers((a) => ({ ...a, [q.id]: oi }))}
+                      className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-start text-sm transition-all ${
+                        selected ? 'border-fire-500 bg-fire-500/15 font-bold' : 'border-ink-600 bg-ink-900 hover:border-fire-500/50'
+                      }`}
+                    >
+                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black ${selected ? 'bg-gradient-to-br from-fire-600 to-ember-500 text-white' : 'bg-ink-700 text-gray-300'}`}>
+                        {String.fromCharCode(65 + oi)}
+                      </span>
+                      {lang === 'ar' ? opt.text : opt.textEn || opt.text}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </motion.div>
         ))}
       </div>

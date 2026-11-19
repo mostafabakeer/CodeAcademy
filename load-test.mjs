@@ -1,6 +1,11 @@
 /**
  * DR Code Load Test
  * Usage: node load-test.mjs [concurrency] [duration_seconds]
+ *
+ * لقياس السيناريو الكامل (bootstrap/courses/exams/notes) استخدم حساباً مشتركاً:
+ *   $env:LOAD_TEST_PHONE="01xxxxxxxxx"; $env:LOAD_TEST_PASSWORD="..."; node load-test.mjs 50 30
+ * بدونها يُسجَّل حساب اختبار جديد (غير مشترك) وتُتخطى مسارات المحتوى بدل
+ * قياس ردود 403 مضلّلة.
  */
 const SUPABASE_URL = 'https://hgeugcmockvnfenhljlc.supabase.co';
 const ANON_KEY = 'sb_publishable_Ti1GcC1f7aM41NP-m-Ioaw_EFsx2TAC';
@@ -11,6 +16,9 @@ const D = Number(process.argv[3]) || 15;
 
 const hdrs = { 'Content-Type': 'application/json', apikey: ANON_KEY };
 let token = null;
+
+const TEST_PHONE = process.env.LOAD_TEST_PHONE || '';
+const TEST_PASSWORD = process.env.LOAD_TEST_PASSWORD || '';
 
 function authHdrs() { return { ...hdrs, Authorization: `Bearer ${token}` }; }
 
@@ -71,16 +79,32 @@ async function main() {
   console.log('=== DR Code Load Test ===');
   console.log(`Target: ${FN}\n`);
 
-  // Register
-  const phone = '05' + String(Date.now()).slice(-8);
-  const reg = await call('POST', '/auth/register', { phone, password: 'Test1234!', fullName: 'LoadTester', grade: 'bac1' });
-  if (!reg.ok) { console.log('Register:', reg.status, reg.body.slice(0, 200)); return; }
-  const regJson = JSON.parse(reg.body);
-  token = regJson.token;
-  console.log(`[+] Registered ${phone}, token obtained`);
+  // مصادقة: حساب مشترك موجود (موصى به) أو حساب اختبار جديد غير مشترك.
+  // الحساب الجديد لا يرى المحتوى (requireSubscriber) ⇒ نتخطى مسارات المحتوى
+  // بدل قياس ردود 403 لا تمثّل أي حمل حقيقي.
+  let authPhone = TEST_PHONE;
+  let authPassword = TEST_PASSWORD;
+  if (TEST_PHONE && TEST_PASSWORD) {
+    const login = await call('POST', '/auth/login', { identifier: TEST_PHONE, password: TEST_PASSWORD });
+    if (!login.ok) { console.log('Login:', login.status, login.body.slice(0, 200)); return; }
+    token = JSON.parse(login.body).token;
+    console.log(`[+] Logged in as ${TEST_PHONE}`);
+  } else {
+    authPhone = '05' + String(Date.now()).slice(-8);
+    authPassword = 'Test1234!';
+    const reg = await call('POST', '/auth/register', { phone: authPhone, password: authPassword, fullName: 'LoadTester', grade: 'bac1' });
+    if (!reg.ok) { console.log('Register:', reg.status, reg.body.slice(0, 200)); return; }
+    token = JSON.parse(reg.body).token;
+    console.log(`[+] Registered ${authPhone} (غير مشترك — مسارات المحتوى ستُتخطى)`);
+  }
 
-  // Warm up
-  await call('GET', '/bootstrap', null, authHdrs());
+  // Warm up + معرفة صلاحية قراءة المحتوى
+  let canReadContent = false;
+  const meRes = await call('GET', '/auth/me', null, authHdrs());
+  if (meRes.ok) {
+    const me = JSON.parse(meRes.body);
+    canReadContent = me?.user?.role === 'admin' || !!me?.user?.subscription;
+  }
 
   const R = [];
 
@@ -88,21 +112,37 @@ async function main() {
   R.push(await bench('GET /health (no auth)', 'GET', '/health'));
 
   // 2. Login (heaviest auth - computes password)
-  R.push(await bench('POST /auth/login', 'POST', '/auth/login', { identifier: '0500000000', password: 'Test1234!' }));
+  R.push(await bench('POST /auth/login', 'POST', '/auth/login', { identifier: authPhone, password: authPassword }));
 
-  // 3. Bootstrap (biggest payload)
-  R.push(await bench('GET /bootstrap (auth)', 'GET', '/bootstrap', null, authHdrs()));
+  // 3. الإقلاع الحقيقي: جلسة + تقدّم (متاحان لأي مستخدم مصادَق)
+  R.push(await bench('GET /auth/me (auth)', 'GET', '/auth/me', null, authHdrs()));
+  R.push(await bench('GET /progress (auth)', 'GET', '/progress', null, authHdrs()));
 
-  // 4. Courses
-  R.push(await bench('GET /courses (auth)', 'GET', '/courses', null, authHdrs()));
+  // 4. المحتوى (يتطلب اشتراكاً)
+  let lessonId = 1;
+  if (canReadContent) {
+    const boot = await call('GET', '/bootstrap', null, authHdrs());
+    if (boot.ok) {
+      const bootJson = JSON.parse(boot.body);
+      lessonId = bootJson?.lessons?.[0]?.id ?? 1;
+      R.push(await bench('GET /bootstrap (auth)', 'GET', '/bootstrap', null, authHdrs()));
+      // المسار الأكثر تكراراً في الواقع: المحتوى لم يتغيّر ⇒ notModified صغير
+      if (bootJson?.contentVersion) {
+        R.push(await bench('GET /bootstrap?v= (auth)', 'GET', `/bootstrap?v=${encodeURIComponent(bootJson.contentVersion)}`, null, authHdrs()));
+      }
+    }
+    R.push(await bench('GET /courses (auth)', 'GET', '/courses', null, authHdrs()));
+    R.push(await bench('GET /exams (auth)', 'GET', '/exams', null, authHdrs()));
+    R.push(await bench('GET /notes (auth)', 'GET', '/notes', null, authHdrs()));
+  } else {
+    console.log('\n⚠ الحساب غير مشترك: تم تخطي /bootstrap و/courses و/exams و/notes.');
+    console.log('  لقياس السيناريو الكامل: LOAD_TEST_PHONE=... LOAD_TEST_PASSWORD=...');
+  }
 
-  // 5. Exams
-  R.push(await bench('GET /exams (auth)', 'GET', '/exams', null, authHdrs()));
+  // 5. مزامنة التقدّم (الكتابة الوحيدة المتكررة أثناء المشاهدة)
+  R.push(await bench('POST /progress/sync (auth)', 'POST', '/progress/sync', { items: [{ lessonId, secondsWatched: 60 }] }, authHdrs()));
 
-  // 6. Notes
-  R.push(await bench('GET /notes (auth)', 'GET', '/notes', null, authHdrs()));
-
-  // 7. Top students (public)
+  // 6. Top students (public)
   R.push(await bench('GET /top-students (public)', 'GET', '/top-students'));
 
   // Summary

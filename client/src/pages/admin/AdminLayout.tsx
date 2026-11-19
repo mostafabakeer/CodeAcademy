@@ -36,6 +36,7 @@ export default function AdminLayout() {
         { to: '/admin/courses', label: t('admin.courses'), icon: '📚' },
         { to: '/admin/lessons', label: t('admin.lessons'), icon: '🎬' },
         { to: '/admin/exams', label: t('admin.exams'), icon: '📝' },
+        { to: '/admin/essay-reviews', label: t('admin.essayReview'), icon: '✍️' },
         { to: '/admin/notes', label: t('admin.notes'), icon: '📖' },
       ],
     },

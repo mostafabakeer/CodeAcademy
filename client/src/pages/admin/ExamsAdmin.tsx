@@ -26,6 +26,8 @@ interface Exam {
 }
 interface Question {
   id: number;
+  type: 'mcq' | 'essay';
+  points: number;
   text: string;
   textEn: string;
   options: { text: string; textEn: string }[];
@@ -51,7 +53,7 @@ export default function ExamsAdmin() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [qOpen, setQOpen] = useState(false);
   const [qEditing, setQEditing] = useState<Question | null>(null);
-  const [qForm, setQForm] = useState({ text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0, explanation: '', explanationEn: '' });
+  const [qForm, setQForm] = useState({ type: 'mcq' as 'mcq' | 'essay', points: 1, text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0, explanation: '', explanationEn: '' });
   const [qError, setQError] = useState('');
 
   const load = useCallback(async () => {
@@ -125,17 +127,19 @@ export default function ExamsAdmin() {
 
   const openNewQ = () => {
     setQEditing(null);
-    setQForm({ text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0, explanation: '', explanationEn: '' });
+    setQForm({ type: 'mcq', points: 1, text: '', textEn: '', options: ['', '', '', ''], optionsEn: ['', '', '', ''], correctIndex: 0, explanation: '', explanationEn: '' });
     setQError('');
     setQOpen(true);
   };
   const editQ = (q: Question) => {
     setQEditing(q);
     setQForm({
+      type: q.type,
+      points: q.points,
       text: q.text,
       textEn: q.textEn || '',
-      options: q.options.map((o) => o.text),
-      optionsEn: q.options.map((o) => o.textEn || ''),
+      options: q.type === 'mcq' ? q.options.map((o) => o.text) : [],
+      optionsEn: q.type === 'mcq' ? q.options.map((o) => o.textEn || '') : [],
       correctIndex: q.correctIndex,
       explanation: q.explanation || '',
       explanationEn: q.explanationEn || '',
@@ -149,6 +153,28 @@ export default function ExamsAdmin() {
     setQError('');
     if (!qmExam) return;
     if (!qForm.text.trim()) return setQError(t('errors.required'));
+    if (!Number.isInteger(qForm.points) || qForm.points <= 0) return setQError(t('admin.maxPoints'));
+    if (qForm.type === 'essay') {
+      try {
+        const body = {
+          type: 'essay',
+          points: qForm.points,
+          text: qForm.text,
+          textEn: qForm.textEn,
+          options: [],
+          correctIndex: -1,
+          explanation: '',
+          explanationEn: '',
+        };
+        if (qEditing) await api(`/api/questions/${qEditing.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        else await api(`/api/exams/${qmExam.id}/questions`, { method: 'POST', body: JSON.stringify(body) });
+        setQOpen(false);
+        await loadQuestions(qmExam.id);
+      } catch (err) {
+        setQError((err as Error).message);
+      }
+      return;
+    }
     // نربط كل خيار عربي بنظيره الإنجليزي *قبل* حذف الخيارات الفارغة،
     // ثم نعيد حساب موضع الإجابة الصحيحة بعد الحذف. سابقًا كانت `optionsEn`
     // تُقتطع بمؤشرها الأصلي فتنزاح الترجمات، و`correctIndex` قد يشير لخيار محذوف.
@@ -162,6 +188,8 @@ export default function ExamsAdmin() {
     const mappedCorrect = kept.findIndex((p) => p.sourceIndex === qForm.correctIndex);
     try {
       const body = {
+        type: 'mcq',
+        points: qForm.points,
         text: qForm.text,
         textEn: qForm.textEn,
         options: kept.map(({ text, textEn }) => ({ text, textEn })),
@@ -300,6 +328,11 @@ export default function ExamsAdmin() {
 
       {/* مدير الأسئلة */}
       <Modal open={!!qmExam} onClose={() => setQmExam(null)} title={qmExam ? `${t('admin.questions')} — ${lang === 'ar' ? qmExam.title : qmExam.titleEn}` : ''}>
+        {questions.some((question) => question.type === 'essay') && (
+          <p className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-2 text-sm font-bold text-amber-300">
+            {t('exam.essaySection')}: {questions.filter((question) => question.type === 'essay').reduce((sum, question) => sum + question.points, 0)} {t('admin.maxPoints')}
+          </p>
+        )}
         <div className="mb-4 flex justify-end">
           <button onClick={openNewQ} className="btn-fire rounded-xl px-4 py-2 text-sm font-bold text-white">
             + {t('admin.addQuestion')}
@@ -315,19 +348,27 @@ export default function ExamsAdmin() {
                   <div className="min-w-0">
                     <p className="font-bold">
                       {i + 1}. {q.text}
-                      {q.correctIndex < 0 && (
+                      <span className="ms-2 inline-block rounded bg-ink-700 px-2 py-0.5 text-xs font-bold text-gray-300">
+                        {q.type === 'essay' ? t('admin.essayQuestion') : t('admin.mcqQuestion')}
+                      </span>
+                      {q.type === 'essay' && (
+                        <span className="ms-2 inline-block rounded bg-amber-500/15 px-2 py-0.5 text-xs font-bold text-amber-300">
+                          {q.points} {t('admin.maxPoints')}
+                        </span>
+                      )}
+                      {q.type === 'mcq' && q.correctIndex < 0 && (
                         <span className="ml-2 inline-block rounded bg-amber-500/15 px-2 py-0.5 text-xs font-bold text-amber-300">
                           {t('admin.questionNoAnswer')}
                         </span>
                       )}
                     </p>
-                    <div className="mt-1.5 space-y-0.5 text-sm text-gray-400">
+                    {q.type === 'mcq' && <div className="mt-1.5 space-y-0.5 text-sm text-gray-400">
                       {q.options.map((o, oi) => (
                         <div key={oi}>
                           {String.fromCharCode(65 + oi)}. {o.text} {oi === q.correctIndex && <span className="text-emerald-400">✓</span>}
                         </div>
                       ))}
-                    </div>
+                    </div>}
                   </div>
                   <div className="flex gap-2 sm:shrink-0">
                     <button onClick={() => editQ(q)} className="btn-ghost-fire flex-1 rounded-lg px-3 py-2.5 text-xs font-bold sm:flex-none sm:py-1">
@@ -349,6 +390,43 @@ export default function ExamsAdmin() {
         <form onSubmit={submitQ} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
+              <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.questionType')}</label>
+              <select
+                className="input-fire w-full rounded-xl px-4 py-2.5"
+                value={qForm.type}
+                onChange={(e) => setQForm((current) => {
+                  const type = e.target.value === 'essay' ? 'essay' : 'mcq';
+                  const hasOptions = current.options.length > 0;
+                  return {
+                    ...current,
+                    type,
+                    // عند التبديل إلى مقالي، نمسح الخيارات — عند التبديل إلى MCQ نعيد تعيينها إذا كانت فارغة
+                    options: type === 'mcq' ? (hasOptions ? current.options : ['', '', '', '']) : [],
+                    optionsEn: type === 'mcq' ? (hasOptions ? current.optionsEn : ['', '', '', '']) : [],
+                    correctIndex: type === 'mcq' && current.correctIndex < 0 ? 0 : current.correctIndex,
+                  };
+                })}
+              >
+                <option value="mcq">{t('admin.mcqQuestion')}</option>
+                <option value="essay">{t('admin.essayQuestion')}</option>
+              </select>
+            </div>
+            {qForm.type === 'essay' && (
+              <div>
+                <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.maxPoints')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="input-fire w-full rounded-xl px-4 py-2.5"
+                  value={qForm.points}
+                  onChange={(e) => setQForm({ ...qForm, points: Number(e.target.value) })}
+                />
+              </div>
+            )}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.questionText')} *</label>
               <textarea className="input-fire w-full rounded-xl px-4 py-2.5" rows={2} value={qForm.text} onChange={(e) => setQForm({ ...qForm, text: e.target.value })} />
             </div>
@@ -357,7 +435,7 @@ export default function ExamsAdmin() {
               <textarea className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" rows={2} value={qForm.textEn} onChange={(e) => setQForm({ ...qForm, textEn: e.target.value })} />
             </div>
           </div>
-          {qForm.options.map((_, i) => (
+          {qForm.type === 'mcq' && qForm.options.map((_, i) => (
             <div key={i} className="grid grid-cols-[30px_1fr] gap-2">
               <span className="flex items-center justify-center rounded-lg bg-ink-700 text-sm font-black text-gray-300">{String.fromCharCode(65 + i)}</span>
               <div className="grid gap-2 sm:grid-cols-2">
@@ -366,7 +444,7 @@ export default function ExamsAdmin() {
               </div>
             </div>
           ))}
-          <div className="grid gap-4 sm:grid-cols-2">
+          {qForm.type === 'mcq' && <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.questionExplanation')}</label>
               <textarea className="input-fire w-full rounded-xl px-4 py-2.5" rows={2} value={qForm.explanation} onChange={(e) => setQForm({ ...qForm, explanation: e.target.value })} placeholder={t('admin.explanationPlaceholder')} />
@@ -375,8 +453,8 @@ export default function ExamsAdmin() {
               <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.questionExplanationEn')}</label>
               <textarea className="input-fire w-full rounded-xl px-4 py-2.5" dir="ltr" rows={2} value={qForm.explanationEn} onChange={(e) => setQForm({ ...qForm, explanationEn: e.target.value })} placeholder={t('admin.explanationPlaceholderEn')} />
             </div>
-          </div>
-          <div>
+          </div>}
+          {qForm.type === 'mcq' && <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.correctOption')} *</label>
             <select className="input-fire w-full rounded-xl px-4 py-2.5" value={qForm.correctIndex} onChange={(e) => setQForm({ ...qForm, correctIndex: Number(e.target.value) })}>
               {qForm.options.map((_, i) => (
@@ -385,7 +463,7 @@ export default function ExamsAdmin() {
                 </option>
               ))}
             </select>
-          </div>
+          </div>}
           {qError && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{qError}</div>}
           <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
             {t('common.save')}

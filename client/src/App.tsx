@@ -37,6 +37,7 @@ const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
 const AdminCourses = lazy(() => import('./pages/admin/CoursesAdmin'));
 const AdminLessons = lazy(() => import('./pages/admin/LessonsAdmin'));
 const AdminExams = lazy(() => import('./pages/admin/ExamsAdmin'));
+const AdminEssayReviews = lazy(() => import('./pages/admin/EssayReviewsAdmin'));
 const AdminNotes = lazy(() => import('./pages/admin/NotesAdmin'));
 const AdminStudents = lazy(() => import('./pages/admin/StudentsAdmin'));
 const AdminTopStudents = lazy(() => import('./pages/admin/TopStudentsAdmin'));
@@ -134,6 +135,7 @@ function AnimatedRoutes() {
             <Route path="courses" element={<AdminCourses />} />
             <Route path="lessons" element={<AdminLessons />} />
             <Route path="exams" element={<AdminExams />} />
+            <Route path="essay-reviews" element={<AdminEssayReviews />} />
             <Route path="notes" element={<AdminNotes />} />
             <Route path="students" element={<AdminStudents />} />
             <Route path="top-students" element={<AdminTopStudents />} />
