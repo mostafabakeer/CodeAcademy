@@ -6,7 +6,7 @@ import { useAuthStore, useUser } from '../store/authStore';
 import { buildLessonDetail, type BootstrapData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal, getVideoProgressLocal, setVideoProgressLocal } from '../lib/localStore';
-import { ensureProgressPulled, flushProgress, queueProgress } from '../lib/progressSync';
+import { ensureProgressPulled, flushProgress, PROGRESS_PULLED_EVENT, queueProgress } from '../lib/progressSync';
 import { watchTotals } from '../lib/stats';
 import { formatDurationLabel, watchedOf } from '../lib/format';
 import { playSuccessChime } from '../lib/sound';
@@ -39,11 +39,18 @@ export default function LessonPlayer() {
       return;
     }
     let active = true;
+    // سقف 4 ثوانٍ: لو الشبكة بطيئة لا نُعلّق صفحة الدرس — نكمل بالمحلي،
+    // وحدث PROGRESS_PULLED_EVENT يحدّث الصفحة لو وصل الجلب بعد ذلك.
+    const timer = window.setTimeout(() => {
+      if (active) setPullReady(true);
+    }, 4000);
     void ensureProgressPulled(user.id).finally(() => {
+      window.clearTimeout(timer);
       if (active) setPullReady(true);
     });
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
   }, [user?.id]);
 
@@ -81,6 +88,7 @@ function LessonView({
   const [duration, setDuration] = useState(() => detail?.lesson.duration || initialLocal?.duration || 0);
   const [completed, setCompleted] = useState(() => !!detail?.lesson.completed);
   const [localSeconds, setLocalSeconds] = useState(() => initialLocal?.seconds ?? 0);
+  const [resumeAt, setResumeAt] = useState(() => initialLocal?.seconds ?? 0);
   const [celebration, setCelebration] = useState<{
     watchedSeconds: number;
     durationSeconds: number;
@@ -157,6 +165,28 @@ function LessonView({
     };
   }, [recomputeStats]);
 
+  // لو وصل تقدّم الخادم بعد فتح الصفحة (شبكة بطيئة): نعتمد الأكبر ما دام
+  // الطالب لم يبدأ المشاهدة. درس مكتمل من جهاز آخر يُعلَّم مكتملاً بلا احتفال.
+  useEffect(() => {
+    const onPulled = () => {
+      if (localSecondsRef.current > 0) return;
+      const fresh = getVideoProgressLocal(lessonId);
+      const seconds = fresh?.seconds ?? 0;
+      if (seconds <= 0) return;
+      localSecondsRef.current = seconds;
+      setLocalSeconds(seconds);
+      setResumeAt(seconds);
+      const d = duration || detail?.lesson.duration || fresh?.duration || 0;
+      if (d > 0 && seconds >= d * 0.9) {
+        celebratedRef.current = true;
+        setCompleted(true);
+      }
+      recomputeStats();
+    };
+    window.addEventListener(PROGRESS_PULLED_EVENT, onPulled);
+    return () => window.removeEventListener(PROGRESS_PULLED_EVENT, onPulled);
+  }, [detail, duration, lessonId, recomputeStats]);
+
   if (!detail) return <p className="text-gray-400">{t('errors.generic')}</p>;
 
   const { lesson, lessons } = detail;
@@ -199,7 +229,7 @@ function LessonView({
         key={lesson.id}
         videoType={lesson.videoType}
         videoUrl={lesson.videoUrl}
-        initialTime={initialLocal?.seconds ?? 0}
+        initialTime={resumeAt}
         onProgress={reportProgress}
         onDuration={(d) => {
           setDuration(d);
