@@ -1119,6 +1119,75 @@ export async function listProgressByUser(userId: number): Promise<Progress[]> {
   return (data ?? []).map(progressFromRow);
 }
 
+/** كل 5 دقائق مشاهدة فعلية = نقطة تقدّم (مطابق لـ client/src/lib/stats.ts). */
+export const SECONDS_PER_PROGRESS_POINT = 300;
+
+export function progressPointsFromSeconds(watchedSeconds: number): number {
+  return Math.floor(Math.max(0, watchedSeconds) / SECONDS_PER_PROGRESS_POINT);
+}
+
+export interface ProgressSyncItem {
+  lessonId: number;
+  secondsWatched: number;
+}
+
+/**
+ * حفظ دفعة تقدّم من العميل بأقل عدد استعلامات:
+ * - استعلام واحد لمدة الدروس (للتحقق والقص).
+ * - استعلام واحد للصفوف الموجودة (للاحتفاظ بالأكبر).
+ * - upsert واحد.
+ *
+ * نتجاهل أي درس غير موجود، ونقصّ الثواني على مدة الدرس، ونحتفظ بالأكبر فقط
+ * (إعادة الإرسال أو تغيير الجهاز لا تُنقص التقدّم أبداً).
+ */
+export async function mergeProgressBatch(userId: number, items: ProgressSyncItem[]): Promise<Progress[]> {
+  if (items.length === 0) return [];
+
+  const lessonIds = [...new Set(items.map((i) => i.lessonId))];
+  const [lessonRows, existingRows] = await Promise.all([
+    sb.from('lessons').select('id,duration').in('id', lessonIds),
+    sb.from('progress').select('*').eq('user_id', userId).in('lesson_id', lessonIds),
+  ]);
+
+  const durations = new Map<number, number>();
+  for (const row of lessonRows.data ?? []) {
+    durations.set(Number(row.id), Number(row.duration) || 0);
+  }
+
+  const existing = new Map<number, Progress>();
+  for (const p of (existingRows.data ?? []).map(progressFromRow)) existing.set(p.lessonId, p);
+
+  const now = Date.now();
+  const merged = new Map<number, Progress>();
+  for (const item of items) {
+    const duration = durations.get(item.lessonId);
+    if (duration === undefined) continue; // درس غير موجود — نتجاهله بدل تخزين صف يتيم
+
+    const cap = duration > 0 ? duration : 24 * 60 * 60;
+    const seconds = Math.min(Math.max(0, Math.floor(item.secondsWatched)), cap);
+    const prev = merged.get(item.lessonId) ?? existing.get(item.lessonId);
+    const secondsWatched = Math.max(prev?.secondsWatched ?? 0, seconds);
+
+    merged.set(item.lessonId, {
+      userId,
+      lessonId: item.lessonId,
+      secondsWatched,
+      completed: !!prev?.completed || (duration > 0 && secondsWatched >= duration * 0.9),
+      updatedAt: now,
+    });
+  }
+
+  const rows = [...merged.values()];
+  if (rows.length === 0) return [];
+
+  const { error } = await sb
+    .from('progress')
+    .upsert(rows.map(progressToRow), { onConflict: 'user_id,lesson_id' });
+  if (error) throw new Error(error.message);
+
+  return rows;
+}
+
 /* =================== نتائج الامتحانات =================== */
 
 export interface ExamResult {
@@ -1789,6 +1858,10 @@ export interface StudentStats {
   totalLessons: number;
   examsTaken: number;
   totalExams: number;
+  /** إجمالي ثواني المشاهدة الفعلية (مقصوصة على مدة كل درس). */
+  watchedSeconds: number;
+  /** نقاط التقدّم التراكمية: كل 5 دقائق مشاهدة = نقطة (بلا سقف). */
+  progressPoints: number;
   /** درجات الطالب المئوية في كل امتحاناته (سجل واحد لكل امتحان) — تُحسب من نفس تجميع النتائج في نسخة الـ batch. */
   examScores: { examId: number; at: number; score: number }[];
 }
@@ -1833,6 +1906,8 @@ export async function computeStudentStats(userId: number): Promise<StudentStats>
     totalLessons: lessonIds.length,
     examsTaken: scores.length,
     totalExams,
+    watchedSeconds: totalWatched,
+    progressPoints: progressPointsFromSeconds(totalWatched),
     examScores: results.map((r) => ({
       examId: r.examId,
       at: r.at ?? 0,
@@ -1936,6 +2011,8 @@ export async function computeStudentStatsBatch(userIds: number[]): Promise<Map<n
       totalLessons,
       examsTaken: scores.length,
       totalExams,
+      watchedSeconds: totalWatched,
+      progressPoints: progressPointsFromSeconds(totalWatched),
       examScores: (resultsByUser.get(id) ?? []).map((r) => ({
         examId: r.examId,
         at: r.at ?? 0,

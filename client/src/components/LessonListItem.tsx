@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
+import { formatDurationLabel, watchedOf } from '../lib/format';
 import ProgressBar from './ProgressBar';
 
 interface LessonListItemProps {
@@ -16,12 +17,6 @@ interface LessonListItemProps {
   };
   index: number;
   lang: 'ar' | 'en';
-}
-
-function fmt(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}`;
 }
 
 const LessonListItem = memo(function LessonListItem({ lesson, index, lang }: LessonListItemProps) {
@@ -42,12 +37,14 @@ const LessonListItem = memo(function LessonListItem({ lesson, index, lang }: Les
           {lesson.completed ? '✓' : index + 1}
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-bold">{lang === 'ar' ? lesson.title : lesson.titleEn}</h3>
+          <h3 className="truncate font-bold">{lang === 'ar' ? lesson.title : lesson.titleEn || lesson.title}</h3>
           <div className="mt-1 flex items-center gap-3 text-xs text-gray-500">
-            <span>🎬 {fmt(lesson.duration)} {t('lessonPage.durationSec')}</span>
+            <span>🎬 {formatDurationLabel(lesson.duration, t)}</span>
             {lesson.completed && <span className="text-emerald-400">{t('course.completed')}</span>}
             {!lesson.completed && lesson.watchedSeconds > 0 && (
-              <span>{lesson.progressPct}% {t('lessonPage.watched')}</span>
+              <span className="truncate">
+                {watchedOf(lesson.watchedSeconds, lesson.duration, t)} · {lesson.progressPct}%
+              </span>
             )}
           </div>
         </div>

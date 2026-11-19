@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getYouTubeThumbnail } from '../lib/youtube';
+import { unlockAudio } from '../lib/sound';
 import { useLang } from '../i18n';
 
 interface YouTubePlayerProps {
@@ -219,6 +220,8 @@ export default function YouTubePlayer({
   const embedUrl = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
 
   const activate = () => {
+    // نفتح سياق الصوت داخل تفاعل المستخدم حتى تُسمح نغمة الاحتفال لاحقاً.
+    unlockAudio();
     setLoading(true);
     setIsPlaying(true);
   };

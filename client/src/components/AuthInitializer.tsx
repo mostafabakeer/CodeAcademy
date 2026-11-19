@@ -3,6 +3,7 @@ import { useAuthStore } from '../store/authStore';
 import { onAuthBroadcast } from '../lib/sessionSync';
 import { SESSION_REVOKED_EVENT } from '../api/client';
 import { ensurePushSubscription } from '../lib/pushNotifications';
+import { installProgressSync } from '../lib/progressSync';
 
 interface AuthInitializerProps {
   children: React.ReactNode;
@@ -27,6 +28,9 @@ export function AuthInitializer({ children }: AuthInitializerProps) {
 
   useEffect(() => {
     let active = true;
+
+    // مستمعات مزامنة التقدّم (إخفاء/إغلاق الصفحة/عودة الشبكة) — مرة واحدة.
+    installProgressSync();
 
     // تشغيل boot مرة واحدة فقط (لا يعتمد على mutation للـ store)
     if (!bootedRef.current) {

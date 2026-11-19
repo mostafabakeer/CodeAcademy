@@ -157,7 +157,7 @@ function loadDraft(examId: string | undefined): Record<number, number> {
 }
 
 // مكوّن مشترك لعرض ملخص النتيجة + مراجعة الأخطاء (يُستخدم في شاشة النتيجة وعند إعادة الدخول)
-function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = false }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void; celebrate?: boolean }) {
+function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = false, pointsGained = 0 }: { review: ReviewItem[]; result: Result; canRetake: boolean; onRetake: () => void; onBack: () => void; celebrate?: boolean; pointsGained?: number }) {
   const { t, lang } = useLang();
   const [burst, setBurst] = useState(false);
 
@@ -190,6 +190,13 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = 
         <p className="mt-2 text-gray-400">
           {t('exam.results')}: {result.correct}/{result.total} ({result.score}%)
         </p>
+        {celebrate && result.passed && (
+          <p className="mt-2 text-sm font-bold text-emerald-300">
+            {pointsGained > 0
+              ? t('celebration.pointsAdded', { points: pointsGained })
+              : t('celebration.pointsRecorded')}
+          </p>
+        )}
         <div className="mx-auto mt-4 max-w-xs">
           <ProgressBar value={result.score} />
         </div>
@@ -295,6 +302,7 @@ export default function ExamTake() {
   const [data, setData] = useState<ExamData | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>(() => loadDraft(id));
   const [result, setResult] = useState<Result | null>(null);
+  const [pointsGained, setPointsGained] = useState(0);
   const [showSavedReview, setShowSavedReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -364,6 +372,7 @@ export default function ExamTake() {
         clearExamTimer(id);
       }
       if (data) saveReviewLocally(id, mergeReviewWithOptions(res.review, data.questions));
+      const before = useAuthStore.getState().stats?.points ?? 0;
       applyExamResult({
         examId: Number(id),
         best: res.best,
@@ -372,6 +381,8 @@ export default function ExamTake() {
         total: res.total,
         attempts: res.attempts ?? (data?.lastResult?.attempts ?? 0) + 1,
       });
+      const after = useAuthStore.getState().stats?.points ?? 0;
+      setPointsGained(Math.max(0, after - before));
     } catch (e) {
       if (mountedRef.current) setError((e as Error).message);
     } finally {
@@ -385,6 +396,7 @@ export default function ExamTake() {
       clearExamTimer(id);
     }
     setResult(null);
+    setPointsGained(0);
     setAnswers({});
     setError('');
     setSubmitting(false);
@@ -471,6 +483,7 @@ export default function ExamTake() {
         onRetake={retake}
         onBack={() => navigate('/exams')}
         celebrate
+        pointsGained={pointsGained}
       />
     );
   }

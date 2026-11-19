@@ -5,15 +5,10 @@ import { useLang } from '../i18n';
 import { useUser } from '../store/authStore';
 import { buildCourseDetail, type CourseDetailData } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
+import { watchedOf } from '../lib/format';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import ProgressBar from '../components/ProgressBar';
 import LessonListItem from '../components/LessonListItem';
-
-function fmt(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}`;
-}
 
 export default function CourseDetail() {
   const { id } = useParams();
@@ -32,6 +27,8 @@ export default function CourseDetail() {
 
   const { course, lessons } = detail;
   const done = lessons.filter((l) => l.completed).length;
+  const totalDuration = lessons.reduce((sum, l) => sum + (Number(l.duration) || 0), 0);
+  const totalWatched = lessons.reduce((sum, l) => sum + (Number(l.watchedSeconds) || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -48,6 +45,10 @@ export default function CourseDetail() {
               <span>{done}/{lessons.length} {t('course.lessons')}</span>
             </div>
             <ProgressBar value={lessons.length ? Math.round((done / lessons.length) * 100) : 0} showLabel={false} />
+            <div className="mt-2 text-xs text-gray-400">
+              {watchedOf(totalWatched, totalDuration, t)}
+              {totalDuration > 0 ? ` · ${Math.round((totalWatched / totalDuration) * 100)}%` : ''}
+            </div>
           </div>
           {detail.examsCount > 0 && (
             <Link to="/exams" className="btn-ghost-fire rounded-xl px-4 py-2 text-sm font-bold">

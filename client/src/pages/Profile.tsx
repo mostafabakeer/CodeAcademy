@@ -147,7 +147,7 @@ export default function Profile() {
   }, []);
 
   if (!user) return null;
-  const watchMins = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10) * 60) / 60 : 0;
+  const watchMins = stats ? Math.round(stats.watchedSeconds / 60) : 0;
   const gradeName = t(gradeLabelKey(user.grade));
 
   return (
@@ -186,9 +186,10 @@ export default function Profile() {
         </div>
       </motion.div>
 
-      <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
         <StatCard icon="📝" label={t('profile.examAvg')} value={`${stats?.examAvg ?? 0}%`} />
         <StatCard icon="🎬" label={t('profile.watchTime')} value={`${watchMins} ${t('course.min')}`} />
+        <StatCard icon="🏅" label={t('profile.progressPoints')} value={stats?.progressPoints ?? 0} />
         <StatCard icon="✅" label={t('profile.completedLessons')} value={`${stats?.completedLessons ?? 0}/${stats?.totalLessons ?? 0}`} />
         <StatCard icon="💻" label={t('profile.codeFiles')} value={codeFiles.length} />
       </section>
@@ -200,10 +201,13 @@ export default function Profile() {
             <div className="card-fire rounded-2xl p-5 sm:p-6">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="font-extrabold">{t('profile.levelProgress')}</h2>
-                <span className="text-sm text-gray-400">{t('level.pointsNeeded')}: {stats.points}/100</span>
+                <span className="text-sm text-gray-400">
+                  {t('profile.progressPoints')}: {stats.progressPoints} · {t('level.pointsNeeded')}: {stats.points}/100
+                </span>
               </div>
               <ProgressBar value={stats.points} />
               <p className="mt-3 text-sm text-gray-500">{t('profile.levelHint')}</p>
+              <p className="mt-1 text-xs text-gray-500">{t('profile.progressPointsHint')}</p>
             </div>
           )}
 

@@ -208,7 +208,7 @@ function markWaSent(phone: string): void {
 }
 
 export default function StudentsAdmin() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const [allUsers, setAllUsers] = useState<Student[]>(() => readCache() ?? []);
   const [loading, setLoading] = useState(allUsers.length === 0);
   const [error, setError] = useState('');
@@ -647,6 +647,7 @@ export default function StudentsAdmin() {
           <ModalContent
             detail={detail}
             t={t}
+            lang={lang}
             statusBadge={statusBadge}
             Info={Info}
           />

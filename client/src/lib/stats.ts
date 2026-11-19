@@ -15,17 +15,45 @@ export interface LevelTier {
 export interface StudentStats {
   examAvg: number;
   watchRatio: number;
+  /** نقاط الإنجاز 0-100 (امتحانات 60% + مشاهدة 40%) — تحدد المستوى والترتيب. */
   points: number;
   level: LevelTier;
   completedLessons: number;
   totalLessons: number;
   examsTaken: number;
   totalExams: number;
+  /** إجمالي ثواني المشاهدة الفعلية (مقصوصة على مدة كل درس). */
+  watchedSeconds: number;
+  /** نقاط التقدّم التراكمية: كل 5 دقائق مشاهدة = نقطة (بلا سقف). */
+  progressPoints: number;
 }
 
 export interface LessonLike {
   id: number;
   duration: number;
+}
+
+/**
+ * كل 5 دقائق مشاهدة فعلية = نقطة تقدّم.
+ * نفس الثابت مطبّق في `supabase/functions/_shared/db.ts` — أي تغيير هنا يجب أن يقابله تغيير هناك.
+ */
+export const SECONDS_PER_PROGRESS_POINT = 300;
+
+export function progressPointsFromSeconds(watchedSeconds: number): number {
+  return Math.floor(Math.max(0, watchedSeconds) / SECONDS_PER_PROGRESS_POINT);
+}
+
+/** إجمالي المشاهدة ونقاط التقدّم من خريطة التقدّم المحلي (مقصوصة على مدة كل درس). */
+export function watchTotals(
+  lessons: LessonLike[],
+  watch: Record<number, VideoProgressLocal>,
+): { watchedSeconds: number; progressPoints: number } {
+  let watchedSeconds = 0;
+  for (const lesson of lessons) {
+    const d = Number(lesson.duration) || 0;
+    watchedSeconds += Math.min(watch[lesson.id]?.seconds ?? 0, d);
+  }
+  return { watchedSeconds, progressPoints: progressPointsFromSeconds(watchedSeconds) };
 }
 
 export function tierByPoints(points: number, tiers: LevelTier[]): LevelTier {
@@ -75,6 +103,8 @@ export function computeStats(input: ComputeStatsInput): StudentStats {
     totalLessons: lessons.length,
     examsTaken: scores.length,
     totalExams: exams.length,
+    watchedSeconds: totalWatched,
+    progressPoints: progressPointsFromSeconds(totalWatched),
   };
 }
 
@@ -89,5 +119,7 @@ export function emptyStats(tiers: LevelTier[]): StudentStats {
     totalLessons: 0,
     examsTaken: 0,
     totalExams: 0,
+    watchedSeconds: 0,
+    progressPoints: 0,
   };
 }

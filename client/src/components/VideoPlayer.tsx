@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type Hls from 'hls.js';
 import { useLang } from '../i18n';
 import { extractYouTubeId, isYouTubeUrl } from '../lib/youtube';
+import { unlockAudio } from '../lib/sound';
 import YouTubePlayer from './YouTubePlayer';
 
 interface VideoPlayerProps {
@@ -144,6 +145,8 @@ export default function VideoPlayer({
     }
     playRequestedRef.current = true;
     setHasStarted(true);
+    // نفتح سياق الصوت داخل تفاعل المستخدم حتى تُسمح نغمة الاحتفال لاحقاً.
+    unlockAudio();
     beginLoading();
     // المصدر يُضبط مرة واحدة في الـ effect؛ نعيده فقط لو تغيّر فعلاً.
     if (v.getAttribute('src') !== effectiveSrc) { v.src = effectiveSrc; v.poster = poster || ''; v.load(); }

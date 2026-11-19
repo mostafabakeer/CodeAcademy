@@ -6,6 +6,7 @@ import { useUser, useProgress } from '../store/authStore';
 import { buildCourseList, type CourseWithProgress } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { getAllVideoProgressLocal } from '../lib/localStore';
+import { watchedOf } from '../lib/format';
 import { getStreak } from '../lib/streak';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import LevelBadge from '../components/LevelBadge';
@@ -33,7 +34,7 @@ export default function Home() {
   const resumeLesson = useMemo(() => {
     if (!data) return null;
     const progress = getAllVideoProgressLocal();
-    let pick: { id: number; title: string; titleEn: string; pct: number; at: number } | null = null;
+    let pick: { id: number; title: string; titleEn: string; pct: number; seconds: number; duration: number; at: number } | null = null;
     for (const lesson of data.lessons) {
       const p = progress[lesson.id];
       if (!p || p.seconds <= 5) continue;
@@ -41,7 +42,7 @@ export default function Home() {
       const pct = duration > 0 ? Math.min(100, Math.round((p.seconds / duration) * 100)) : 0;
       if (duration > 0 && pct >= 92) continue;
       if (!pick || p.updatedAt > pick.at) {
-        pick = { id: lesson.id, title: lesson.title, titleEn: lesson.titleEn, pct, at: p.updatedAt };
+        pick = { id: lesson.id, title: lesson.title, titleEn: lesson.titleEn, pct, seconds: p.seconds, duration, at: p.updatedAt };
       }
     }
     return pick;
@@ -54,7 +55,7 @@ export default function Home() {
     return t('home.streakDays', { count: n });
   };
 
-  const watchHours = stats ? Math.round(stats.watchRatio * (stats.totalLessons * 10)) / 10 : 0;
+  const watchHours = stats ? Math.round((stats.watchedSeconds / 3600) * 10) / 10 : 0;
   const nextCourse = courses.filter((c) => c.progress > 0 && c.progress < 100).sort((a, b) => b.progress - a.progress)[0];
   const levelLabel = lang === 'ar' ? stats?.level.name : stats?.level.nameEn;
 
@@ -92,6 +93,11 @@ export default function Home() {
                 <div>
                   <div className="text-xs text-gray-400">{t('home.points')}</div>
                   <div className="text-xl font-black text-fire-gradient">{stats?.points ?? 0}</div>
+                </div>
+                <div className="h-8 w-px bg-fire-500/25" />
+                <div>
+                  <div className="text-xs text-gray-400">{t('home.progressPoints')}</div>
+                  <div className="text-xl font-black text-fire-gradient">{stats?.progressPoints ?? 0}</div>
                 </div>
                 <div className="h-8 w-px bg-fire-500/25" />
                 <div title={t('home.streakHint')}>
@@ -161,7 +167,9 @@ export default function Home() {
             <span className="min-w-0 truncate font-semibold text-gray-200">
               {lang === 'ar' ? resumeLesson.title : resumeLesson.titleEn || resumeLesson.title}
             </span>
-            <span className="shrink-0">{t('home.resumeProgress', { pct: resumeLesson.pct })}</span>
+            <span className="shrink-0">
+              {watchedOf(resumeLesson.seconds, resumeLesson.duration, t)} · {resumeLesson.pct}%
+            </span>
           </div>
           <ProgressBar value={resumeLesson.pct} className="mt-2" />
         </motion.section>

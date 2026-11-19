@@ -10,6 +10,7 @@ import {
   clearSessionSnapshot,
 } from '../lib/localStore';
 import { claimLocalData } from '../lib/localOwner';
+import { pullProgress } from '../lib/progressSync';
 import { ensurePushSubscription } from '../lib/pushNotifications';
 import { clearStoredToken, readStoredToken } from '../lib/sessionToken';
 import { broadcastAuth } from '../lib/sessionSync';
@@ -96,6 +97,8 @@ interface AuthState {
   logoutAll: () => Promise<void>;
   /** يُحدِّث نتيجة امتحان محلياً (بعد التسليم) ويعيد حساب الإحصائيات فوراً. */
   applyExamResult: (r: ExamResultSummary) => void;
+  /** يعيد حساب الإحصائيات من التقدّم المحلي الحالي (بعد مزامنة/مشاهدة). */
+  recomputeStats: () => void;
 }
 
 export const useAuthStore = create<AuthState>()((set, get) => ({
@@ -126,6 +129,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     saveSessionSnapshot(me.user, levels, me.examResults);
     set({ offline: false, user: me.user, levels, examResults: me.examResults, loading: false });
     void (async () => {
+      // نجلب تقدّم المشاهدة من الخادم قبل حساب الإحصائيات (مرة واحدة لكل جلسة،
+      // وبشرط ألا يكون التخزين المحلي أحدث). فشل الشبكة لا يعطّل شيئاً.
+      await pullProgress(me.user.id);
       try {
         await loadBootstrap(me.user.id);
       } catch {
@@ -271,6 +277,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     clearBootstrapCache(get().user?.id ?? null);
     set({ user: null, stats: null, examResults: [], levels: [], offline: false, loading: false });
     broadcastAuth('logout');
+  },
+
+  recomputeStats: () => {
+    const { user, levels, examResults } = get();
+    if (!user) return;
+    set({ stats: statsFor(user, levels, examResults) });
   },
 
   applyExamResult: (r) => {

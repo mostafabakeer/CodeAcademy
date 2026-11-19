@@ -440,6 +440,36 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
   throw lastFailure ?? new ApiError('تعذّر الاتصال بالخادم، حاول مجدداً', 0);
 }
 
+/**
+ * إرسال «أفضل جهد» لا يُلغى عند إغلاق الصفحة (pagehide) — يستخدم keepalive.
+ *
+ * لا نستخدم `api()` هنا: مهلة 15 ثانية و`AbortSignal` قد يُلغي الطلب أثناء
+ * إغلاق التبويب. نجرب الوجهة الأولى فقط حتى لا نكرر الكتابة على الخادم؛
+ * والطابور المحلي في progressSync يعوّض أي فشل في المرة التالية.
+ */
+export function apiKeepalive(path: string, body: unknown): void {
+  const route = path.startsWith('/api') ? path.slice(4) || '/' : path || '/';
+  const headers = authHeaders({ 'x-path': route, 'Content-Type': 'application/json' });
+  let payload: string;
+  try {
+    payload = JSON.stringify(body);
+  } catch {
+    return;
+  }
+  const base = apiTargets()[0];
+  try {
+    void fetch(`${base}${route}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: payload,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* أفضل جهد — لا نرمي داخل pagehide */
+  }
+}
+
 // Helper to get current user ID from the stored session token
 function getCurrentUserId(): number {
   // التوكن محفوظ ككائن JSON `{ v, token, exp }` وليس JWT خاماً — الكود

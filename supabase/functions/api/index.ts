@@ -62,6 +62,7 @@ import { GRADES, isContentGrade, gradeAllowed, contentVisible } from '../_shared
   updateTopStudent,
   deleteTopStudent,
   listProgressByUser,
+  mergeProgressBatch,
   getResult,
   listResultsByUser,
   listResultSummariesByUser,
@@ -586,6 +587,51 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
   // 3. محتوى جديد ⇒ خزّنه للطلاب المشاركين في نفس المرحلة.
   if (cacheKey) bootstrapCache.set(cacheKey, { at: Date.now(), etag, json });
   return bootstrapJson(json, etag, c);
+});
+
+/* =================== تقدّم المشاهدة =================== */
+/**
+ * تقدّم المشاهدة مسار منفصل عن bootstrap لأن البيانات تتغيّر كل دقيقة.
+ * الطالب يقرأ مرة عند الإقلاع ويرسل دفعة كل 60 ثانية — لا طلبات لكل ثانية.
+ * `requireAuth` فقط (لا requireSubscriber): انتهاء الاشتراك لا يجب أن يُفقد الطالب تقدّمه.
+ */
+app.get('/progress', requireAuth, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`progress-get:${me.id}`, 12, 60_000)) {
+    return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
+  }
+  const progress = await listProgressByUser(me.id);
+  return c.json({ progress });
+});
+
+app.post('/progress/sync', requireAuth, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`progress-sync:${me.id}`, 6, 60_000)) {
+    return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
+  }
+
+  const body = (await c.req.json().catch(() => null)) as { items?: unknown } | null;
+  const raw = Array.isArray(body?.items) ? body.items : [];
+  if (raw.length === 0) return c.json({ error: 'لا توجد بيانات للمزامنة' }, 400);
+  if (raw.length > 50) return c.json({ error: 'الحد الأقصى 50 عنصراً في الدفعة' }, 400);
+
+  const items = raw
+    .map((item) => {
+      const rec = (item ?? {}) as Record<string, unknown>;
+      return { lessonId: Number(rec.lessonId), secondsWatched: Number(rec.secondsWatched) };
+    })
+    .filter(
+      (item) =>
+        Number.isInteger(item.lessonId) &&
+        item.lessonId > 0 &&
+        Number.isFinite(item.secondsWatched) &&
+        item.secondsWatched > 0,
+    );
+
+  if (items.length === 0) return c.json({ error: 'بيانات غير صالحة' }, 400);
+
+  const saved = await mergeProgressBatch(me.id, items);
+  return c.json({ saved: saved.length, progress: saved });
 });
 
 /* =================== الكورسات والدروس =================== */
@@ -1406,7 +1452,22 @@ app.get('/admin/users/:id', requireAuth, requireAdmin, async (c) => {
   if (!user) return c.json({ error: 'المستخدم غير موجود' }, 404);
   const stats = await computeStudentStats(id);
   const safe = safeUser(user);
-  const progress = await listProgressByUser(id);
+  const progressRows = await listProgressByUser(id);
+  // اسم الدرس ومدته ليعرضها الأدمن كوقت مفهوم بدل "#lessonId — 340s".
+  const progressLessonIds = [...new Set(progressRows.map((p) => p.lessonId))];
+  const progressLessons = progressLessonIds.length
+    ? ((await sb.from('lessons').select('id,title,title_en,duration').in('id', progressLessonIds)).data ?? [])
+    : [];
+  const progressLessonMap = new Map(progressLessons.map((l: any) => [Number(l.id), l]));
+  const progress = progressRows.map((p) => {
+    const lesson = progressLessonMap.get(p.lessonId);
+    return {
+      ...p,
+      lessonTitle: String(lesson?.title ?? ''),
+      lessonTitleEn: String(lesson?.title_en ?? ''),
+      lessonDuration: Number(lesson?.duration) || 0,
+    };
+  });
   const results = await listResultsByUser(id);
   const codeFiles = (await listCodeFilesByUser(id)).map((f) => ({
     id: f.id,
