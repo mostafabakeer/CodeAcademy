@@ -6,7 +6,7 @@ import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import ProgressBar from '../components/ProgressBar';
 import Confetti from '../components/Confetti';
-import { useExamDeadline, formatExamClock, clearExamTimer } from '../lib/useExamTimer';
+import { useExamDeadline, formatExamClock, clearExamTimer, useExamAutoSubmit } from '../lib/useExamTimer';
 import { touchStreak } from '../lib/streak';
 import { playSuccessChime, unlockAudio } from '../lib/sound';
 import { EXAM_MAX_POINTS, examPointsForScore, examPointsFromResults } from '../lib/stats';
@@ -365,34 +365,22 @@ function ReviewPanel({ review, result, canRetake, onRetake, onBack, celebrate = 
 const ExamClock = memo(function ExamClock({
   deadline,
   enabled,
-  onExpire,
 }: {
   deadline: number;
   enabled: boolean;
-  onExpire: () => void;
 }) {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, deadline - Date.now()));
-  const expireRef = useRef(false);
-  const onExpireRef = useRef(onExpire);
-  const enabledRef = useRef(enabled);
-  onExpireRef.current = onExpire;
-  enabledRef.current = enabled;
 
   useEffect(() => {
-    expireRef.current = false;
     const tick = () => {
       const left = Math.max(0, deadline - Date.now());
       // تحديث الحالة عند تغيّر الثانية المعروضة فقط (لا عند كل نبضة).
       setRemainingMs((prev) => (Math.ceil(prev / 1000) === Math.ceil(left / 1000) ? prev : left));
-      if (left <= 0 && !expireRef.current && enabledRef.current) {
-        expireRef.current = true;
-        onExpireRef.current();
-      }
     };
     tick();
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
-  }, [deadline]);
+  }, [deadline, enabled]);
 
   return (
     <span className={`font-bold tabular-nums ${remainingMs <= 60_000 ? 'animate-pulse text-fire-400' : 'text-gray-200'}`}>
@@ -456,7 +444,32 @@ export default function ExamTake() {
         }
       })
       .catch((e) => {
-        if (active) setError((e as Error).message);
+        if (!active) return;
+        const err = e as Error & { status?: number; code?: string };
+        // تعامل خاص مع انتهاء الجلسة / تسجيل الدخول من جهاز آخر
+        if (err.status === 401) {
+          if (err.code === 'session_revoked') {
+            setError('تم تسجيل الدخول من جهاز آخر. سيتم توجيهك لتسجيل الدخول.');
+            if (id) {
+              clearDraft(id);
+              clearExamTimer(id);
+            }
+            setTimeout(() => {
+              if (mountedRef.current) navigate('/login', { replace: true });
+            }, 2000);
+          } else {
+            setError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.');
+            if (id) {
+              clearDraft(id);
+              clearExamTimer(id);
+            }
+            setTimeout(() => {
+              if (mountedRef.current) navigate('/login', { replace: true });
+            }, 2000);
+          }
+        } else {
+          setError(err.message);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -535,7 +548,33 @@ export default function ExamTake() {
         total: examPointsAfter,
       });
     } catch (e) {
-      if (mountedRef.current) setError((e as Error).message);
+      if (!mountedRef.current) return;
+      const err = e as Error & { status?: number; code?: string };
+      // تعامل خاص مع انتهاء الجلسة / تسجيل الدخول من جهاز آخر
+      if (err.status === 401) {
+        if (err.code === 'session_revoked') {
+          setError('تم تسجيل الدخول من جهاز آخر. سيتم توجيهك لتسجيل الدخول.');
+          // تنظيف المسودة والمؤقت قبل التوجيه
+          if (id) {
+            clearDraft(id);
+            clearExamTimer(id);
+          }
+          setTimeout(() => {
+            if (mountedRef.current) navigate('/login', { replace: true });
+          }, 2000);
+        } else {
+          setError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً.');
+          if (id) {
+            clearDraft(id);
+            clearExamTimer(id);
+          }
+          setTimeout(() => {
+            if (mountedRef.current) navigate('/login', { replace: true });
+          }, 2000);
+        }
+      } else {
+        setError(err.message);
+      }
     } finally {
       if (mountedRef.current) setSubmitting(false);
     }
@@ -590,6 +629,13 @@ export default function ExamTake() {
     durationMinutes: data?.exam.timeLimit ?? null,
     active: attemptInProgress && !!data && !result && !pendingReview && !showSavedReview,
   });
+
+  // التسليم التلقائي الموثوق: يعمل حتى في التبويبات الخلفية
+  useExamAutoSubmit(
+    deadline,
+    submit,
+    attemptInProgress && !!data && !result && !pendingReview && !showSavedReview && !submitting && !loading
+  );
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
   if (!data) {
@@ -795,7 +841,7 @@ export default function ExamTake() {
           <h1 className="text-xl font-black">📋 {lang === 'ar' ? exam.title : exam.titleEn}</h1>
           <div className="flex items-center gap-3 text-sm text-gray-400">
             {deadline !== null ? (
-              <ExamClock deadline={deadline} enabled={!!data && !submitting && !loading} onExpire={() => void submit()} />
+              <ExamClock deadline={deadline} enabled={!!data && !submitting && !loading} />
             ) : exam.timeLimit ? <span>⏱️ {exam.timeLimit} {t('exam.timeLimit')}</span> : null}
             <span>
               {answeredCount}/{questions.length} {t('exam.questionsCount')}
