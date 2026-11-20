@@ -106,10 +106,16 @@ export function clearAuthFail(): void {
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
+  detail?: string;
+  response?: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, options?: { code?: string; detail?: string; response?: unknown }) {
     super(message);
     this.status = status;
+    this.code = options?.code;
+    this.detail = options?.detail;
+    this.response = options?.response;
   }
 }
 
@@ -337,12 +343,13 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       res.body?.cancel().catch(() => {});
 
       if (isHtmlFallback) {
-        lastFailure = new ApiError('الخادم لا يوفّر واجهة الـ API على هذا النطاق', 0);
+        lastFailure = new ApiError('الخادم لا يوفّر واجهة الـ API على هذا النطاق', 0, { code: 'no_api' });
         continue;
       }
       throw new ApiError(
         `المسار غير موجود على الخادم (404): ${method} ${route} — تأكد من نشر آخر تحديثات الـ API`,
         404,
+        { code: 'not_found' }
       );
     }
 
@@ -353,7 +360,7 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       // نقرأ الجسم قبل إلغائه: الخادم يميّز «جلسة أُبطلت من جهاز آخر»
       // (code: session_revoked) عن انتهاء الصلاحية العادي.
       const unauthorized = (await res.json().catch(() => null)) as
-        | { code?: string; error?: string }
+        | { code?: string; error?: string; detail?: string }
         | null;
 
       if (unauthorized?.code === 'session_revoked') {
@@ -361,19 +368,31 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
         // ويلغي فكرة «الأدمن على جهاز واحد».
         clearStoredToken();
         markSessionRevoked();
-        throw new ApiError(unauthorized.error || 'تم تسجيل الدخول من جهاز آخر', 401);
+        throw new ApiError(
+          unauthorized.error || 'تم تسجيل الدخول من جهاز آخر',
+          401,
+          { code: 'session_revoked', detail: unauthorized.detail, response: unauthorized }
+        );
       }
 
       if (!shouldRetryOn401) {
         // مسار مصادقة ذاتي. 401 من /auth/me ⇒ النسخة المحلية لم تعد صالحة.
         if (route === '/auth/me') clearStoredToken();
-        throw new ApiError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+        throw new ApiError(
+          'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً',
+          401,
+          { code: 'unauthorized', detail: unauthorized?.detail, response: unauthorized }
+        );
       }
 
       if (!(await refreshSession(base))) {
         // الخادم رفض الكوكي والتوكن الاحتياطي معاً ⇒ لا فائدة من إرسالهما مجدداً.
         clearStoredToken();
-        throw new ApiError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+        throw new ApiError(
+          'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً',
+          401,
+          { code: 'refresh_failed' }
+        );
       }
 
       // أعد المحاولة مرة واحدة فقط بعد التجديد.
@@ -388,13 +407,18 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       } catch (err) {
         if (signal?.aborted) throw err;
         if (err instanceof DOMException && err.name === 'AbortError') throw err;
-        throw new ApiError('فشل تحديث الجلسة، يرجى تسجيل الدخول مجدداً', 401);
+        throw new ApiError('فشل تحديث الجلسة، يرجى تسجيل الدخول مجدداً', 401, { code: 'retry_failed' });
       }
       if (retryRes.status === 204) return undefined as T;
       const retryParsed = await retryRes.json().catch(() => ({}));
       if (!retryRes.ok) {
         if (retryRes.status === 401) clearStoredToken();
-        throw new ApiError(apiErrorMessage(retryParsed, retryRes.status), retryRes.status);
+        const body = retryParsed as { error?: string; detail?: string; code?: string } | null;
+        throw new ApiError(
+          apiErrorMessage(retryParsed, retryRes.status),
+          retryRes.status,
+          { code: body?.code, detail: body?.detail, response: body }
+        );
       }
       if (TOKEN_ISSUING_PATHS.has(route)) {
         writeStoredToken((retryParsed as { token?: unknown } | null)?.token);
@@ -409,12 +433,17 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
     } catch {
       // 200 بغير JSON = صفحة SPA بدلاً من استجابة API ⇒ الوجهة غير صالحة
       res.body?.cancel().catch(() => {});
-      lastFailure = new ApiError('الخادم أعاد استجابة غير صالحة', 502);
+      lastFailure = new ApiError('الخادم أعاد استجابة غير صالحة', 502, { code: 'invalid_response' });
       continue;
     }
 
     if (!res.ok) {
-      throw new ApiError(apiErrorMessage(parsed, res.status), res.status);
+      const body = parsed as { error?: string; detail?: string; code?: string } | null;
+      throw new ApiError(
+        apiErrorMessage(parsed, res.status),
+        res.status,
+        { code: body?.code, detail: body?.detail, response: body }
+      );
     }
     // احفظ أي توكن جديد يصدره الخادم (login/register/me) كنسخة احتياطية.
     if (TOKEN_ISSUING_PATHS.has(route)) {

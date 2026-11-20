@@ -1116,6 +1116,17 @@ export async function publishEssayResult(
     p_graded_at: gradedAt,
   });
   if (error) throw new Error(`publishEssayResult: ${error.message}`);
+
+  // Ensure exam_results has the earned_points and maximum_points
+  // (the RPC may not update them due to missing column in the insert statement)
+  const { error: updateError } = await sb.from('exam_results')
+    .update({
+      earned_points: earnedPoints,
+      maximum_points: maximumPoints,
+    })
+    .eq('user_id', result.userId)
+    .eq('exam_id', result.examId);
+  if (updateError) throw new Error(`publishEssayResult update: ${updateError.message}`);
 }
 
 export async function listEssaySubmissionsForAdmin(
@@ -1436,6 +1447,8 @@ export interface ExamResult {
   answers: Record<string, number>;
   history: { at: number; score: number; correct: number; total: number; submissionId?: number }[];
   at: number;
+  earnedPoints?: number;
+  maximumPoints?: number;
 }
 
 function resultFromRow(r: any): ExamResult {
@@ -1450,6 +1463,8 @@ function resultFromRow(r: any): ExamResult {
     answers: r.answers ?? {},
     history: Array.isArray(r.history) ? r.history : [],
     at: r.at ?? 0,
+    earnedPoints: r.earned_points ?? 0,
+    maximumPoints: r.maximum_points ?? 0,
   };
 }
 
@@ -1465,6 +1480,8 @@ function resultToRow(r: Partial<ExamResult>): Record<string, any> {
   if (r.answers !== undefined) row.answers = r.answers;
   if (r.history !== undefined) row.history = r.history;
   if (r.at !== undefined) row.at = r.at;
+  if (r.earnedPoints !== undefined) row.earned_points = r.earnedPoints;
+  if (r.maximumPoints !== undefined) row.maximum_points = r.maximumPoints;
   return row;
 }
 
@@ -2345,6 +2362,8 @@ export async function submitExam(
     attempts: (prev.attempts ?? 0) + 1,
     history: [...(prev.history ?? []).slice(-19), { at: now(), score, correct, total }],
     at: now(),
+    earnedPoints,
+    maximumPoints,
   };
   await upsertResult(result);
 

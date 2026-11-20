@@ -549,7 +549,8 @@ export default function ExamTake() {
       });
     } catch (e) {
       if (!mountedRef.current) return;
-      const err = e as Error & { status?: number; code?: string };
+      const err = e as Error & { status?: number; code?: string; detail?: string; response?: unknown };
+      console.error('[ExamTake] Submit error:', { message: err.message, status: err.status, code: err.code, detail: err.detail, response: err.response });
       // تعامل خاص مع انتهاء الجلسة / تسجيل الدخول من جهاز آخر
       if (err.status === 401) {
         if (err.code === 'session_revoked') {
@@ -572,8 +573,15 @@ export default function ExamTake() {
             if (mountedRef.current) navigate('/login', { replace: true });
           }, 2000);
         }
+      } else if (err.status === 500) {
+        // خطأ خادم داخلي - تسجيل تفاصيل أكثر
+        const detail = err.detail ? ` - ${err.detail}` : '';
+        const responseStr = err.response ? ` | Response: ${JSON.stringify(err.response)}` : '';
+        setError(`خطأ في الخادم (500): ${err.message}${detail}${responseStr}`);
       } else {
-        setError(err.message);
+        // تضمين تفاصيل أكثر للخطأ
+        const detail = err.detail ? ` - ${err.detail}` : '';
+        setError(`${err.message}${detail}`);
       }
     } finally {
       if (mountedRef.current) setSubmitting(false);

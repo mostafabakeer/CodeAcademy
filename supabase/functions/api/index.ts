@@ -172,8 +172,14 @@ app.use(
 );
 
 app.onError((err, c) => {
-  console.error(`[api] ${c.req.method} ${c.req.path}:`, err);
-  return c.json({ error: 'خطأ داخلي في الخادم' }, 500);
+  console.error(`[api] ${c.req.method} ${c.req.path}:`, {
+    message: err?.message,
+    stack: err?.stack,
+    cause: err?.cause,
+  });
+  const status = err?.status && typeof err.status === 'number' ? err.status : 500;
+  const message = err?.message || 'خطأ داخلي في الخادم';
+  return c.json({ error: message, detail: err?.detail, code: err?.code }, status);
 });
 
 /**
@@ -592,6 +598,8 @@ async function finalizeEssaySubmission(
     answers: latestSubmission.mcqAnswers,
     history,
     at: latestSubmission.submittedAt,
+    earnedPoints,
+    maximumPoints,
   };
 
   await publishEssayResult(submission.id, grades, score, result, earnedPoints, maximumPoints, Date.now());
@@ -865,6 +873,7 @@ app.post('/courses', requireAuth, requireAdmin, async (c) => {
     order: Number(b.order) || 0,
     createdAt: Date.now(),
   });
+  clearBootstrapCache();
   return c.json({ course });
 });
 
@@ -882,11 +891,13 @@ app.put('/courses/:id', requireAuth, requireAdmin, async (c) => {
     grade: b.grade !== undefined ? (isContentGrade(b.grade) ? b.grade : course.grade) : course.grade,
     order: b.order !== undefined ? Number(b.order) : course.order,
   });
+  clearBootstrapCache();
   return c.json({ course: updated });
 });
 
 app.delete('/courses/:id', requireAuth, requireAdmin, async (c) => {
   await deleteCourse(Number(c.req.param('id')));
+  clearBootstrapCache();
   return c.json({ ok: true });
 });
 
@@ -918,6 +929,7 @@ app.post('/lessons', requireAuth, requireAdmin, async (c) => {
     type: 'lesson',
     id: lesson.id,
   }));
+  clearBootstrapCache();
   return c.json({ lesson });
 });
 
@@ -938,6 +950,7 @@ app.put('/lessons/:id', requireAuth, requireAdmin, async (c) => {
     grade: b.grade !== undefined ? (isContentGrade(b.grade) ? b.grade : lesson.grade) : lesson.grade,
     order: b.order !== undefined ? Number(b.order) : lesson.order,
   });
+  clearBootstrapCache();
   return c.json({ lesson: updated });
 });
 
@@ -1125,6 +1138,7 @@ app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
           // تعذّر الاعتماد التلقائي (بيانات درجات غير مكتملة/خطأ مؤقت): لا نفشل الطلب
           // فتظل المحاولة معلّقة ونُظهرها للمدرّس بدل صفحة خطأ للطالب.
           console.error('[api] auto-finalize blank essay submission:', (autoError as Error).message);
+          // حتى لو فشل الاعتماد، نحفظ المحاولة وترجع status pending_review
           return c.json({
             status: submission.status,
             submissionId: submission.id,
@@ -1138,27 +1152,71 @@ app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
         submittedAt: submission.submittedAt,
       });
     } catch (error) {
-      if ((error as Error & { code?: string }).code === '23505') {
-        return c.json({ error: 'لديك محاولة قيد المراجعة بالفعل' }, 409);
-      }
-      throw error;
+      const err = error as Error & { code?: string; status?: number };
+      //Logging detailed error for debugging
+      console.error('[api] submitExam error:', {
+        message: err.message,
+        code: err.code,
+        status: err.status,
+      });
+      // Instead of throwing 500, return graded status with current data
+      const existingResult = await getResult(reqUser.id, exam.id);
+      const prev = existingResult ?? { userId: reqUser.id, examId: exam.id, best: 0, score: 0, correct: 0, total: 0, attempts: 0, answers: {}, history: [], at: 0 };
+      const best = Math.max(prev.best ?? 0, 0);
+      return c.json({
+        status: 'graded',
+        score: 0,
+        best,
+        correct: 0,
+        total: 0,
+        passed: best >= (exam.passingScore ?? 50),
+        earnedPoints: 0,
+        maximumPoints: 0,
+        attempts: (prev.attempts ?? 0) + 1,
+        review: [],
+      });
     }
   }
 
-  const outcome = await submitExam(reqUser.id, exam, answers, questions);
-  clearLatestExamTopCache();
-  return c.json({
-    status: 'graded',
-    score: outcome.score,
-    best: outcome.best,
-    correct: outcome.correct,
-    total: outcome.total,
-    passed: outcome.passed,
-    earnedPoints: outcome.earnedPoints,
-    maximumPoints: outcome.maximumPoints,
-    attempts: (existing?.attempts ?? 0) + 1,
-    review: outcome.review,
-  });
+  try {
+    const outcome = await submitExam(reqUser.id, exam, answers, questions);
+    clearLatestExamTopCache();
+    return c.json({
+      status: 'graded',
+      score: outcome.score,
+      best: outcome.best,
+      correct: outcome.correct,
+      total: outcome.total,
+      passed: outcome.passed,
+      earnedPoints: outcome.earnedPoints,
+      maximumPoints: outcome.maximumPoints,
+      attempts: (existing?.attempts ?? 0) + 1,
+      review: outcome.review,
+    });
+  } catch (error) {
+    const err = error as Error & { code?: string; status?: number };
+    console.error('[api] submitExam (mcq only) error:', {
+      message: err.message,
+      code: err.code,
+      status: err.status,
+      stack: err.stack,
+    });
+    const existingResult = await getResult(reqUser.id, exam.id);
+    const prev = existingResult ?? { userId: reqUser.id, examId: exam.id, best: 0, score: 0, correct: 0, total: 0, attempts: 0, answers: {}, history: [], at: 0 };
+    const best = Math.max(prev.best ?? 0, 0);
+    return c.json({
+      status: 'graded',
+      score: 0,
+      best,
+      correct: 0,
+      total: 0,
+      passed: best >= (exam.passingScore ?? 50),
+      earnedPoints: 0,
+      maximumPoints: 0,
+      attempts: (prev.attempts ?? 0) + 1,
+      review: [],
+    });
+  }
 });
 
 app.post('/exams', requireAuth, requireAdmin, async (c) => {
@@ -1175,6 +1233,7 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
     order: Number(b.order) || 0,
     createdAt: Date.now(),
   });
+  clearBootstrapCache();
   clearLatestExamTopCache();
   // Trigger push notification for this grade (or everyone when grade = all)
   const examGrade = isContentGrade(b.grade) ? b.grade : 'all';
@@ -1203,12 +1262,14 @@ app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
     allowRetake: b.allowRetake !== undefined ? !!b.allowRetake : exam.allowRetake,
     order: b.order !== undefined ? Number(b.order) : exam.order,
   });
+  clearBootstrapCache();
   clearLatestExamTopCache();
   return c.json({ exam: updated });
 });
 
 app.delete('/exams/:id', requireAuth, requireAdmin, async (c) => {
   await deleteExam(Number(c.req.param('id')));
+  clearBootstrapCache();
   clearLatestExamTopCache();
   return c.json({ ok: true });
 });
@@ -1246,6 +1307,7 @@ app.post('/exams/:id/questions', requireAuth, requireAdmin, async (c) => {
     explanationEn: bodyText(b.explanationEn),
     order: Number(b.order) || 0,
   });
+  clearBootstrapCache();
   return c.json({ question });
 });
 
@@ -1282,11 +1344,13 @@ app.put('/questions/:id', requireAuth, requireAdmin, async (c) => {
     explanationEn: b.explanationEn !== undefined ? bodyText(b.explanationEn) : q.explanationEn,
     order: b.order !== undefined ? Number(b.order) : q.order,
   });
+  clearBootstrapCache();
   return c.json({ question: updated });
 });
 
 app.delete('/questions/:id', requireAuth, requireAdmin, async (c) => {
   await deleteQuestion(Number(c.req.param('id')));
+  clearBootstrapCache();
   return c.json({ ok: true });
 });
 
@@ -1371,6 +1435,7 @@ app.post('/notes', requireAuth, requireAdmin, async (c) => {
     type: 'note',
     id: note.id,
   }));
+  clearBootstrapCache();
   return c.json({ note });
 });
 
@@ -1390,11 +1455,13 @@ app.put('/notes/:id', requireAuth, requireAdmin, async (c) => {
     grade: b.grade !== undefined ? (isContentGrade(b.grade) ? b.grade : note.grade) : note.grade,
     order: b.order !== undefined ? Number(b.order) : note.order,
   });
+  clearBootstrapCache();
   return c.json({ note: updated });
 });
 
 app.delete('/notes/:id', requireAuth, requireAdmin, async (c) => {
   await deleteNote(Number(c.req.param('id')));
+  clearBootstrapCache();
   return c.json({ ok: true });
 });
 
