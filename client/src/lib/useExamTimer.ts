@@ -128,7 +128,8 @@ export function useExamDeadline({
 export function useExamAutoSubmit(
   deadline: number | null,
   onExpire: () => void,
-  enabled: boolean
+  enabled: boolean,
+  isSubmitting?: boolean // حماية من الاستدعاء أثناء الإرسال اليدوي
 ): void {
   const onExpireRef = useRef(onExpire);
   const enabledRef = useRef(enabled);
@@ -150,8 +151,8 @@ export function useExamAutoSubmit(
       return;
     }
 
-    // لا نكرر الإرسال إذا تم بالفعل
-    if (submittedRef.current) return;
+    // لا نكرر الإرسال إذا تم بالفعل أو إذا كان هناك إرسال يدوي جارٍ
+    if (submittedRef.current || isSubmitting) return;
 
     const remaining = deadline - Date.now();
 
@@ -164,7 +165,7 @@ export function useExamAutoSubmit(
 
     // نضبط setTimeout واحد للوقت المحدد
     timeoutRef.current = setTimeout(() => {
-      if (!submittedRef.current && enabledRef.current) {
+      if (!submittedRef.current && enabledRef.current && !isSubmitting) {
         submittedRef.current = true;
         onExpireRef.current();
       }
@@ -178,11 +179,11 @@ export function useExamAutoSubmit(
         timeoutRef.current = null;
       }
     };
-  }, [deadline, enabled]);
+  }, [deadline, enabled, isSubmitting]);
 
   // Page Visibility API: نتحقق عند عودة التبويب للواجهة
   useEffect(() => {
-    if (!enabled || !deadline || submittedRef.current) return;
+    if (!enabled || !deadline || submittedRef.current || isSubmitting) return;
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -197,5 +198,5 @@ export function useExamAutoSubmit(
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [deadline, enabled]);
+  }, [deadline, enabled, isSubmitting]);
 }

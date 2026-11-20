@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
@@ -410,6 +410,7 @@ export default function ExamTake() {
   const [submitting, setSubmitting] = useState(false);
   const [attemptInProgress, setAttemptInProgress] = useState(false);
   const [error, setError] = useState('');
+  const [autoSubmitted, setAutoSubmitted] = useState(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -504,12 +505,30 @@ export default function ExamTake() {
     if (!id || submitting) return;
     // نفتح سياق الصوت داخل تفاعل المستخدم حتى تُسمح نغمة النجاح بعد وصول الرد.
     unlockAudio();
+
+    // Validation: تأكد من إرسال essayAnswers دائماً (حتى لو فارغة)
+    const essayQuestions = data?.questions.filter((q) => q.type === 'essay') ?? [];
+    const sanitizedEssayAnswers: Record<number, string> = {};
+    let hasEmptyEssay = false;
+
+    for (const q of essayQuestions) {
+      const answer = essayAnswers[q.id] ?? '';
+      sanitizedEssayAnswers[q.id] = answer.trim();
+      if (!answer.trim()) hasEmptyEssay = true;
+    }
+
+    // تنبيه إذا كانت هناك إجابات فارغة (لكن نسمح بالإرسال)
+    if (hasEmptyEssay && essayQuestions.length > 0) {
+      // لا نمنع الإرسال - الـ backend يتعامل مع الإجابات الفارغة (auto-finalize بصفر)
+      console.log('[ExamTake] Some essay answers are empty, will be auto-graded as 0');
+    }
+
     setSubmitting(true);
     setError('');
     try {
       const res = await api<SubmissionResponse>(`/api/exams/${id}/submit`, {
         method: 'POST',
-        body: JSON.stringify({ answers, essayAnswers }),
+        body: JSON.stringify({ answers, essayAnswers: sanitizedEssayAnswers }),
       });
       if (!mountedRef.current) return;
       setAttemptInProgress(false);
@@ -598,6 +617,7 @@ export default function ExamTake() {
     setExamPoints(null);
     setAnswers({});
     setEssayAnswers({});
+    setAutoSubmitted(false);
     setPendingReview(false);
     setError('');
     setSubmitting(false);
@@ -639,10 +659,16 @@ export default function ExamTake() {
   });
 
   // التسليم التلقائي الموثوق: يعمل حتى في التبويبات الخلفية
+  const handleAutoSubmit = useCallback(() => {
+    setAutoSubmitted(true);
+    submit();
+  }, [submit]);
+
   useExamAutoSubmit(
     deadline,
-    submit,
-    attemptInProgress && !!data && !result && !pendingReview && !showSavedReview && !submitting && !loading
+    handleAutoSubmit,
+    attemptInProgress && !!data && !result && !pendingReview && !showSavedReview && !submitting && !loading,
+    submitting // حماية: لا يستدعي auto-submit أثناء الإرسال اليدوي
   );
 
   if (loading) return <p className="text-gray-400">{t('common.loading')}</p>;
@@ -844,6 +870,13 @@ export default function ExamTake() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {/* تنبيه التسليم التلقائي */}
+      {autoSubmitted && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300 animate-pulse" role="alert">
+          ⏰ انتهى الوقت، تم تسليم الامتحان تلقائياً
+        </div>
+      )}
+
       <div className="card-fire rounded-2xl p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-black">📋 {lang === 'ar' ? exam.title : exam.titleEn}</h1>

@@ -16,6 +16,8 @@ interface SubmissionListItem {
   phone: string;
   examTitle: string;
   examTitleEn: string;
+  mcqEarnedPoints?: number;
+  mcqMaxPoints?: number;
 }
 
 interface SubmissionListResponse {
@@ -73,14 +75,16 @@ export default function EssayReviewsAdmin() {
   const [scores, setScores] = useState<Record<number, string>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
   const [loadingList, setLoadingList] = useState(true);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   const loadSubmissions = useCallback(async () => {
+    setLoadingList(true);
+    setError('');
     try {
       const data = await fetchSubmissions(status, page);
-      setError('');
       setSubmissions(data.submissions);
       setTotal(data.total);
       if (data.page !== page) setPage(data.page);
@@ -91,25 +95,14 @@ export default function EssayReviewsAdmin() {
     }
   }, [page, status]);
 
+  // Initial load on mount
   useEffect(() => {
-    let active = true;
-    fetchSubmissions(status, page)
-      .then((data) => {
-        if (!active) return;
-        setError('');
-        setSubmissions(data.submissions);
-        setTotal(data.total);
-        if (data.page !== page) setPage(data.page);
-      })
-      .catch((e) => {
-        if (active) setError((e as Error).message);
-      })
-      .finally(() => {
-        if (active) setLoadingList(false);
-      });
-    return () => {
-      active = false;
-    };
+    loadSubmissions();
+  }, [loadSubmissions]);
+
+  // Reload when page or status changes
+  useEffect(() => {
+    loadSubmissions();
   }, [page, status]);
 
   const activeSelectedId = submissions.some((item) => item.id === selectedId)
@@ -117,8 +110,12 @@ export default function EssayReviewsAdmin() {
     : submissions[0]?.id ?? null;
 
   useEffect(() => {
-    if (activeSelectedId === null) return;
+    if (activeSelectedId === null) {
+      setDetail(null);
+      return;
+    }
     let active = true;
+    setLoadingDetail(true);
     api<SubmissionDetail>(`/api/admin/essay-submissions/${activeSelectedId}`)
       .then((data) => {
         if (!active) return;
@@ -134,6 +131,9 @@ export default function EssayReviewsAdmin() {
       })
       .catch((e) => {
         if (active) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (active) setLoadingDetail(false);
       });
     return () => {
       active = false;
@@ -230,6 +230,11 @@ export default function EssayReviewsAdmin() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(16rem,0.8fr)_minmax(0,1.7fr)]">
         <section className="card-fire rounded-2xl p-3">
+          {(loadingList || loadingDetail) && (
+            <div className="absolute inset-0 flex items-center justify-center bg-ink-900/50 rounded-2xl z-10">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-fire-500 border-t-transparent" />
+            </div>
+          )}
           {loadingList ? (
             <p className="p-4 text-sm text-gray-400">{t('common.loading')}</p>
           ) : submissions.length === 0 ? (

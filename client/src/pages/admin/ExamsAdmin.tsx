@@ -23,6 +23,7 @@ interface Exam {
   grade?: string;
   allowRetake?: boolean;
   questionsCount?: number;
+  is_hidden?: boolean;
 }
 interface Question {
   id: number;
@@ -36,7 +37,7 @@ interface Question {
   explanationEn?: string;
 }
 
-const emptyExam = { courseId: 0, title: '', titleEn: '', passingScore: 50, timeLimit: 0, order: 0, grade: 'all', allowRetake: false };
+const emptyExam = { courseId: 0, title: '', titleEn: '', passingScore: 50, timeLimit: 0, order: 0, grade: 'all', allowRetake: false, is_hidden: false };
 
 export default function ExamsAdmin() {
   const { t, lang } = useLang();
@@ -90,7 +91,7 @@ export default function ExamsAdmin() {
   };
   const editExam = (e: Exam) => {
     setEditing(e);
-    setForm({ courseId: e.courseId ?? 0, title: e.title, titleEn: e.titleEn || '', passingScore: e.passingScore, timeLimit: e.timeLimit ?? 0, order: e.order ?? 0, grade: e.grade || 'all', allowRetake: !!e.allowRetake });
+    setForm({ courseId: e.courseId ?? 0, title: e.title, titleEn: e.titleEn || '', passingScore: e.passingScore, timeLimit: e.timeLimit ?? 0, order: e.order ?? 0, grade: e.grade || 'all', allowRetake: !!e.allowRetake, is_hidden: !!e.is_hidden });
     setError('');
     setOpen(true);
   };
@@ -114,6 +115,15 @@ export default function ExamsAdmin() {
     if (!window.confirm(t('common.delete') + '?')) return;
     try {
       await api(`/api/exams/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const toggleHidden = async (id: number, isHidden: boolean) => {
+    try {
+      await api(`/api/exams/${id}/toggle-hidden`, { method: 'POST', body: JSON.stringify({ is_hidden: isHidden }) });
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -253,14 +263,18 @@ export default function ExamsAdmin() {
                       {courseName(e.courseId)} · {e.questionsCount ?? 0} {t('admin.questions')} · {t('admin.passingScore')} {e.passingScore}%
                     </span>
                     {!!e.allowRetake && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">↻ {t('admin.allowRetake')}</span>}
+                  {e.is_hidden && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">🔒 مخفي</span>}
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2 sm:flex sm:shrink-0">
+                <div className="grid grid-cols-4 gap-2 sm:flex sm:shrink-0">
                   <button onClick={() => openQuestions(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
                     {t('admin.questions')}
                   </button>
                   <button onClick={() => editExam(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
                     {t('common.edit')}
+                  </button>
+                  <button onClick={() => toggleHidden(e.id, !e.is_hidden)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
+                    {e.is_hidden ? '👁️ إظهار' : '🔒 إخفاء'}
                   </button>
                   <button onClick={() => removeExam(e.id)} className="rounded-lg border border-fire-500/40 px-2 py-2.5 text-xs font-bold text-fire-300 sm:px-3 sm:py-1 touch-target">
                     {t('common.delete')}
@@ -320,6 +334,17 @@ export default function ExamsAdmin() {
             <span className="text-sm font-semibold text-gray-300">{t('admin.allowRetake')}</span>
           </label>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
+          <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-ink-600 bg-ink-900 px-4 py-3">
+            <input
+              type="checkbox"
+              checked={form.is_hidden}
+              onChange={(e) => setForm({ ...form, is_hidden: e.target.checked })}
+              className="h-4 w-4 accent-fire-500"
+            />
+            <span className="text-sm font-semibold text-gray-300">
+              {form.is_hidden ? '🔒 إخفاء الامتحان عن الطلاب' : '👁️ إظهار الامتحان للطلاب'}
+            </span>
+          </label>
           <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
             {t('common.save')}
           </button>

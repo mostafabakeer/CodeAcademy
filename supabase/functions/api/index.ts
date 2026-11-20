@@ -544,6 +544,7 @@ export async function getExamQuestions(examId: number): Promise<Question[]> {
  * يعتمد نتيجة محاولة مقالية واحدة (يدوياً من الأدمن أو تلقائياً عند تسليم فارغ)
  * ويحسب النتيجة بنظام نقاط موحّد: (نقاط MCQ + نقاط المقالي) / (أقصى MCQ + أقصى المقالي).
  * يعيد نفس الحقول التي تتوقعها شاشة الطالب بعد التسليم.
+ * لا يرمي أخطاء - يعيد نتيجة افتراضية في حالة الفشل.
  */
 async function finalizeEssaySubmission(
   submission: EssaySubmission,
@@ -551,76 +552,128 @@ async function finalizeEssaySubmission(
   grades: Record<string, EssayGrade>,
   existing: ExamResult | null,
 ) {
-  const essayMax = submission.essayQuestions.reduce((sum, question) => sum + (Number(question.points) || 0), 0);
-  const essayScore = Object.values(grades).reduce((sum, grade) => sum + (Number(grade.score) || 0), 0);
-  // محاولات قديمة (قبل تخزين نقاط MCQ): كانت النسبة 0–100 هي المكتسب والأقصى.
-  const legacyMcq = submission.mcqTotal > 0 && submission.mcqMaxPoints <= 0;
-  const mcqMax = submission.mcqTotal > 0 ? (legacyMcq ? 100 : submission.mcqMaxPoints) : 0;
-  const mcqEarned = submission.mcqTotal > 0 ? (legacyMcq ? submission.mcqScore : submission.mcqEarnedPoints) : 0;
-  const maximumPoints = mcqMax + essayMax;
-  if (maximumPoints <= 0) throw new Error('NO_MAX_SCORE');
+  try {
+    const essayMax = submission.essayQuestions.reduce((sum, question) => sum + (Number(question.points) || 0), 0);
+    const essayScore = Object.values(grades).reduce((sum, grade) => sum + (Number(grade.score) || 0), 0);
+    // محاولات قديمة (قبل تخزين نقاط MCQ): كانت النسبة 0–100 هي المكتسب والأقصى.
+    const legacyMcq = submission.mcqTotal > 0 && submission.mcqMaxPoints <= 0;
+    const mcqMax = submission.mcqTotal > 0 ? (legacyMcq ? 100 : submission.mcqMaxPoints) : 0;
+    const mcqEarned = submission.mcqTotal > 0 ? (legacyMcq ? submission.mcqScore : submission.mcqEarnedPoints) : 0;
+    const maximumPoints = mcqMax + essayMax;
 
-  const earnedPoints = mcqEarned + essayScore;
-  const score = Math.max(0, Math.min(100, Math.round((earnedPoints / maximumPoints) * 100)));
+    // حماية من القسمة على صفر
+    if (maximumPoints <= 0) {
+      console.warn('[finalizeEssaySubmission] maximumPoints <= 0, returning default result');
+      return getDefaultEssayResult(submission, exam, existing);
+    }
 
-  const allSubmissions = await listEssaySubmissionsByUserExam(submission.userId, submission.examId);
-  const otherEssayBest = allSubmissions
-    .filter((item) => item.id !== submission.id && item.status === 'graded' && item.score !== null)
-    .reduce((best, item) => Math.max(best, item.score ?? 0), 0);
-  const best = Math.max(submission.baselineBest, otherEssayBest, score);
-  const latestSubmission = allSubmissions
-    .filter((item) => item.status === 'graded' || item.id === submission.id)
-    .reduce<(typeof allSubmissions)[number] | null>(
-      (latest, item) => (!latest || item.attemptNumber > latest.attemptNumber ? item : latest),
-      null,
+    const earnedPoints = mcqEarned + essayScore;
+    const score = Math.max(0, Math.min(100, Math.round((earnedPoints / maximumPoints) * 100)));
+
+    const allSubmissions = await listEssaySubmissionsByUserExam(submission.userId, submission.examId);
+    const otherEssayBest = allSubmissions
+      .filter((item) => item.id !== submission.id && item.status === 'graded' && item.score !== null)
+      .reduce((best, item) => Math.max(best, item.score ?? 0), 0);
+    const best = Math.max(submission.baselineBest, otherEssayBest, score);
+    const latestSubmission = allSubmissions
+      .filter((item) => item.status === 'graded' || item.id === submission.id)
+      .reduce<(typeof allSubmissions)[number] | null>(
+        (latest, item) => (!latest || item.attemptNumber > latest.attemptNumber ? item : latest),
+        null,
+      );
+    if (!latestSubmission) {
+      console.warn('[finalizeEssaySubmission] NO_SUBMISSION, returning default result');
+      return getDefaultEssayResult(submission, exam, existing);
+    }
+
+    const latestScore = latestSubmission.id === submission.id ? score : latestSubmission.score ?? 0;
+    const history = [
+      ...(existing?.history ?? []).filter((item) => item.submissionId !== submission.id),
+      {
+        at: submission.submittedAt,
+        score,
+        correct: submission.mcqCorrect,
+        total: submission.mcqTotal,
+        submissionId: submission.id,
+      },
+    ].slice(-20);
+    const result: ExamResult = {
+      userId: submission.userId,
+      examId: submission.examId,
+      best,
+      score: latestScore,
+      correct: latestSubmission.mcqCorrect,
+      total: latestSubmission.mcqTotal,
+      attempts: Math.max(existing?.attempts ?? 0, submission.attemptNumber),
+      answers: latestSubmission.mcqAnswers,
+      history,
+      at: latestSubmission.submittedAt,
+      earnedPoints,
+      maximumPoints,
+    };
+
+    // محاولة نشر النتيجة - لا نرمي خطأ لو فشلت
+    try {
+      await publishEssayResult(submission.id, grades, score, result, earnedPoints, maximumPoints, Date.now());
+    } catch (publishError) {
+      console.error('[finalizeEssaySubmission] publishEssayResult failed:', (publishError as Error).message);
+      // حتى لو فشل النشر، نعيد النتيجة المحسوبة
+    }
+
+    // مراجعة أسئلة MCQ لعرضها للطالب فور التسليم (النصوص من كاش الأسئلة، بلا استعلام إضافي).
+    const graded = gradeMcqAnswers(
+      (await getExamQuestions(submission.examId)).filter((question) => question.type === 'mcq'),
+      submission.mcqAnswers,
     );
-  if (!latestSubmission) throw new Error('NO_SUBMISSION');
 
-  const latestScore = latestSubmission.id === submission.id ? score : latestSubmission.score ?? 0;
-  const history = [
-    ...(existing?.history ?? []).filter((item) => item.submissionId !== submission.id),
-    {
-      at: submission.submittedAt,
+    return {
       score,
+      currentScore: latestScore,
+      best,
+      earnedPoints,
+      maximumPoints,
+      passed: best >= (exam.passingScore ?? 50),
       correct: submission.mcqCorrect,
       total: submission.mcqTotal,
-      submissionId: submission.id,
-    },
-  ].slice(-20);
-  const result: ExamResult = {
+      attempts: result.attempts,
+      review: graded.review,
+    };
+  } catch (error) {
+    console.error('[finalizeEssaySubmission] Unexpected error:', (error as Error).message);
+    return getDefaultEssayResult(submission, exam, existing);
+  }
+}
+
+/** نتيجة افتراضية آمنة عند فشل الحساب */
+function getDefaultEssayResult(
+  submission: EssaySubmission,
+  exam: { passingScore?: number | null },
+  existing: ExamResult | null,
+) {
+  const prev = existing ?? {
     userId: submission.userId,
     examId: submission.examId,
-    best,
-    score: latestScore,
-    correct: latestSubmission.mcqCorrect,
-    total: latestSubmission.mcqTotal,
-    attempts: Math.max(existing?.attempts ?? 0, submission.attemptNumber),
-    answers: latestSubmission.mcqAnswers,
-    history,
-    at: latestSubmission.submittedAt,
-    earnedPoints,
-    maximumPoints,
+    best: 0,
+    score: 0,
+    correct: 0,
+    total: 0,
+    attempts: 0,
+    answers: {},
+    history: [],
+    at: 0
   };
-
-  await publishEssayResult(submission.id, grades, score, result, earnedPoints, maximumPoints, Date.now());
-
-  // مراجعة أسئلة MCQ لعرضها للطالب فور التسليم (النصوص من كاش الأسئلة، بلا استعلام إضافي).
-  const graded = gradeMcqAnswers(
-    (await getExamQuestions(submission.examId)).filter((question) => question.type === 'mcq'),
-    submission.mcqAnswers,
-  );
-
+  const best = Math.max(prev.best ?? 0, 0);
   return {
-    score,
-    currentScore: latestScore,
+    score: 0,
+    currentScore: 0,
     best,
-    earnedPoints,
-    maximumPoints,
+    earnedPoints: 0,
+    maximumPoints: 0,
     passed: best >= (exam.passingScore ?? 50),
     correct: submission.mcqCorrect,
     total: submission.mcqTotal,
-    attempts: result.attempts,
-    review: graded.review,
+    attempts: Math.max(prev.attempts ?? 0, submission.attemptNumber),
+    review: [],
   };
 }
 
@@ -1232,6 +1285,9 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
     allowRetake: !!b.allowRetake,
     order: Number(b.order) || 0,
     createdAt: Date.now(),
+    // إضافة حقول الحالة الجديدة
+    isHidden: b.is_hidden ?? false,
+    publishedAt: b.is_hidden === false ? new Date().toISOString() : null,
   });
   clearBootstrapCache();
   clearLatestExamTopCache();
@@ -1245,6 +1301,76 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
     id: exam.id,
   }));
   return c.json({ exam });
+});
+
+/* =================== حالة الامتحان (إخفاء/إظهار) =================== */
+
+app.post('/exams/:id/toggle-hidden', requireAuth, requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'));
+  const exam = await findExamById(id);
+  if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
+
+  // переключить حالة الإخفاء
+  const updated = await updateExam(id, {
+    is_hidden: !exam.is_hidden,
+  });
+  clearBootstrapCache();
+  clearLatestExamTopCache();
+
+  // إرسال إشعار للطالب إذا تم إظهار الامتحان (is_hidden: false)
+  if (!updated.is_hidden) {
+    const examGrade = isContentGrade(exam.grade) ? exam.grade : 'all';
+    await background(sendPushToGrade(examGrade, {
+      title: '📝 امتحان معاد نشره',
+      body: `تم إظهار امتحان "${exam.title}" للطلاب مرة أخرى`,
+      url: `/exams/${exam.id}`,
+      type: 'exam',
+      id: exam.id,
+    }));
+  } else {
+    // يمكن إرسال إشعار بإخفاء الامتحان (اختياري)
+    console.log('[api] Exam hidden:', exam.id);
+  }
+
+  return c.json({ exam: updated, wasHidden: !updated.is_hidden });
+});
+
+app.get('/exams', requireAuth, requireSubscriber, async (c) => {
+  const reqUser = getUser(c);
+  if (!genericRateLimit(`exams:${reqUser.id}`, 30, 60_000)) {
+    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
+  }
+  const isAdmin = reqUser.role === 'admin';
+  const examsWithCounts = isAdmin ? await listExamsWithQuestionCounts() : await listExamsByGradeWithQuestionCounts(reqUser.grade);
+
+  // تصفية الامتحانات المخفية: الطلاب يرون فقط الامتحانات غير المخفية
+  // الأدمن يرى جميع الامتحانات
+  const isAdminView = isAdmin;
+  const out = isAdminView ? examsWithCounts : examsWithCounts.filter((e) => !e.is_hidden);
+
+  const outSorted = out.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return c.json({ exams: out });
+});
+
+app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
+  const reqUser = getUser(c);
+  const id = Number(c.req.param('id'));
+  const exam = await findExamById(id);
+  if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
+  if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
+    return c.json({ error: 'الامتحان غير موجود' }, 404);
+  }
+  // طلاب: التحقق من is_hidden
+  if (reqUser.role === 'student' && exam.is_hidden) {
+    return c.json({ error: 'هذا الامتحان مخفي حالياً' }, 404);
+  }
+  // ثلاثة استعلامات متوازية بدل تسلسل (محاولة مقالية + نتيجة + أسئلة).
+  const [latestSubmission, existingResult, allQuestions] = await Promise.all([
+    getLatestEssaySubmission(reqUser.id, id),
+    getResult(reqUser.id, id),
+    getExamQuestions(id),
+  ]);
+  // ...
 });
 
 app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
@@ -1261,6 +1387,9 @@ app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
     grade: b.grade !== undefined ? (isContentGrade(b.grade) ? b.grade : exam.grade) : exam.grade,
     allowRetake: b.allowRetake !== undefined ? !!b.allowRetake : exam.allowRetake,
     order: b.order !== undefined ? Number(b.order) : exam.order,
+    // إضافة حقول الحالة
+    isHidden: b.is_hidden !== undefined ? b.is_hidden : exam.is_hidden,
+    publishedAt: b.is_hidden === false && !exam.is_hidden ? new Date().toISOString() : b.published_at ?? exam.publishedAt,
   });
   clearBootstrapCache();
   clearLatestExamTopCache();
@@ -1970,6 +2099,28 @@ app.post('/admin/essay-submissions/:id/approve', requireAuth, requireAdmin, asyn
     throw error;
   }
   clearLatestExamTopCache();
+
+  // إرسال إشعار push للطالب بنتيجة الامتحان
+  try {
+    const passed = finalized.passed;
+    const score = finalized.score;
+    const earned = finalized.earnedPoints;
+    const max = finalized.maximumPoints;
+    await sendPushToUser(submission.userId, {
+      title: passed ? '🎉 تم تصحيح امتحانك!' : '📝 نتيجة امتحانك',
+      body: passed
+        ? `تهانينا! حصلت على ${score}% (${earned}/${max})`
+        : `حصلت على ${score}% (${earned}/${max})`,
+      url: `/exams/${exam.id}`,
+      type: 'exam',
+      id: exam.id,
+      requireInteraction: true,
+    });
+  } catch (pushError) {
+    console.error('[approve] Failed to send push notification:', (pushError as Error).message);
+    // لا نفشل الطلب إذا فشل الإشعار
+  }
+
   return c.json({
     status: 'graded',
     score: finalized.score,

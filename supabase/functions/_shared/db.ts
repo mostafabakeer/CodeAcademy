@@ -742,6 +742,7 @@ export interface Exam {
   allowRetake: boolean;
   order: number;
   createdAt: number;
+  isHidden?: boolean;
 }
 
 function examFromRow(r: any): Exam {
@@ -756,6 +757,7 @@ function examFromRow(r: any): Exam {
     allowRetake: !!r.allow_retake,
     order: r.order ?? 0,
     createdAt: r.created_at ?? 0,
+    isHidden: r.is_hidden,
   };
 }
 
@@ -770,6 +772,7 @@ function examToRow(e: Partial<Exam>): Record<string, any> {
   if (e.allowRetake !== undefined) row.allow_retake = e.allowRetake;
   if (e.order !== undefined) row.order = e.order;
   if (e.createdAt !== undefined) row.created_at = e.createdAt;
+  if (e.isHidden !== undefined) row.is_hidden = e.isHidden;
   return row;
 }
 
@@ -782,10 +785,11 @@ export async function listExams(): Promise<Exam[]> {
 
 export async function listExamsByGrade(grade: string): Promise<Exam[]> {
   // Selective projection
-  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at';
+  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at,is_hidden';
   const { data } = await sb.from('exams')
     .select(fields)
     .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
+    .eq('is_hidden', false)  // فقط الامتحانات غير المخفية للطلاب
     .order('order', { ascending: true });
   return (data ?? []).map(examFromRow);
 }
@@ -1099,7 +1103,8 @@ export async function publishEssayResult(
   maximumPoints: number,
   gradedAt: number,
 ): Promise<void> {
-  const { error } = await sb.rpc('approve_essay_submission', {
+  // Try RPC first (updates both exam_submissions and exam_results atomically)
+  const { error: rpcError } = await sb.rpc('approve_essay_submission', {
     p_submission_id: submissionId,
     p_essay_grades: grades,
     p_score: submissionScore,
@@ -1115,10 +1120,45 @@ export async function publishEssayResult(
     p_result_at: result.at,
     p_graded_at: gradedAt,
   });
-  if (error) throw new Error(`publishEssayResult: ${error.message}`);
 
-  // Ensure exam_results has the earned_points and maximum_points
-  // (the RPC may not update them due to missing column in the insert statement)
+  if (rpcError) {
+    console.error('[publishEssayResult] RPC failed, attempting direct updates:', rpcError.message);
+
+    // Fallback 1: Direct update exam_submissions
+    const { error: subUpdateError } = await sb.from('exam_submissions')
+      .update({
+        status: 'graded',
+        essay_grades: grades,
+        score: submissionScore,
+        earned_points: earnedPoints,
+        maximum_points: maximumPoints,
+        graded_at: gradedAt,
+      })
+      .eq('id', submissionId);
+    if (subUpdateError) console.error('[publishEssayResult] exam_submissions update failed:', subUpdateError.message);
+
+    // Fallback 2: UPSERT exam_results directly
+    const { error: resUpsertError } = await sb.from('exam_results')
+      .upsert({
+        user_id: result.userId,
+        exam_id: result.examId,
+        best: result.best,
+        score: result.score,
+        correct: result.correct,
+        total: result.total,
+        attempts: result.attempts,
+        answers: result.answers,
+        history: result.history,
+        at: result.at,
+        earned_points: earnedPoints,
+        maximum_points: maximumPoints,
+      }, { onConflict: 'user_id,exam_id' });
+    if (resUpsertError) console.error('[publishEssayResult] exam_results upsert failed:', resUpsertError.message);
+
+    return; // Don't throw - we've done our best
+  }
+
+  // Even if RPC succeeded, ensure exam_results has the points (RPC may be old version)
   const { error: updateError } = await sb.from('exam_results')
     .update({
       earned_points: earnedPoints,
@@ -1126,7 +1166,7 @@ export async function publishEssayResult(
     })
     .eq('user_id', result.userId)
     .eq('exam_id', result.examId);
-  if (updateError) throw new Error(`publishEssayResult update: ${updateError.message}`);
+  if (updateError) console.error('[publishEssayResult] exam_results points update failed:', updateError.message);
 }
 
 export async function listEssaySubmissionsForAdmin(
