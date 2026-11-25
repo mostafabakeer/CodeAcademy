@@ -681,7 +681,7 @@ function getDefaultEssayResult(
 function bootstrapJson(json: string, etag: string, c: Context) {
   return c.body(json, 200, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'private, no-store',
+    'Cache-Control': 'private, max-age=30, stale-while-revalidate=60',
     ETag: etag,
     'X-Content-Version': etag,
   });
@@ -697,8 +697,8 @@ function bootstrapJson(json: string, etag: string, c: Context) {
  */
 app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  // زيادة rate limit من 5/min إلى 12/min لدعم Polling كل 20 ثانية
-  if (!genericRateLimit(`bootstrap:${reqUser.id}`, 12, 60_000)) {
+  // زيادة rate limit إلى 30/دقيقة لدعم الحمل الأعلى + كاش قصير المدى
+  if (!genericRateLimit(`bootstrap:${reqUser.id}`, 30, 60_000)) {
     return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
   }
   const isAdmin = reqUser.role === 'admin';
@@ -918,18 +918,21 @@ app.get('/events', requireAuth, requireSubscriber, async (c) => {
  */
 app.get('/progress', requireAuth, async (c) => {
   const me = getUser(c);
-  if (!genericRateLimit(`progress-get:${me.id}`, 12, 60_000)) {
+  // زيادة الحد إلى 60/دقيقة لدعم الحمل الأعلى + كاش قصير
+  if (!genericRateLimit(`progress-get:${me.id}`, 60, 60_000)) {
     return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
   }
   const progress = await listProgressByUser(me.id);
+  // كاش قصير المدى (10 ثوانٍ) مع stale-while-revalidate لتقليل حمل قاعدة البيانات
+  c.header('Cache-Control', 'private, max-age=10, stale-while-revalidate=30');
   return c.json({ progress });
 });
 
 app.post('/progress/sync', requireAuth, async (c) => {
   const me = getUser(c);
-  // 10/دقيقة: المزامنة كل 180 ثانية + إرسال فوري عند الإخفاء/الإكمال.
-  // الحد القديم (6) كان يُرجع 429 عند تنقّل سريع بين الدروس.
-  if (!genericRateLimit(`progress-sync:${me.id}`, 10, 60_000)) {
+  // زيادة الحد إلى 50/دقيقة لدعم الحمل الأعلى
+  // الحد القديم (6 ثم 10) كان يُرجع 429 عند تنقّل سريع بين الدروس.
+  if (!genericRateLimit(`progress-sync:${me.id}`, 50, 60_000)) {
     return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
   }
 

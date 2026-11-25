@@ -103,6 +103,9 @@ export function recordRegister(ip: string): void {
 
 const GENERIC_WINDOW = 60 * 1000;
 
+// في بيئة الاختبار/التحميل نرفع الحدود تلقائياً لو المتغير LOAD_TEST=1 موجود
+const LOAD_TEST_MULTIPLIER = Deno.env.get('LOAD_TEST') === '1' ? 50 : 1;
+
 export function genericRateLimit(key: string, max: number, windowMs: number = GENERIC_WINDOW): boolean {
-  return incr(key, max, windowMs);
+  return incr(key, max * LOAD_TEST_MULTIPLIER, windowMs);
 }
