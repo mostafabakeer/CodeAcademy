@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import CodeEditor from '../components/CodeEditor';
+import { confirmDialog } from '../components/ConfirmDialog';
 import {
   getAllFiles,
   getFileById,
@@ -687,7 +688,7 @@ export default function CodeLab() {
   };
 
   const deleteFile = async (id: string) => {
-    if (!window.confirm(t('code.deleteConfirm'))) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('code.deleteConfirm'), danger: true, confirmText: t('common.delete') }))) return;
     try {
       const file = await getFileById(id);
       await deleteLocalFile(id);
@@ -740,7 +741,7 @@ export default function CodeLab() {
   const restoreVersion = async (version: { at: number; code: string }) => {
     const file = currentRef.current;
     if (!file) return;
-    if (!window.confirm(t('code.restoreConfirm'))) return;
+    if (!(await confirmDialog({ title: t('confirm.title'), message: t('code.restoreConfirm'), danger: true, confirmText: t('common.confirm') }))) return;
     setCode(version.code);
     lastSavedCodeRef.current = version.code;
     await persist(file, version.code);

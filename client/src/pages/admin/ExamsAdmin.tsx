@@ -6,6 +6,9 @@ import { api } from '../../api/client';
 import Modal from '../../components/Modal';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
+import AsyncButton from '../../components/AsyncButton';
+import { confirmDialog } from '../../components/ConfirmDialog';
+import { useAction } from '../../store/actionStore';
 
 interface Course {
   id: number;
@@ -23,7 +26,8 @@ interface Exam {
   grade?: string;
   allowRetake?: boolean;
   questionsCount?: number;
-  is_hidden?: boolean;
+  isHidden?: boolean;
+  createdAt?: number;
 }
 interface Question {
   id: number;
@@ -37,10 +41,11 @@ interface Question {
   explanationEn?: string;
 }
 
-const emptyExam = { courseId: 0, title: '', titleEn: '', passingScore: 50, timeLimit: 0, order: 0, grade: 'all', allowRetake: false, is_hidden: false };
+const emptyExam = { courseId: 0, title: '', titleEn: '', passingScore: 50, timeLimit: 0, order: 0, grade: 'all', allowRetake: false, isHidden: false };
 
 export default function ExamsAdmin() {
   const { t, lang } = useLang();
+  const run = useAction();
   const [courses, setCourses] = useState<Course[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,7 +96,7 @@ export default function ExamsAdmin() {
   };
   const editExam = (e: Exam) => {
     setEditing(e);
-    setForm({ courseId: e.courseId ?? 0, title: e.title, titleEn: e.titleEn || '', passingScore: e.passingScore, timeLimit: e.timeLimit ?? 0, order: e.order ?? 0, grade: e.grade || 'all', allowRetake: !!e.allowRetake, is_hidden: !!e.is_hidden });
+    setForm({ courseId: e.courseId ?? 0, title: e.title, titleEn: e.titleEn || '', passingScore: e.passingScore, timeLimit: e.timeLimit ?? 0, order: e.order ?? 0, grade: e.grade || 'all', allowRetake: !!e.allowRetake, isHidden: !!e.isHidden });
     setError('');
     setOpen(true);
   };
@@ -112,10 +117,20 @@ export default function ExamsAdmin() {
   };
 
   const removeExam = async (id: number) => {
-    if (!window.confirm(t('common.delete') + '?')) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('confirm.deleteMessage'), danger: true, confirmText: t('common.delete') }))) return;
     try {
-      await api(`/api/exams/${id}`, { method: 'DELETE' });
-      load();
+      await run(
+        {
+          key: `exam:delete:${id}`,
+          label: t('action.delete'),
+          kind: 'delete',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api(`/api/exams/${id}`, { method: 'DELETE' });
+          setExams((prev) => prev.filter((e) => e.id !== id));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -123,7 +138,7 @@ export default function ExamsAdmin() {
 
   const toggleHidden = async (id: number, isHidden: boolean) => {
     try {
-      await api(`/api/exams/${id}/toggle-hidden`, { method: 'POST', body: JSON.stringify({ is_hidden: isHidden }) });
+      await api(`/api/exams/${id}/toggle-hidden`, { method: 'POST', body: JSON.stringify({ isHidden }) });
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -218,10 +233,20 @@ export default function ExamsAdmin() {
   };
 
   const removeQ = async (id: number) => {
-    if (!window.confirm(t('common.delete') + '?')) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('confirm.deleteMessage'), danger: true, confirmText: t('common.delete') }))) return;
     try {
-      await api(`/api/questions/${id}`, { method: 'DELETE' });
-      if (qmExam) await loadQuestions(qmExam.id);
+      await run(
+        {
+          key: `question:delete:${id}`,
+          label: t('action.delete'),
+          kind: 'delete',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api(`/api/questions/${id}`, { method: 'DELETE' });
+          if (qmExam) await loadQuestions(qmExam.id);
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -263,7 +288,12 @@ export default function ExamsAdmin() {
                       {courseName(e.courseId)} · {e.questionsCount ?? 0} {t('admin.questions')} · {t('admin.passingScore')} {e.passingScore}%
                     </span>
                     {!!e.allowRetake && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">↻ {t('admin.allowRetake')}</span>}
-                  {e.is_hidden && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">🔒 مخفي</span>}
+                  {e.isHidden && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold text-amber-300">🔒 مخفي</span>}
+                  {e.createdAt && (
+                    <span className="rounded-full bg-gray-700/50 px-2 py-0.5 font-bold text-gray-300 text-xs">
+                      📅 {new Date(e.createdAt).toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric' })}
+                    </span>
+                  )}
                   </div>
                 </div>
                 <div className="grid grid-cols-4 gap-2 sm:flex sm:shrink-0">
@@ -273,8 +303,8 @@ export default function ExamsAdmin() {
                   <button onClick={() => editExam(e)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
                     {t('common.edit')}
                   </button>
-                  <button onClick={() => toggleHidden(e.id, !e.is_hidden)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
-                    {e.is_hidden ? '👁️ إظهار' : '🔒 إخفاء'}
+                  <button onClick={() => toggleHidden(e.id, !e.isHidden)} className="btn-ghost-fire rounded-lg px-2 py-2.5 text-xs font-bold sm:px-3 sm:py-1 touch-target">
+                    {e.isHidden ? '👁️ إظهار' : '🔒 إخفاء'}
                   </button>
                   <button onClick={() => removeExam(e.id)} className="rounded-lg border border-fire-500/40 px-2 py-2.5 text-xs font-bold text-fire-300 sm:px-3 sm:py-1 touch-target">
                     {t('common.delete')}
@@ -337,12 +367,12 @@ export default function ExamsAdmin() {
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-ink-600 bg-ink-900 px-4 py-3">
             <input
               type="checkbox"
-              checked={form.is_hidden}
-              onChange={(e) => setForm({ ...form, is_hidden: e.target.checked })}
+              checked={form.isHidden}
+              onChange={(e) => setForm({ ...form, isHidden: e.target.checked })}
               className="h-4 w-4 accent-fire-500"
             />
             <span className="text-sm font-semibold text-gray-300">
-              {form.is_hidden ? '🔒 إخفاء الامتحان عن الطلاب' : '👁️ إظهار الامتحان للطلاب'}
+              {form.isHidden ? '🔒 إخفاء الامتحان عن الطلاب' : '👁️ إظهار الامتحان للطلاب'}
             </span>
           </label>
           <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">

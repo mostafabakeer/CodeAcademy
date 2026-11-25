@@ -10,6 +10,7 @@ import StudentPagination from '../../components/StudentPagination';
 import ResetPanel from '../../components/ResetPanel';
 import LevelBadge from '../../components/LevelBadge';
 import ExamScores from '../../components/ExamScores';
+import { confirmDialog } from '../../components/ConfirmDialog';
 import type { GradeFilter, PasswordRequest, StudentFilter } from '../../types/admin';
 import { GRADE_KEYS, GRADE_LABEL_KEY } from '../../lib/grades';
 
@@ -410,8 +411,8 @@ export default function StudentsAdmin() {
     );
   };
 
-  const deleteStudent = (s: Student) => {
-    if (!window.confirm(t('admin.deleteAccountConfirm'))) return;
+  const deleteStudent = async (s: Student) => {
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('admin.deleteAccountConfirm'), danger: true, confirmText: t('common.delete') }))) return;
     run(s.id, 'delete', async () => {
       await api(`/api/admin/users/${s.id}`, { method: 'DELETE' });
     }, () => {
@@ -459,8 +460,8 @@ export default function StudentsAdmin() {
     }
   };
 
-  const approveReset = (r: PasswordRequest) => {
-    if (!window.confirm(t('admin.resetApproveConfirm'))) return;
+  const approveReset = async (r: PasswordRequest) => {
+    if (!(await confirmDialog({ title: t('confirm.title'), message: t('admin.resetApproveConfirm'), danger: true, confirmText: t('common.confirm') }))) return;
     // نحجز النافذة الآن (قبل await) ثم نوجّهها لواتساب بعد وصول الكود.
     const waWin = preOpenWa();
     void run(
@@ -490,8 +491,8 @@ export default function StudentsAdmin() {
     );
   };
 
-  const rejectReset = (r: PasswordRequest) => {
-    if (!window.confirm(t('admin.resetRejectConfirm'))) return;
+  const rejectReset = async (r: PasswordRequest) => {
+    if (!(await confirmDialog({ title: t('confirm.title'), message: t('admin.resetRejectConfirm'), danger: true, confirmText: t('common.delete') }))) return;
     void run(
       r.id,
       'reset-reject',
@@ -508,8 +509,8 @@ export default function StudentsAdmin() {
   };
 
   /** حذف نهائي لطلب مكتمل/مرفوض — يحرّر المكان لعميل جديد يريد تغيير كلمة السر. */
-  const deleteReset = (r: PasswordRequest) => {
-    if (!window.confirm(t('admin.resetDeleteConfirm', { name: r.fullName || r.phone }))) return;
+  const deleteReset = async (r: PasswordRequest) => {
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('admin.resetDeleteConfirm', { name: r.fullName || r.phone }), danger: true, confirmText: t('common.delete') }))) return;
     void run(
       r.id,
       'reset-delete',

@@ -501,11 +501,12 @@ app.post('/auth/forgot-password/complete', async (c) => {
 /* =================== المحتوى الكامل (bootstrap) =================== */
 
 /**
- * كاش قصير العمر (45 ثانية) لكل (دور + مرحلة). يخدم عشرات الطلاب المتزامنين
+ * كاش قصير العمر (15 ثانية) لكل (دور + مرحلة). يخدم عشرات الطلاب المتزامنين
  * من نسخة واحدة بدل إعادة الاستعلام من القاعدة لكل واحد — مع بقاء المحتوى
  * محدّثاً خلال أقل من دقيقة. الأدمن لا يستخدم الكاش ليرى تعديلاته فوراً.
+ * مخفض من 45s إلى 15s لتحسين زمن التحديث مع الحفاظ على الحماية من الحمل.
  */
-const BOOTSTRAP_CACHE_TTL = 45_000;
+const BOOTSTRAP_CACHE_TTL = 15_000;
 const bootstrapCache = new Map<string, { at: number; etag: string; json: string }>();
 
 /** بصمة سريعة (FNV-1a) لتمييز نسخة المحتوى بلا تكلفة تشفير. */
@@ -696,7 +697,8 @@ function bootstrapJson(json: string, etag: string, c: Context) {
  */
 app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
   const reqUser = getUser(c);
-  if (!genericRateLimit(`bootstrap:${reqUser.id}`, 5, 60_000)) {
+  // زيادة rate limit من 5/min إلى 12/min لدعم Polling كل 20 ثانية
+  if (!genericRateLimit(`bootstrap:${reqUser.id}`, 12, 60_000)) {
     return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
   }
   const isAdmin = reqUser.role === 'admin';
@@ -783,6 +785,26 @@ app.get('/bootstrap', requireAuth, requireSubscriber, async (c) => {
   // 3. محتوى جديد ⇒ خزّنه للطلاب المشاركين في نفس المرحلة.
   if (cacheKey) bootstrapCache.set(cacheKey, { at: Date.now(), etag, json });
   return bootstrapJson(json, etag, c);
+});
+
+/* =================== نسخة المحتوى (للـ Polling/Realtime) =================== */
+app.get('/content-version', requireAuth, async (c) => {
+  const me = getUser(c);
+  // Rate limit أعلى للـ polling (60/دقيقة)
+  if (!genericRateLimit(`content-version:${me.id}`, 60, 60_000)) {
+    return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
+  }
+  // إرجاع آخر رقم نسخة من جدول content_events
+  // يستخدم max(id) لأنه monolithic increasing
+  const { data } = await sb
+    .from('content_events')
+    .select('id')
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const version = data?.id ?? 0;
+  return c.json({ version, at: Date.now() });
 });
 
 /* =================== تقدّم المشاهدة =================== */
@@ -1020,10 +1042,10 @@ app.get('/exams', requireAuth, requireSubscriber, async (c) => {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
   const isAdmin = reqUser.role === 'admin';
-  const examsWithCounts = isAdmin ? await listExamsWithQuestionCounts() : await listExamsByGradeWithQuestionCounts(reqUser.grade);
-  const out = examsWithCounts
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return c.json({ exams: out });
+  // الترتيب يأتي من الاستعلام نفسه (created_at DESC) — لا نعيد الفرز هنا حتى
+  // لا يتغلّب الحقل اليدوي `order` على تاريخ الرفع المطلوب.
+  const exams = isAdmin ? await listExamsWithQuestionCounts() : await listExamsByGradeWithQuestionCounts(reqUser.grade);
+  return c.json({ exams });
 });
 
 app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
@@ -1032,6 +1054,10 @@ app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
   const exam = await findExamById(id);
   if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
   if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
+    return c.json({ error: 'الامتحان غير موجود' }, 404);
+  }
+  // الامتحان المخفي لا يُتاح للطلاب حتى بالرابط المباشر أو من التخزين المؤقت.
+  if (reqUser.role === 'student' && exam.isHidden) {
     return c.json({ error: 'الامتحان غير موجود' }, 404);
   }
   // ثلاثة استعلامات متوازية بدل تسلسل (محاولة مقالية + نتيجة + أسئلة).
@@ -1275,6 +1301,8 @@ app.post('/exams/:id/submit', requireAuth, requireSubscriber, async (c) => {
 app.post('/exams', requireAuth, requireAdmin, async (c) => {
   const b = await c.req.json().catch(() => ({}));
   if (!bodyText(b.title)) return c.json({ error: 'اسم الامتحان مطلوب' }, 400);
+  // دعم كل من isHidden (camelCase) و is_hidden (للخلف)
+  const isHidden = b.isHidden !== undefined ? b.isHidden === true : (b.is_hidden !== undefined ? b.is_hidden === true : false);
   const exam = await createExam({
     courseId: b.courseId ? Number(b.courseId) : null,
     title: bodyText(b.title),
@@ -1286,8 +1314,9 @@ app.post('/exams', requireAuth, requireAdmin, async (c) => {
     order: Number(b.order) || 0,
     createdAt: Date.now(),
     // إضافة حقول الحالة الجديدة
-    isHidden: b.is_hidden ?? false,
-    publishedAt: b.is_hidden === false ? new Date().toISOString() : null,
+    isHidden,
+    // الامتحان الظاهر يُسجّل وقت نشره فوراً (مرجع ترتيب/عرض تاريخ الرفع).
+    publishedAt: isHidden ? null : new Date().toISOString(),
   });
   clearBootstrapCache();
   clearLatestExamTopCache();
@@ -1310,15 +1339,21 @@ app.post('/exams/:id/toggle-hidden', requireAuth, requireAdmin, async (c) => {
   const exam = await findExamById(id);
   if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
 
-  // переключить حالة الإخفاء
+  const body = await c.req.json().catch(() => ({}));
+  const isHidden = body.isHidden !== undefined ? body.isHidden : !exam.isHidden;
+
+  // قلب حالة الإخفاء
   const updated = await updateExam(id, {
-    is_hidden: !exam.is_hidden,
+    // examToRow يقرأ isHidden (camelCase)
+    isHidden,
+    // أول إظهار يضبط تاريخ النشر، والإخفاء يمسحه حتى يعود صحيحاً عند النشر التالي.
+    publishedAt: exam.isHidden ? new Date().toISOString() : null,
   });
   clearBootstrapCache();
   clearLatestExamTopCache();
 
-  // إرسال إشعار للطالب إذا تم إظهار الامتحان (is_hidden: false)
-  if (!updated.is_hidden) {
+  // إرسال إشعار للطالب إذا تم إظهار الامتحان (isHidden: false)
+  if (!updated.isHidden) {
     const examGrade = isContentGrade(exam.grade) ? exam.grade : 'all';
     await background(sendPushToGrade(examGrade, {
       title: '📝 امتحان معاد نشره',
@@ -1332,45 +1367,7 @@ app.post('/exams/:id/toggle-hidden', requireAuth, requireAdmin, async (c) => {
     console.log('[api] Exam hidden:', exam.id);
   }
 
-  return c.json({ exam: updated, wasHidden: !updated.is_hidden });
-});
-
-app.get('/exams', requireAuth, requireSubscriber, async (c) => {
-  const reqUser = getUser(c);
-  if (!genericRateLimit(`exams:${reqUser.id}`, 30, 60_000)) {
-    return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
-  }
-  const isAdmin = reqUser.role === 'admin';
-  const examsWithCounts = isAdmin ? await listExamsWithQuestionCounts() : await listExamsByGradeWithQuestionCounts(reqUser.grade);
-
-  // تصفية الامتحانات المخفية: الطلاب يرون فقط الامتحانات غير المخفية
-  // الأدمن يرى جميع الامتحانات
-  const isAdminView = isAdmin;
-  const out = isAdminView ? examsWithCounts : examsWithCounts.filter((e) => !e.is_hidden);
-
-  const outSorted = out.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return c.json({ exams: out });
-});
-
-app.get('/exams/:id', requireAuth, requireSubscriber, async (c) => {
-  const reqUser = getUser(c);
-  const id = Number(c.req.param('id'));
-  const exam = await findExamById(id);
-  if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
-  if (reqUser.role === 'student' && !gradeAllowed(exam.grade, reqUser.grade)) {
-    return c.json({ error: 'الامتحان غير موجود' }, 404);
-  }
-  // طلاب: التحقق من is_hidden
-  if (reqUser.role === 'student' && exam.is_hidden) {
-    return c.json({ error: 'هذا الامتحان مخفي حالياً' }, 404);
-  }
-  // ثلاثة استعلامات متوازية بدل تسلسل (محاولة مقالية + نتيجة + أسئلة).
-  const [latestSubmission, existingResult, allQuestions] = await Promise.all([
-    getLatestEssaySubmission(reqUser.id, id),
-    getResult(reqUser.id, id),
-    getExamQuestions(id),
-  ]);
-  // ...
+  return c.json({ exam: updated, wasHidden: !updated.isHidden });
 });
 
 app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
@@ -1378,6 +1375,8 @@ app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
   const exam = await findExamById(id);
   if (!exam) return c.json({ error: 'الامتحان غير موجود' }, 404);
   const b = await c.req.json().catch(() => ({}));
+  // دعم كل من isHidden (camelCase) و is_hidden (للخلف)
+  const nextHidden = b.isHidden !== undefined ? b.isHidden === true : (b.is_hidden !== undefined ? b.is_hidden === true : !!exam.isHidden);
   const updated = await updateExam(id, {
     courseId: b.courseId !== undefined ? (b.courseId ? Number(b.courseId) : null) : exam.courseId,
     title: b.title !== undefined ? bodyText(b.title) : exam.title,
@@ -1388,8 +1387,12 @@ app.put('/exams/:id', requireAuth, requireAdmin, async (c) => {
     allowRetake: b.allowRetake !== undefined ? !!b.allowRetake : exam.allowRetake,
     order: b.order !== undefined ? Number(b.order) : exam.order,
     // إضافة حقول الحالة
-    isHidden: b.is_hidden !== undefined ? b.is_hidden : exam.is_hidden,
-    publishedAt: b.is_hidden === false && !exam.is_hidden ? new Date().toISOString() : b.published_at ?? exam.publishedAt,
+    isHidden: nextHidden,
+    // تاريخ النشر يُضبط عند الانتقال من مخفي إلى ظاهر فقط، ويُمسح عند الإخفاء،
+    // ويبقى كما هو إن لم تتغير حالة الإظهار (حتى لا يتغيّر مع كل تعديل عنوان).
+    publishedAt: nextHidden
+      ? null
+      : (exam.isHidden ? new Date().toISOString() : (exam.publishedAt ?? new Date().toISOString())),
   });
   clearBootstrapCache();
   clearLatestExamTopCache();

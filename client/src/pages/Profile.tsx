@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { useLang } from '../i18n';
 import { useUser, useProgress, useSession } from '../store/authStore';
 import { api } from '../api/client';
+import { confirmDialog } from '../components/ConfirmDialog';
 import {
   isPushSupported,
   isIOS,
@@ -344,7 +345,7 @@ export default function Profile() {
               disabled={secBusy}
               onClick={async () => {
                 setSecError('');
-                if (!window.confirm(t('profile.logoutAllConfirm'))) return;
+                if (!(await confirmDialog({ title: t('confirm.title'), message: t('profile.logoutAllConfirm'), danger: true, confirmText: t('common.confirm') }))) return;
                 setSecBusy(true);
                 try {
                   await logoutAll();

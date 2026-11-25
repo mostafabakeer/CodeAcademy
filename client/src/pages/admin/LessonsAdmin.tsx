@@ -7,6 +7,9 @@ import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
+import AsyncButton from '../../components/AsyncButton';
+import { confirmDialog } from '../../components/ConfirmDialog';
+import { useAction } from '../../store/actionStore';
 
 interface Course {
   id: number;
@@ -31,6 +34,7 @@ const empty = { courseId: 0, title: '', titleEn: '', videoType: 'youtube' as 'yo
 
 export default function LessonsAdmin() {
   const { t, lang } = useLang();
+  const run = useAction();
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,19 +76,21 @@ export default function LessonsAdmin() {
 
   const onUpload = async (file: File | undefined) => {
     if (!file) return;
-    setUploading(true);
     setError('');
     try {
-      const course = courses.find(c => c.id === form.courseId);
-      const url = await uploadFile('videos', file, {
-        grade: form.grade,
-        courseId: form.courseId || undefined,
-      });
-      setForm((f) => ({ ...f, videoType: 'upload', videoUrl: url }));
+      await run(
+        { key: 'lesson:video', label: t('action.upload'), kind: 'upload' },
+        async ({ setProgress }) => {
+          const url = await uploadFile('videos', file, {
+            grade: form.grade,
+            courseId: form.courseId || undefined,
+            onProgress: setProgress,
+          });
+          setForm((f) => ({ ...f, videoType: 'upload', videoUrl: url }));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
-    } finally {
-      setUploading(false);
     }
   };
 
@@ -95,24 +101,52 @@ export default function LessonsAdmin() {
       return setError(t('errors.required'));
     }
     try {
-      const body = { ...form, duration: form.duration * 60 };
-      if (editing) {
-        await api(`/api/lessons/${editing.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      } else {
-        await api('/api/lessons', { method: 'POST', body: JSON.stringify(body) });
-      }
-      setOpen(false);
-      load();
+      await run(
+        {
+          key: editing ? `lesson:edit:${editing.id}` : 'lesson:new',
+          label: t('action.save'),
+          kind: 'save',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          const body = { ...form, duration: form.duration * 60 };
+          if (editing) {
+            const d = await api<{ lesson: Lesson }>(`/api/lessons/${editing.id}`, {
+              method: 'PUT',
+              body: JSON.stringify(body),
+            });
+            setLessons((prev) => prev.map((l) => (l.id === editing.id ? { ...l, ...d.lesson } : l)));
+          } else {
+            const d = await api<{ lesson: Lesson }>('/api/lessons', {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            setLessons((prev) => [...prev, d.lesson]);
+          }
+          setOpen(false);
+        },
+      );
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
   const remove = async (id: number) => {
-    if (!window.confirm(t('common.delete') + '?')) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('confirm.deleteMessage'), danger: true, confirmText: t('common.delete') }))) return;
+    setError('');
     try {
-      await api(`/api/lessons/${id}`, { method: 'DELETE' });
-      load();
+      await run(
+        {
+          key: `lesson:delete:${id}`,
+          label: t('action.delete'),
+          kind: 'delete',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api(`/api/lessons/${id}`, { method: 'DELETE' });
+          setLessons((prev) => prev.filter((l) => l.id !== id));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -241,9 +275,13 @@ export default function LessonsAdmin() {
             <textarea className="input-fire w-full rounded-xl px-4 py-2.5" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
-          <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
+          <AsyncButton
+            type="submit"
+            actionKey={editing ? `lesson:edit:${editing.id}` : 'lesson:new'}
+            className="w-full rounded-xl px-4 py-2.5 font-bold"
+          >
             {t('common.save')}
-          </button>
+          </AsyncButton>
         </form>
       </Modal>
     </div>

@@ -3,6 +3,8 @@ import { motion } from 'motion/react';
 import { useLang } from '../../i18n';
 import AdminPageHeader from './AdminPageHeader';
 import { api } from '../../api/client';
+import AsyncButton from '../../components/AsyncButton';
+import { useAction } from '../../store/actionStore';
 
 interface Tier {
   min: number;
@@ -13,6 +15,7 @@ interface Tier {
 
 export default function SettingsAdmin() {
   const { t } = useLang();
+  const run = useAction();
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
@@ -28,7 +31,17 @@ export default function SettingsAdmin() {
   const save = async () => {
     setError('');
     try {
-      await api('/api/admin/config/levels', { method: 'PUT', body: JSON.stringify({ tiers }) });
+      await run(
+        {
+          key: 'settings:levels',
+          label: t('action.save'),
+          kind: 'save',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api('/api/admin/config/levels', { method: 'PUT', body: JSON.stringify({ tiers }) });
+        },
+      );
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
@@ -47,9 +60,13 @@ export default function SettingsAdmin() {
         title={t('admin.settings')}
         subtitle={t('admin.levelsConfig')}
         action={
-          <button onClick={save} className="btn-fire w-full rounded-xl px-5 py-2.5 font-bold text-white sm:w-auto">
+          <AsyncButton
+            onClick={save}
+            actionKey="settings:levels"
+            className="w-full rounded-xl px-5 py-2.5 font-bold text-white sm:w-auto"
+          >
             {saved ? `✓ ${t('admin.synced')}` : t('admin.saveLevels')}
-          </button>
+          </AsyncButton>
         }
       />
 

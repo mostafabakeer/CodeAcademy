@@ -8,6 +8,9 @@ import Modal from '../../components/Modal';
 import FormField from '../../components/FormField';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
+import AsyncButton from '../../components/AsyncButton';
+import { confirmDialog } from '../../components/ConfirmDialog';
+import { useAction } from '../../store/actionStore';
 
 interface Course {
   id: number;
@@ -25,6 +28,7 @@ const empty = { title: '', titleEn: '', description: '', descriptionEn: '', imag
 
 export default function CoursesAdmin() {
   const { t } = useLang();
+  const run = useAction();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -60,42 +64,74 @@ export default function CoursesAdmin() {
 
   const onImageUpload = async (file: File | undefined) => {
     if (!file) return;
-    setUploadingImage(true);
     setError('');
     try {
-      const url = await uploadFile('images', file, {
-        grade: form.grade,
-      });
-      setForm((f) => ({ ...f, image: url }));
+      await run(
+        { key: 'course:image', label: t('action.upload'), kind: 'upload' },
+        async ({ setProgress }) => {
+          const url = await uploadFile('images', file, {
+            grade: form.grade,
+            onProgress: setProgress,
+          });
+          setForm((f) => ({ ...f, image: url }));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
-    } finally {
-      setUploadingImage(false);
     }
   };
 
-const submit = async (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     if (!form.title.trim()) return setError(t('errors.required'));
     try {
-      if (editing) {
-        await api(`/api/courses/${editing.id}`, { method: 'PUT', body: JSON.stringify(form) });
-      } else {
-        await api('/api/courses', { method: 'POST', body: JSON.stringify(form) });
-      }
-      setOpen(false);
-      load();
+      await run(
+        {
+          key: editing ? `course:edit:${editing.id}` : 'course:new',
+          label: t('action.save'),
+          kind: 'save',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          if (editing) {
+            const d = await api<{ course: Course }>(`/api/courses/${editing.id}`, {
+              method: 'PUT',
+              body: JSON.stringify(form),
+            });
+            // تحديث فوري من الاستجابة بدل إعادة تحميل القائمة من الشبكة.
+            setCourses((prev) => prev.map((c) => (c.id === editing.id ? { ...c, ...d.course } : c)));
+          } else {
+            const d = await api<{ course: Course }>('/api/courses', {
+              method: 'POST',
+              body: JSON.stringify(form),
+            });
+            setCourses((prev) => [d.course, ...prev]);
+          }
+          setOpen(false);
+        },
+      );
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
   const remove = async (id: number) => {
-    if (!window.confirm(t('common.delete') + '?')) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('confirm.deleteMessage'), danger: true, confirmText: t('common.delete') }))) return;
+    setError('');
     try {
-      await api(`/api/courses/${id}`, { method: 'DELETE' });
-      load();
+      await run(
+        {
+          key: `course:delete:${id}`,
+          label: t('action.delete'),
+          kind: 'delete',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api(`/api/courses/${id}`, { method: 'DELETE' });
+          setCourses((prev) => prev.filter((c) => c.id !== id));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -174,9 +210,13 @@ const submit = async (e: FormEvent) => {
             <input type="number" className="input-fire w-full rounded-xl px-4 py-2.5" value={form.order} onChange={(e) => setForm({ ...form, order: Number(e.target.value) })} />
           </FormField>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
-          <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
+          <AsyncButton
+            type="submit"
+            actionKey={editing ? `course:edit:${editing.id}` : 'course:new'}
+            className="w-full rounded-xl px-4 py-2.5 font-bold"
+          >
             {t('common.save')}
-          </button>
+          </AsyncButton>
         </form>
       </Modal>
     </div>

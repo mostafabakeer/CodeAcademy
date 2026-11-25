@@ -4,14 +4,12 @@ import { getAllVideoProgressLocal, type VideoProgressLocal } from './localStore'
 
 // ===== جلب المحتوى الكامل دفعة واحدة (bootstrap) مع كاش محلي =====
 
-// TTL أطول (30 دقيقة) لتقليل طلبات الباك اند — المتصفح هو سيد الكاش.
-export const BOOTSTRAP_TTL = 30 * 60_000;
-
-// Content version for cache invalidation - incremented when content changes
-export const CONTENT_VERSION = 1;
+// TTL (15 دقيقة) لتقليل طلبات الباك اند — المتصفح هو سيد الكاش.
+// مخفض من 30 دقيقة لتحسين زمن التحديث مع الحفاظ على الحماية من الحمل.
+export const BOOTSTRAP_TTL = 15 * 60_000;
 
 function bootstrapKey(userId: number): string {
-  return `bootstrap:v${CONTENT_VERSION}:${userId}`;
+  return `bootstrap:v1:${userId}`;
 }
 
 /* ---- بصمة نسخة المحتوى على الخادم (توفير بيانات الموبايل) ---- */
@@ -95,6 +93,7 @@ export interface Exam {
   order: number;
   createdAt: number;
   questionsCount: number;
+  isHidden?: boolean;
 }
 
 export interface Note {
@@ -143,10 +142,10 @@ const inFlightByUser = new Map<number, InFlightBootstrap>();
 /** ذاكرة الكاش في الذاكرة (Map) — قراءة فورية بدون localStorage parsing. */
 const memoryCache = new Map<number, { data: BootstrapData; at: number }>();
 /**
- * 30 دقيقة — مطابق لـ BOOTSTRAP_TTL. كان 5 دقائق، فكان كل تنقّل بعد 5 دقائق
+ * 15 دقيقة — مطابق لـ BOOTSTRAP_TTL. كان 5 دقائق، فكان كل تنقّل بعد 5 دقائق
  * يطلق طلب bootstrap جديداً رغم أن البيانات ما زالت صالحة في localStorage.
  */
-export const MEMORY_CACHE_TTL = 30 * 60_000;
+export const MEMORY_CACHE_TTL = 15 * 60_000;
 
 function subscribeToBootstrap(
   userId: number,
@@ -282,26 +281,37 @@ export function invalidateBootstrap(userId: number): void {
   inFlightByUser.delete(userId);
 }
 
-// llamados when admin adds content (lesson, exam, note)
-export function invalidateAllBootstrap(): void {
-  // Clear all bootstrap caches for all users
-  const keys = [...memoryCache.keys()];
-  for (const userId of keys) {
-    removeCached(bootstrapKey(userId));
-    writeServerVersion(userId, null);
-    memoryCache.delete(userId);
+/**
+ * تحديث كاش bootstrap في الذاكرة و localStorage (للتحديثات التفاؤلية)
+ */
+export function patchBootstrap(userId: number, updater: (data: BootstrapData) => BootstrapData): void {
+  const key = bootstrapKey(userId);
+  const mem = memoryCache.get(userId);
+  if (mem) {
+    const updated = updater(mem.data);
+    memoryCache.set(userId, { data: updated, at: Date.now() });
+    setCached(key, updated);
+    return;
   }
-  inFlightByUser.clear();
+  const cached = getCachedStale<BootstrapData>(key);
+  if (cached) {
+    const updated = updater(cached);
+    memoryCache.set(userId, { data: updated, at: Date.now() });
+    setCached(key, updated);
+  }
 }
 
-// Get current content version
-export function getContentVersion(): number {
-  return CONTENT_VERSION;
-}
-
-// Update content version (called after admin mutations)
-export function bumpContentVersion(): void {
-  // This would be called via a server-side mechanism or when user refreshes
+/**
+ * تطبيق تحديث تفاؤلي (Optimistic Update) على الكيانات
+ */
+export function applyMutation(
+  entity: 'lessons' | 'exams' | 'notes' | 'courses' | 'topStudents' | 'levels',
+  action: 'insert' | 'update' | 'delete',
+  payload: any
+): void {
+  // يمكن تنفيذ تحديثات تفاؤلية هنا لتحديث الكاش فوراً
+  // مثال: عند إضافة درس جديد، إضافته للكاش قبل استجابة الخادم
+  console.log('[content] applyMutation:', entity, action, payload);
 }
 
 /**

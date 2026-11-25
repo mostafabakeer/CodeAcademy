@@ -7,6 +7,9 @@ import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import GradeSelect from '../../components/GradeSelect';
 import GradeBadge from '../../components/GradeBadge';
+import AsyncButton from '../../components/AsyncButton';
+import { confirmDialog } from '../../components/ConfirmDialog';
+import { useAction } from '../../store/actionStore';
 
 interface Note {
   id: number;
@@ -25,14 +28,13 @@ const empty = { courseId: 0, title: '', titleEn: '', body: '', bodyEn: '', image
 
 export default function NotesAdmin() {
   const { t } = useLang();
+  const run = useAction();
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Note | null>(null);
   const [form, setForm] = useState(empty);
-  const [uploading, setUploading] = useState(false);
-  const [uploadingPdf, setUploadingPdf] = useState(false);
 
   const load = useCallback(() => {
     api<{ notes: Note[] }>('/api/notes')
@@ -60,39 +62,43 @@ export default function NotesAdmin() {
 
   const onUpload = async (file: File | undefined) => {
     if (!file) return;
-    setUploading(true);
+    setError('');
     try {
-      const url = await uploadFile('images', file, {
-        grade: form.grade,
-        courseId: form.courseId || undefined,
-        noteId: editing?.id,
-      });
-      setForm((f) => ({ ...f, image: url }));
+      await run(
+        { key: 'note:image', label: t('action.upload'), kind: 'upload' },
+        async ({ setProgress }) => {
+          const url = await uploadFile('images', file, {
+            grade: form.grade,
+            courseId: form.courseId || undefined,
+            noteId: editing?.id,
+            onProgress: setProgress,
+          });
+          setForm((f) => ({ ...f, image: url }));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
-    } finally {
-      setUploading(false);
     }
   };
 
   const onPdfUpload = async (file: File | undefined) => {
     if (!file) return;
-    setUploadingPdf(true);
+    setError('');
     try {
-      console.log('[NotesAdmin] Uploading PDF:', { name: file.name, size: file.size, type: file.type });
-      const path = await uploadFile('notes', file, {
-        grade: form.grade,
-        courseId: form.courseId || undefined,
-        noteId: editing?.id,
-      });
-      console.log('[NotesAdmin] PDF upload success, path:', path);
-      setForm((f) => ({ ...f, pdf: path }));
+      await run(
+        { key: 'note:pdf', label: t('action.upload'), kind: 'upload' },
+        async ({ setProgress }) => {
+          const path = await uploadFile('notes', file, {
+            grade: form.grade,
+            courseId: form.courseId || undefined,
+            noteId: editing?.id,
+            onProgress: setProgress,
+          });
+          setForm((f) => ({ ...f, pdf: path }));
+        },
+      );
     } catch (e) {
-      const message = (e as Error).message;
-      console.error('[NotesAdmin] PDF upload error:', message);
-      setError(message);
-    } finally {
-      setUploadingPdf(false);
+      setError((e as Error).message);
     }
   };
 
@@ -101,21 +107,52 @@ export default function NotesAdmin() {
     setError('');
     if (!form.title.trim()) return setError(t('errors.required'));
     try {
-      const body = { ...form, courseId: form.courseId || null };
-      if (editing) await api(`/api/notes/${editing.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      else await api('/api/notes', { method: 'POST', body: JSON.stringify(body) });
-      setOpen(false);
-      load();
+      await run(
+        {
+          key: editing ? `note:edit:${editing.id}` : 'note:new',
+          label: t('action.save'),
+          kind: 'save',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          const body = { ...form, courseId: form.courseId || null };
+          if (editing) {
+            const d = await api<{ note: Note }>(`/api/notes/${editing.id}`, {
+              method: 'PUT',
+              body: JSON.stringify(body),
+            });
+            setNotes((prev) => prev.map((n) => (n.id === editing.id ? { ...n, ...d.note } : n)));
+          } else {
+            const d = await api<{ note: Note }>('/api/notes', {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            setNotes((prev) => [d.note, ...prev]);
+          }
+          setOpen(false);
+        },
+      );
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
   const remove = async (id: number) => {
-    if (!window.confirm(t('common.delete') + '?')) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('confirm.deleteMessage'), danger: true, confirmText: t('common.delete') }))) return;
+    setError('');
     try {
-      await api(`/api/notes/${id}`, { method: 'DELETE' });
-      load();
+      await run(
+        {
+          key: `note:delete:${id}`,
+          label: t('action.delete'),
+          kind: 'delete',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api(`/api/notes/${id}`, { method: 'DELETE' });
+          setNotes((prev) => prev.filter((n) => n.id !== id));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -184,8 +221,7 @@ export default function NotesAdmin() {
           <div className="rounded-2xl border border-fire-500/30 bg-fire-950/20 p-4">
             <label className="mb-1.5 block text-sm font-bold text-fire-200">{t('admin.pdfUrl')} — {t('admin.uploadPdf')}</label>
             <input type="file" accept="application/pdf,.pdf" onChange={(e) => onPdfUpload(e.target.files?.[0])} className="input-fire w-full rounded-xl px-4 py-2.5 text-sm" />
-            {uploadingPdf && <p className="mt-1 text-xs text-ember-400">{t('admin.uploading')}...</p>}
-            {form.pdf && !uploadingPdf && <p className="mt-1 text-xs text-emerald-400">✓ {t('admin.uploaded')}</p>}
+            {form.pdf && <p className="mt-1 text-xs text-emerald-400">✓ {t('admin.uploaded')}</p>}
             <p className="mt-1 text-xs text-gray-400">{t('admin.pdfViewerOnly')}</p>
           </div>
           <div>
@@ -199,14 +235,16 @@ export default function NotesAdmin() {
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.imageUrl')} — {t('admin.uploadImage')}</label>
             <input type="file" accept="image/*" onChange={(e) => onUpload(e.target.files?.[0])} className="input-fire w-full rounded-xl px-4 py-2.5 text-sm" />
-            {uploading && <p className="mt-1 text-xs text-ember-400">{t('admin.uploading')}...</p>}
             <input className="input-fire mt-2 w-full rounded-xl px-4 py-2 text-sm" dir="ltr" placeholder="/uploads/..." value={form.image} onChange={(e) => setForm({ ...form, image: e.target.value })} />
-            {form.image && !uploading && <p className="mt-1 text-xs text-emerald-400">✓ {t('admin.uploaded')}</p>}
           </div>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
-          <button type="submit" disabled={uploading || uploadingPdf} className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white disabled:opacity-60">
+          <AsyncButton
+            type="submit"
+            actionKey={editing ? `note:edit:${editing.id}` : 'note:new'}
+            className="w-full rounded-xl px-4 py-2.5 font-bold"
+          >
             {t('common.save')}
-          </button>
+          </AsyncButton>
         </form>
       </Modal>
     </div>

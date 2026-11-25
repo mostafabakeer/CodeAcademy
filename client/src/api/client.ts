@@ -304,6 +304,10 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
 
   // للطلبات المحمية (غير مسارات المصادقة)، نحاول مرة واحدة عند 401 لتحديث الكوكي
   const shouldRetryOn401 = !isAuthPathNoRetry(route);
+  // لا نعيد إرسال طلب قد يكون نُفّذ فعلاً على الخادم (POST/PUT/DELETE) إلى وجهة
+  // ثانية. الشبكة قد تنقطع بعد وصول الطلب، وإعادة إرساله تُنشئ عنصراً مكرراً أو
+  // تُسلّم الامتحان مرتين. القراءات فقط (GET/HEAD) آمنة للتكرار.
+  const safeToRetryAcrossTargets = method === 'GET';
 
   for (const base of targets) {
     let res: Response;
@@ -328,6 +332,8 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
         : 'تعذّر الاتصال بالخادم، تحقق من اتصالك بالإنترنت ثم حاول مجدداً';
       // الوجهة التالية قد تعمل (مثلاً البروكسي معطل فنرجع لـ Supabase مباشرة)
       lastFailure = new ApiError(message, 0);
+      // غير آمن: الطلب ربما وصل ونُفّذ قبل انقطاع الشبكة ⇒ لا تكرار.
+      if (!safeToRetryAcrossTargets) throw lastFailure;
       continue;
     }
 
@@ -434,6 +440,8 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       // 200 بغير JSON = صفحة SPA بدلاً من استجابة API ⇒ الوجهة غير صالحة
       res.body?.cancel().catch(() => {});
       lastFailure = new ApiError('الخادم أعاد استجابة غير صالحة', 502, { code: 'invalid_response' });
+      // لا نعيد إرسال طلب تعديل قد يكون نُفّذ إلى وجهة أخرى.
+      if (!safeToRetryAcrossTargets) throw lastFailure;
       continue;
     }
 
@@ -450,16 +458,16 @@ export async function api<T = any>(path: string, options: ApiOptions = {}): Prom
       writeStoredToken((parsed as { token?: unknown } | null)?.token);
     }
     if (route === '/auth/logout') clearStoredToken();
-    // Invalidate bootstrap cache after admin mutations that change content
+    // Invalidate bootstrap cache after admin mutations that change content.
+    // `route` هنا بلا بادئة `/api` (تُزال في بداية الدالة)، لذا يجب أن تطابق
+    // المسارات الفعلية للـ API (مثل: /exams, /lessons, /admin/users...).
     const adminMutationPaths = [
-      '/api/lessons', '/api/exams', '/api/notes', '/api/courses',
-      '/api/admin/users',
+      '/exams', '/lessons', '/notes', '/courses', '/questions',
+      '/admin/users', '/admin/top-students', '/admin/config',
     ];
     const isAdminMutation = adminMutationPaths.some(p => route.startsWith(p)) &&
       ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
     if (isAdminMutation) {
-      // المفتاح الحقيقي في cache.ts هو `cache:bootstrap:v1:<id>` (مع بادئة
-      // التخزين)، والكود القديم كان يمسح مفتاحاً غير موجود أبداً.
       const uid = getSessionSnapshot()?.user?.id ?? getCurrentUserId();
       clearBootstrapCache(uid || null);
     }

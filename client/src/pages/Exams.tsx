@@ -7,6 +7,7 @@ import { type ExamListItem, type Exam } from '../lib/content';
 import { useBootstrapData } from '../lib/useBootstrapData';
 import { StaleNotice, LoadError } from '../components/PageStatus';
 import DoctorCode from '../components/DoctorCode';
+import { CardSkeleton } from '../components/Skeleton';
 
 export default function Exams() {
   const { t, lang } = useLang();
@@ -58,7 +59,11 @@ export default function Exams() {
       {bootError && exams.length === 0 ? (
         <LoadError message={bootError} onRetry={retry} />
       ) : loading ? (
-        <p className="text-gray-400">{t('common.loading')}</p>
+        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+          {[...Array(6)].map((_, i) => (
+            <CardSkeleton key={i} hasImage={false} textLines={4} />
+          ))}
+        </div>
       ) : exams.length === 0 ? (
         <p className="rounded-2xl border border-ink-600 bg-ink-900 p-8 text-center text-gray-400">{t('exam.noExams')}</p>
       ) : (
@@ -66,25 +71,42 @@ export default function Exams() {
           {exams.map((e, i) => {
             const passed = e.taken && e.bestScore !== null && e.bestScore >= e.passingScore;
             const canRetake = !!e.allowRetake;
+            // التحقق من كون الامتحان "جديد" (خلال 7 أيام)
+            const isNew = e.createdAt && (Date.now() - e.createdAt < 7 * 24 * 60 * 60 * 1000);
+            // تنسيق تاريخ الرفع
+            const uploadDate = e.createdAt ? new Date(e.createdAt).toLocaleDateString('ar-EG', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            }) : null;
+
             return (
               <motion.div key={e.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
                 <Link to={`/exams/${e.id}`} className="card-fire card-fire-hover flex h-full flex-col rounded-3xl p-6">
                   <div className="mb-3 flex items-center justify-between">
                     <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-fire-600/30 to-ember-500/30 text-2xl">📋</div>
-                    {e.pending ? (
-                      <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-xs font-bold text-amber-300">
-                        ⏳ {t('exam.pendingReview')}
-                      </span>
-                    ) : e.taken ? (
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${passed ? 'bg-emerald-500/20 text-emerald-300' : 'bg-fire-500/20 text-fire-300'}`}>
-                        {passed ? '✓ ' + t('exam.passed') : t('exam.failed')}
-                      </span>
-                    ) : null}
+                    <div className="flex gap-1">
+                      {e.pending ? (
+                        <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-xs font-bold text-amber-300">
+                          ⏳ {t('exam.pendingReview')}
+                        </span>
+                      ) : e.taken ? (
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${passed ? 'bg-emerald-500/20 text-emerald-300' : 'bg-fire-500/20 text-fire-300'}`}>
+                          {passed ? '✓ ' + t('exam.passed') : t('exam.failed')}
+                        </span>
+                      ) : null}
+                      {isNew && (
+                        <span className="rounded-full bg-emerald-500/20 px-2.5 py-1 text-xs font-bold text-emerald-300">
+                          ✨ {t('exam.new')}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <h2 className="font-extrabold">{lang === 'ar' ? e.title : e.titleEn}</h2>
                   <div className="mt-3 space-y-1 text-sm text-gray-400">
                     <div>❓ {e.questionsCount} {t('exam.questionsCount')}</div>
                     {e.timeLimit && <div>⏱️ {e.timeLimit} {t('exam.timeLimit')}</div>}
+                    {uploadDate && <div>📅 {t('exam.addedOn')}: <span className="font-medium text-gray-200">{uploadDate}</span></div>}
                     <div>
                       {e.pending ? (
                         <span className="font-bold text-amber-300">⏳ {t('exam.pendingReview')}</span>

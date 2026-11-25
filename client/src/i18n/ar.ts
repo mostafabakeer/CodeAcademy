@@ -36,6 +36,26 @@ export const ar = {
     optional: 'اختياري',
     loadingEditor: 'جاري تحميل المحرر...',
   },
+  action: {
+    pleaseWait: 'لا يمكن تنفيذ إجراء آخر حتى ينتهي هذا الإجراء.',
+    elapsed: 'الوقت المنقضي',
+    cancel: 'إلغاء العملية',
+    save: 'جارٍ الحفظ…',
+    delete: 'جارٍ الحذف…',
+    submit: 'جارٍ الإرسال…',
+    upload: 'جارٍ الرفع…',
+    login: 'جارٍ تسجيل الدخول…',
+    logout: 'جارٍ تسجيل الخروج…',
+    processing: 'جارٍ التنفيذ…',
+  },
+  toast: {
+    dismiss: 'إغلاق التنبيه',
+  },
+  confirm: {
+    title: 'تأكيد الإجراء',
+    deleteTitle: 'تأكيد الحذف',
+    deleteMessage: 'سيتم حذف هذا العنصر نهائياً ولا يمكن التراجع. هل أنت متأكد؟',
+  },
   auth: {
     loginTitle: 'تسجيل الدخول',
     registerTitle: 'إنشاء حساب جديد',
@@ -258,6 +278,8 @@ export const ar = {
     mcqScore: 'درجة الاختيار من متعدد',
     finalScore: 'النتيجة النهائية',
     resultBreakdown: 'تفصيل النتيجة',
+    new: 'جديد',
+    addedOn: 'أُضيف في',
   },
   note: {
     title: 'المذكرات',

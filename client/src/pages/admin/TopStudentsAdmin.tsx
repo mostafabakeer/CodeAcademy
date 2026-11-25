@@ -6,6 +6,9 @@ import { api } from '../../api/client';
 import { uploadFile } from '../../api/upload';
 import Modal from '../../components/Modal';
 import GradeBadge from '../../components/GradeBadge';
+import AsyncButton from '../../components/AsyncButton';
+import { confirmDialog } from '../../components/ConfirmDialog';
+import { useAction } from '../../store/actionStore';
 import { GRADE_KEYS, GRADE_LABEL_KEY } from '../../lib/grades';
 
 interface TopStudent {
@@ -20,6 +23,7 @@ const empty = { name: '', image: '', rank: 1, grade: 'bac1' };
 
 export default function TopStudentsAdmin() {
   const { t } = useLang();
+  const run = useAction();
   const [students, setStudents] = useState<TopStudent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -57,8 +61,13 @@ export default function TopStudentsAdmin() {
     if (!file) return;
     setUploading(true);
     try {
-      const url = await uploadFile('images', file);
-      setForm((f) => ({ ...f, image: url }));
+      await run(
+        { key: 'topstudent:image', label: t('action.upload'), kind: 'upload' },
+        async () => {
+          const url = await uploadFile('images', file);
+          setForm((f) => ({ ...f, image: url }));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -71,21 +80,52 @@ export default function TopStudentsAdmin() {
     setError('');
     if (!form.name.trim()) return setError(t('errors.required'));
     try {
-      const body = { ...form, rank: Number(form.rank) || 1 };
-      if (editing) await api(`/api/admin/top-students/${editing.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      else await api('/api/admin/top-students', { method: 'POST', body: JSON.stringify(body) });
-      setOpen(false);
-      load();
+      await run(
+        {
+          key: editing ? `topstudent:edit:${editing.id}` : 'topstudent:new',
+          label: t('action.save'),
+          kind: 'save',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          const body = { ...form, rank: Number(form.rank) || 1 };
+          if (editing) {
+            const d = await api<{ student: TopStudent }>(`/api/admin/top-students/${editing.id}`, {
+              method: 'PUT',
+              body: JSON.stringify(body),
+            });
+            setStudents((prev) => prev.map((s) => (s.id === editing.id ? { ...s, ...d.student } : s)));
+          } else {
+            const d = await api<{ student: TopStudent }>('/api/admin/top-students', {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            setStudents((prev) => [d.student, ...prev]);
+          }
+          setOpen(false);
+        },
+      );
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
   const remove = async (id: number) => {
-    if (!window.confirm(t('common.delete') + '?')) return;
+    if (!(await confirmDialog({ title: t('confirm.deleteTitle'), message: t('confirm.deleteMessage'), danger: true, confirmText: t('common.delete') }))) return;
+    setError('');
     try {
-      await api(`/api/admin/top-students/${id}`, { method: 'DELETE' });
-      load();
+      await run(
+        {
+          key: `topstudent:delete:${id}`,
+          label: t('action.delete'),
+          kind: 'delete',
+          successMessage: t('common.success'),
+        },
+        async () => {
+          await api(`/api/admin/top-students/${id}`, { method: 'DELETE' });
+          setStudents((prev) => prev.filter((s) => s.id !== id));
+        },
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -229,9 +269,14 @@ export default function TopStudentsAdmin() {
             )}
           </div>
           {error && <div className="rounded-xl border border-fire-500/40 bg-fire-950/40 px-4 py-2 text-sm text-fire-300">{error}</div>}
-          <button type="submit" className="btn-fire w-full rounded-xl px-4 py-2.5 font-bold text-white">
+          <AsyncButton
+            type="submit"
+            actionKey={editing ? `topstudent:edit:${editing.id}` : 'topstudent:new'}
+            busy={uploading}
+            className="w-full rounded-xl px-4 py-2.5 font-bold"
+          >
             {t('common.save')}
-          </button>
+          </AsyncButton>
         </form>
       </Modal>
     </div>

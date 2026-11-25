@@ -38,6 +38,26 @@ export const en: TranslationKeys = {
     optional: 'Optional',
     loadingEditor: 'Loading editor...',
   },
+  action: {
+    pleaseWait: 'Another action cannot run until this one finishes.',
+    elapsed: 'Elapsed',
+    cancel: 'Cancel operation',
+    save: 'Saving…',
+    delete: 'Deleting…',
+    submit: 'Submitting…',
+    upload: 'Uploading…',
+    login: 'Signing in…',
+    logout: 'Signing out…',
+    processing: 'Working…',
+  },
+  toast: {
+    dismiss: 'Dismiss notification',
+  },
+  confirm: {
+    title: 'Confirm action',
+    deleteTitle: 'Confirm deletion',
+    deleteMessage: 'This item will be permanently deleted. Continue?',
+  },
   auth: {
     loginTitle: 'Sign in',
     registerTitle: 'Create Account',
@@ -260,6 +280,8 @@ export const en: TranslationKeys = {
     mcqScore: 'Multiple-choice score',
     finalScore: 'Final result',
     resultBreakdown: 'Result breakdown',
+    new: 'New',
+    addedOn: 'Added on',
   },
   note: {
     title: 'Notes',

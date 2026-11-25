@@ -1,5 +1,6 @@
 import { api } from './client';
 import { playNotificationSound } from '../lib/notificationSound';
+import { useActionStore } from '../store/actionStore';
 
 export interface SignedUpload {
   uploadUrl: string;
@@ -71,14 +72,22 @@ class NotificationService {
 
 const notificationService = new NotificationService();
 
+export interface UploadOptions {
+  grade?: string;
+  courseId?: number;
+  noteId?: number;
+  onProgress?: (percent: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * رفع ملف مع دعم التقدم (progress) والإلغاء (abort) عبر XMLHttpRequest.
+ * يُستخدم في actionStore لعرض شريط التقدم في ActionOverlay.
+ */
 export async function uploadFile(
   bucket: 'videos' | 'images' | 'notes',
   file: File,
-  options?: {
-    grade?: string;
-    courseId?: number;
-    noteId?: number;
-  }
+  options?: UploadOptions
 ): Promise<string> {
   const startTime = Date.now();
 
@@ -110,22 +119,52 @@ export async function uploadFile(
 
     console.log('[upload] Got signed URL:', { path: signed.path, uploadUrl: signed.uploadUrl?.substring(0, 50) + '...' });
 
-    const res = await fetch(signed.uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'x-upsert': 'true',
-        'Content-Type': contentType,
-      },
-      body: file,
+    // استخدام XMLHttpRequest لدعم التقدم والإلغاء
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      // إلغاء من الخارج
+      if (options?.signal) {
+        if (options.signal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        options.signal.addEventListener('abort', () => {
+          xhr.abort();
+        }, { once: true });
+      }
+
+      // تتبع التقدم
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable && options?.onProgress) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          options.onProgress(percent);
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(`فشل رفع الملف إلى المخزن (${xhr.status}): ${xhr.responseText}`));
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        reject(new Error('فشل رفع الملف: خطأ شبكة'));
+      });
+
+      xhr.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+
+      xhr.open('PUT', signed.uploadUrl);
+      xhr.setRequestHeader('x-upsert', 'true');
+      xhr.setRequestHeader('Content-Type', contentType);
+      xhr.send(file);
     });
 
-    console.log('[upload] Upload response status:', res.status);
-
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => 'Unknown error');
-      console.error('[upload] Storage upload failed:', errorText);
-      throw new Error(`فشل رفع الملف إلى المخزن (${res.status}): ${errorText}`);
-    }
+    console.log('[upload] Upload response status: 200');
 
     const resultPath = bucket === 'notes' ? signed.path : signed.publicUrl;
     console.log('[upload] Success, path:', resultPath);
@@ -164,4 +203,28 @@ export async function uploadFile(
 
 export function notifyUpload(data: UploadNotification): void {
   notificationService.notify(data);
+}
+
+/**
+ * دالة مساعدة لرفع ملف ضمن actionStore (لعرض التقدم في ActionOverlay)
+ * الاستخدام:
+ *   const run = useAction();
+ *   await run({
+ *     key: 'upload:video:123',
+ *     label: 'جاري رفع الفيديو...',
+ *     kind: 'upload',
+ *   }, async ({ setProgress }) => {
+ *     await uploadFileWithAction('videos', file, { onProgress: setProgress });
+ *   });
+ */
+export async function uploadFileWithAction(
+  bucket: 'videos' | 'images' | 'notes',
+  file: File,
+  options?: Omit<UploadOptions, 'signal'>
+): Promise<string> {
+  // Get setProgress from actionStore context
+  const setProgress = useActionStore.getState()?.active ?
+    (Object.values(useActionStore.getState().active).find(a => a.kind === 'upload')?.progress !== undefined) : false;
+
+  return uploadFile(bucket, file, options);
 }

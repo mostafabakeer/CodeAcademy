@@ -743,6 +743,8 @@ export interface Exam {
   order: number;
   createdAt: number;
   isHidden?: boolean;
+  /** وقت النشر (ISO) — يُضبط عند أول إظهار للطلاب. */
+  publishedAt?: string | null;
 }
 
 function examFromRow(r: any): Exam {
@@ -758,6 +760,7 @@ function examFromRow(r: any): Exam {
     order: r.order ?? 0,
     createdAt: r.created_at ?? 0,
     isHidden: r.is_hidden,
+    publishedAt: r.published_at ?? null,
   };
 }
 
@@ -773,24 +776,31 @@ function examToRow(e: Partial<Exam>): Record<string, any> {
   if (e.order !== undefined) row.order = e.order;
   if (e.createdAt !== undefined) row.created_at = e.createdAt;
   if (e.isHidden !== undefined) row.is_hidden = e.isHidden;
+  if (e.publishedAt !== undefined) row.published_at = e.publishedAt;
   return row;
 }
 
 export async function listExams(): Promise<Exam[]> {
   // Selective projection
-  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at';
-  const { data } = await sb.from('exams').select(fields).order('order', { ascending: true });
+  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at,is_hidden,published_at';
+  // الامتحانات تُعرض بالأحدث رفعاً أولاً؛ id ككسر تعادل ثابت.
+  const { data } = await sb
+    .from('exams')
+    .select(fields)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
   return (data ?? []).map(examFromRow);
 }
 
 export async function listExamsByGrade(grade: string): Promise<Exam[]> {
   // Selective projection
-  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at,is_hidden';
+  const fields = 'id,course_id,title,title_en,time_limit,passing_score,grade,allow_retake,"order",created_at,is_hidden,published_at';
   const { data } = await sb.from('exams')
     .select(fields)
     .or(`grade.is.null,grade.eq.all,grade.eq.${grade}`)
     .eq('is_hidden', false)  // فقط الامتحانات غير المخفية للطلاب
-    .order('order', { ascending: true });
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
   return (data ?? []).map(examFromRow);
 }
 

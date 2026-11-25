@@ -5,6 +5,9 @@ import { MotionConfig } from 'motion/react';
 import { LanguageProvider } from './i18n';
 import { AuthInitializer } from './components/AuthInitializer';
 import ErrorBoundary from './components/ErrorBoundary';
+import ActionOverlay from './components/ActionOverlay';
+import ToastProvider from './components/ToastProvider';
+import ConfirmDialog from './components/ConfirmDialog';
 import App from './App';
 // خطوط مستضافة محلياً (variable) — تلغي طلب Google Fonts الخارجي الحاجب للعرض.
 import '@fontsource-variable/cairo/wght.css';
@@ -42,6 +45,10 @@ createRoot(document.getElementById('root')!).render(
             <AuthInitializer>
               <App />
             </AuthInitializer>
+            {/* طبقات عامة تعمل فوق كل الصفحات */}
+            <ActionOverlay />
+            <ToastProvider />
+            <ConfirmDialog />
           </LanguageProvider>
         </MotionConfig>
       </ErrorBoundary>
