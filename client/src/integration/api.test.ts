@@ -19,10 +19,12 @@ describe('API Client', () => {
   });
 
   it('should add auth headers with bearer token from localStorage', async () => {
-    localStorage.setItem('dr_code_token', JSON.stringify({
+    // The code reads from 'dr_code_token_v1' with format {v:1, token, exp, savedAt}
+    localStorage.setItem('dr_code_token_v1', JSON.stringify({
       v: 1,
       token: 'test-bearer-token',
-      exp: Date.now() + 3600000,
+      exp: Math.floor((Date.now() + 3600000) / 1000),
+      savedAt: Date.now(),
     }));
 
     (fetch as any).mockResolvedValueOnce({

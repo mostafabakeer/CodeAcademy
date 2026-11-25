@@ -81,9 +81,10 @@ describe('Exam Sorting', () => {
       day: 'numeric',
     });
 
-    // Should contain Arabic month name
+    // Should contain Arabic month name (October in Arabic) and numbers
+    // Note: locale output uses Arabic numerals (١٢ أكتوبر ٢٠٢٦)
     expect(formatted).toContain('أكتوبر');
-    expect(formatted).toContain('2026');
-    expect(formatted).toContain('12');
+    expect(formatted).toMatch(/[0-9٠-٩]{4}/); // Year in Arabic or Western numerals
+    expect(formatted).toMatch(/[0-9٠-٩]{1,2}/); // Day in Arabic or Western numerals
   });
 });

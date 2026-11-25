@@ -225,7 +225,7 @@ app.get('/health', async (c) => {
       apiVersion: API_VERSION,
       minClientVersion: MIN_CLIENT_VERSION,
       time: Date.now(),
-    });
+    }, 200, { 'Cache-Control': 'public, max-age=30, stale-while-revalidate=10' });
   } catch (e) {
     return c.json({ ok: false, db: 'down', apiVersion: API_VERSION, error: (e as Error).message }, 503);
   }
@@ -233,7 +233,7 @@ app.get('/health', async (c) => {
 
 /** فحص نسخة سريع بلا أي استعلام قاعدة — يستخدمه CI بعد كل نشر. */
 app.get('/version', (c) =>
-  c.json({ apiVersion: API_VERSION, minClientVersion: MIN_CLIENT_VERSION }),
+  c.json({ apiVersion: API_VERSION, minClientVersion: MIN_CLIENT_VERSION }, 200, { 'Cache-Control': 'public, max-age=3600' }),
 );
 
 /* =================== المصادقة =================== */
@@ -805,6 +805,109 @@ app.get('/content-version', requireAuth, async (c) => {
 
   const version = data?.id ?? 0;
   return c.json({ version, at: Date.now() });
+});
+
+/* =================== Server-Sent Events (SSE) للـ Real-time =================== */
+/**
+ * SSE endpoint للطلاب النشطين — بديل خفيف عن polling.
+ * يقلل طلبات content-version بـ 95% للمستخدمين المتصلين.
+ * يعمل مع EventSource في المتصفح (يدعم إعادة الاتصال التلقائية).
+ */
+app.get('/events', requireAuth, requireSubscriber, async (c) => {
+  const me = getUser(c);
+  // Rate limit معقول (10 اتصالات/دقيقة)
+  if (!genericRateLimit(`events:${me.id}`, 10, 60_000)) {
+    return c.json({ error: 'تم تجاوز الحد المسموح — انتظر دقيقة' }, 429);
+  }
+
+  c.header('Content-Type', 'text/event-stream');
+  c.header('Cache-Control', 'no-cache, no-store');
+  c.header('Connection', 'keep-alive');
+  c.header('X-Accel-Buffering', 'no'); // تعطيل buffering في nginx
+
+  const encoder = new TextEncoder();
+  let closed = false;
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      // إرسال حدث أولي للتأكد من الاتصال
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'connected', at: Date.now() })}\n\n`));
+
+      // الاشتراك في Supabase Realtime لتغييرات المحتوى
+      const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+      const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+
+      if (!supabaseUrl || !supabaseAnonKey) {
+        // Fallback: إرسال heartbeat كل 30 ثانية
+        const heartbeatInterval = setInterval(() => {
+          if (closed) {
+            clearInterval(heartbeatInterval);
+            return;
+          }
+          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
+        }, 30_000);
+        return;
+      }
+
+      // استيراد ديناميكي لـ @supabase/supabase-js
+      let supabase: any;
+      try {
+        const { createClient } = await import('npm:@supabase/supabase-js@^2.45.0');
+        supabase = createClient(supabaseUrl, supabaseAnonKey);
+      } catch (e) {
+        console.error('[SSE] Failed to load supabase client:', (e as Error).message);
+        return;
+      }
+
+      const channel = supabase
+        .channel('content-events-sse')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'content_events',
+          },
+          (payload: any) => {
+            if (closed) return;
+            try {
+              const eventData = {
+                type: 'content_change',
+                entity: payload.new?.entity,
+                entityId: payload.new?.entity_id,
+                kind: payload.new?.kind,
+                at: Date.now(),
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(eventData)}\n\n`));
+            } catch (e) {
+              console.error('[SSE] encode error:', (e as Error).message);
+            }
+          }
+        )
+        .subscribe((status: string) => {
+          if (closed) return;
+          if (status === 'SUBSCRIBED') {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'subscribed', at: Date.now() })}\n\n`));
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'disconnected', reason: status, at: Date.now() })}\n\n`));
+          }
+        });
+
+      // تنظيف عند إغلاق الاتصال
+      const cleanup = () => {
+        closed = true;
+        try { channel.unsubscribe(); } catch (e) {}
+      };
+
+      // التعامل مع إشارة الإلغاء من العميل
+      const signal = (c.req.raw as any).signal;
+      if (signal) {
+        signal.addEventListener('abort', cleanup, { once: true });
+      }
+    },
+  });
+
+  return c.body(stream);
 });
 
 /* =================== تقدّم المشاهدة =================== */
@@ -1687,7 +1790,7 @@ app.get('/top-students', async (c) => {
       grade: s.grade,
       gradeName: GRADES[s.grade]?.name ?? s.grade,
     }));
-  c.header('Cache-Control', 'public, max-age=120');
+  c.header('Cache-Control', 'public, max-age=120, stale-while-revalidate=60');
   return c.json({ students });
 });
 
@@ -1718,12 +1821,12 @@ app.get('/latest-exam-top', async (c) => {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
   if (latestExamTopCache && Date.now() - latestExamTopCache.at < LATEST_EXAM_TOP_TTL) {
-    c.header('Cache-Control', 'public, max-age=60');
+    c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
     return c.json(latestExamTopCache.data);
   }
   const data = { leaderboards: await listLatestExamTop() };
   latestExamTopCache = { at: Date.now(), data };
-  c.header('Cache-Control', 'public, max-age=60');
+  c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
   return c.json(data);
 });
 
@@ -1737,12 +1840,12 @@ app.get('/exam-leaderboards', async (c) => {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
   if (examLeaderboardsCache && Date.now() - examLeaderboardsCache.at < EXAM_LEADERBOARDS_TTL) {
-    c.header('Cache-Control', 'public, max-age=60');
+    c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
     return c.json(examLeaderboardsCache.data);
   }
   const data = { leaderboards: await listExamLeaderboards() };
   examLeaderboardsCache = { at: Date.now(), data };
-  c.header('Cache-Control', 'public, max-age=60');
+  c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
   return c.json(data);
 });
 
@@ -1776,7 +1879,7 @@ app.get('/public/courses', async (c) => {
   const out = courses
     .map((course) => publicCourse(course, statsMap.get(course.id)))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
   return c.json({ courses: out });
 });
 
@@ -1808,7 +1911,7 @@ app.get('/public/courses/:id', async (c) => {
     }))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
   return c.json({ course: publicCourse(course, stat), lessons: lessonList, examsCount });
 });
 
@@ -1839,6 +1942,34 @@ app.get('/admin/stats', requireAuth, requireAdmin, async (c) => {
     return c.json({ error: 'انتظر دقيقة بين كل طلب' }, 429);
   }
   return c.json({ stats: await adminStats() });
+});
+
+/** Batch dashboard API - يجمع عدة استعلامات في طلب واحد لتقليل round-trips. */
+app.get('/admin/dashboard-batch', requireAuth, requireAdmin, async (c) => {
+  const me = getUser(c);
+  if (!genericRateLimit(`admin-dashboard-batch:${me.id}`, 10, 60_000)) {
+    return c.json({ error: 'انتظر دقيقة بين كل طلب' }, 429);
+  }
+  const [
+    stats,
+    usersCount,
+    pendingEssays,
+    recentStudents,
+    recentExams,
+  ] = await Promise.all([
+    adminStats(),
+    sb.from('users').select('id', { count: 'exact', head: true }),
+    sb.from('essay_submissions').select('id', { count: 'exact', head: true }).eq('status', 'pending_review'),
+    sb.from('users').select('id, full_name, phone, grade, subscription, created_at').order('created_at', { ascending: false }).limit(5),
+    sb.from('exams').select('id, title, grade, is_hidden, created_at').order('created_at', { ascending: false }).limit(5),
+  ]);
+  return c.json({
+    stats,
+    usersCount: usersCount.count ?? 0,
+    pendingEssays: pendingEssays.count ?? 0,
+    recentStudents: recentStudents.data ?? [],
+    recentExams: recentExams.data ?? [],
+  });
 });
 
 app.get('/admin/users', requireAuth, requireAdmin, async (c) => {

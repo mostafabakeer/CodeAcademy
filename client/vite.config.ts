@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import compression from 'vite-plugin-compression';
 
 export default defineConfig({
   // esbuild خيار top-level في Vite 6 (ليس build.esbuild ولا build.esbuildOptions).
@@ -23,6 +24,8 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    compression({ algorithm: 'gzip', ext: '.gz' }),
+    compression({ algorithm: 'brotliCompress', ext: '.br' }),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['pwa-192.png', 'pwa-512.png', 'pwa-maskable-512.png'],

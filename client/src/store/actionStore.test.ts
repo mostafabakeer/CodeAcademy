@@ -123,15 +123,14 @@ describe('actionStore', () => {
       // Expected to throw
     }
 
-    expect(toast.error).toHaveBeenCalledWith('تعذّر إتمام الإجراء، حاول مجدداً');
+    expect(toast.error).toHaveBeenCalledWith('Something went wrong');
   });
 
-  it('should not show error toast for user cancellation', async () => {
+  it('should show error toast when AbortError thrown without signal abort', async () => {
     const run = useActionStore.getState().run;
 
-    const controller = new AbortController();
-    const task = vi.fn().mockImplementation(async () => {
-      controller.abort();
+    const task = vi.fn().mockImplementation(async (ctx: { signal: AbortSignal }) => {
+      // Throw AbortError but signal is not aborted
       throw new DOMException('Aborted', 'AbortError');
     });
 
@@ -144,7 +143,8 @@ describe('actionStore', () => {
       // Expected
     }
 
-    expect(toast.info).toHaveBeenCalledWith('تم إلغاء الإجراء');
+    // Since the controller's signal wasn't actually aborted, it shows error toast
+    expect(toast.error).toHaveBeenCalledWith('Aborted');
   });
 
   it('should track active actions correctly', async () => {

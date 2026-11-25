@@ -10,6 +10,38 @@ const DEFAULT_POLLING_INTERVAL = 20_000; // 20 ثانية
 
 export type ContentSyncStrategy = 'polling' | 'realtime' | 'off';
 
+/**
+ * يكتشف استراتيجية المزامنة بناءً على متغيرات البيئة.
+ * يمكن استخدامه مباشرة في الاختبارات دون استدعاء хуки React.
+ */
+export function detectStrategy(): ContentSyncStrategy {
+  if (typeof window !== 'undefined') {
+    const viteEnv = (window as any).VITE_CONTENT_SYNC;
+    if (viteEnv === 'off') return 'off';
+    if (viteEnv === 'realtime') return 'realtime';
+  }
+  if (typeof window !== 'undefined' && (window as any).VITE_SUPABASE_ANON_KEY) {
+    return 'realtime';
+  }
+  return 'polling';
+}
+
+/**
+ * يبث تغيير محتوى عبر BroadcastChannel للتبويبات الأخرى.
+ * يمكن استخدامه مباشرة في الاختبارات دون استدعاء хуки React.
+ */
+export function signalContentChange(entity: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.BroadcastChannel) {
+      const channel = new BroadcastChannel('dr-content-sync');
+      channel.postMessage({ entity });
+      channel.close();
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
 export interface ContentSyncOptions {
   strategy?: ContentSyncStrategy;
   onChange?: (entity: string) => void;
@@ -22,30 +54,6 @@ export interface ContentSyncState {
   lastSyncAt: number | null;
   lastKnownVersion: number | null;
   error?: string | null;
-}
-
-function detectStrategy(): ContentSyncStrategy {
-  if (typeof window !== 'undefined') {
-    const viteEnv = (window as any).VITE_CONTENT_SYNC;
-    if (viteEnv === 'off') return 'off';
-    if (viteEnv === 'realtime') return 'realtime';
-  }
-  if (typeof window !== 'undefined' && (window as any).VITE_SUPABASE_ANON_KEY) {
-    return 'realtime';
-  }
-  return 'polling';
-}
-
-function signalContentChange(entity: string): void {
-  try {
-    if (typeof window !== 'undefined' && window.BroadcastChannel) {
-      const channel = new BroadcastChannel('dr-content-sync');
-      channel.postMessage({ entity });
-      channel.close();
-    }
-  } catch (e) {
-    // ignore
-  }
 }
 
 export function initiateContentSync(

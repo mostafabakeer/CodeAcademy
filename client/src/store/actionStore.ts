@@ -57,6 +57,9 @@ interface ActionState {
 
 const controllers = new Map<string, AbortController>();
 
+// Default timeout for blocking actions (5 minutes)
+const DEFAULT_ACTION_TIMEOUT_MS = 5 * 60_000;
+
 export const useActionStore = create<ActionState>((set, get) => ({
   active: {},
 
@@ -88,6 +91,9 @@ export const useActionStore = create<ActionState>((set, get) => ({
     const controller = new AbortController();
     controllers.set(key, controller);
 
+    // Apply default timeout for blocking actions if not specified
+    const effectiveTimeoutMs = timeoutMs ?? (blocking ? DEFAULT_ACTION_TIMEOUT_MS : undefined);
+
     set((s) => ({
       active: {
         ...s.active,
@@ -104,8 +110,8 @@ export const useActionStore = create<ActionState>((set, get) => ({
     };
 
     let timer: ReturnType<typeof setTimeout> | undefined;
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => controller.abort(), timeoutMs);
+    if (effectiveTimeoutMs && effectiveTimeoutMs > 0) {
+      timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
     }
 
     try {

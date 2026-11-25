@@ -20,7 +20,7 @@ vi.mock('../store/toastStore', () => ({
 }));
 
 import { api } from '../api/client';
-import { initiateContentSync } from './contentSync';
+import { detectStrategy, signalContentChange } from './contentSync';
 
 describe('contentSync', () => {
   beforeEach(() => {
@@ -32,91 +32,77 @@ describe('contentSync', () => {
   });
 
   it('should detect polling strategy by default', () => {
-    const { state } = initiateContentSync();
-    expect(state.strategy).toBe('polling');
+    expect(detectStrategy()).toBe('polling');
   });
 
   it('should detect realtime strategy when VITE_SUPABASE_ANON_KEY is present', () => {
     (window as any).VITE_SUPABASE_ANON_KEY = 'test-key';
     (window as any).VITE_SUPABASE_URL = 'https://test.supabase.co';
 
-    const { state } = initiateContentSync();
-    expect(state.strategy).toBe('realtime');
+    expect(detectStrategy()).toBe('realtime');
   });
 
   it('should detect off strategy when VITE_CONTENT_SYNC=off', () => {
     (window as any).VITE_CONTENT_SYNC = 'off';
 
-    const { state } = initiateContentSync();
-    expect(state.strategy).toBe('off');
+    expect(detectStrategy()).toBe('off');
   });
 
-  it('should track version changes via polling', async () => {
-    (api as any).mockResolvedValueOnce({ version: 1 });
-    (api as any).mockResolvedValueOnce({ version: 2 });
+  it('should signal content change via BroadcastChannel', () => {
+    const mockPostMessage = vi.fn();
+    const originalBC = window.BroadcastChannel;
 
-    const { state, refresh } = initiateContentSync({ pollingInterval: 10 });
+    // Mock BroadcastChannel
+    class MockBroadcastChannel {
+      name: string;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onmessageerror: ((event: MessageEvent) => void) | null = null;
 
-    // Wait for first poll
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(state.lastKnownVersion).toBe(1);
+      constructor(name: string) {
+        this.name = name;
+      }
 
-    // Wait for second poll
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(state.lastKnownVersion).toBe(2);
-  });
+      postMessage(message: any): void {
+        mockPostMessage(message);
+      }
 
-  it('should call listener when version changes', async () => {
-    (api as any).mockResolvedValueOnce({ version: 1 });
-    (api as any).mockResolvedValueOnce({ version: 2 });
+      close(): void {
+        this.onmessage = null;
+        this.onmessageerror = null;
+      }
+    }
 
-    const listener = vi.fn();
-    const { addListener } = initiateContentSync({
-      pollingInterval: 10,
-      onChange: listener,
-    });
-
-    // Wait for first poll
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    // Wait for second poll
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(listener).toHaveBeenCalledWith('content');
-  });
-
-  it('should stop polling when destroyed', async () => {
-    (api as any).mockResolvedValue({ version: 1 });
-
-    const { destroy } = initiateContentSync({ pollingInterval: 10 });
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect((api as any)).toHaveBeenCalled();
-
-    destroy();
-    vi.clearAllMocks();
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect((api as any)).not.toHaveBeenCalled();
-  });
-
-  it('should not poll when tab is hidden', async () => {
-    (api as any).mockResolvedValue({ version: 1 });
-
-    const originalVisibility = document.visibilityState;
-    Object.defineProperty(document, 'visibilityState', {
-      value: 'hidden',
+    Object.defineProperty(window, 'BroadcastChannel', {
+      value: MockBroadcastChannel,
+      writable: true,
       configurable: true,
     });
 
-    const { destroy } = initiateContentSync({ pollingInterval: 10 });
+    signalContentChange('exams');
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect((api as any)).not.toHaveBeenCalled();
+    expect(mockPostMessage).toHaveBeenCalledWith({ entity: 'exams' });
 
-    destroy();
-    Object.defineProperty(document, 'visibilityState', {
-      value: originalVisibility,
+    Object.defineProperty(window, 'BroadcastChannel', {
+      value: originalBC,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it('should handle missing BroadcastChannel gracefully', () => {
+    const originalBC = window.BroadcastChannel;
+    Object.defineProperty(window, 'BroadcastChannel', {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+
+    // Should not throw
+    expect(() => signalContentChange('exams')).not.toThrow();
+
+    Object.defineProperty(window, 'BroadcastChannel', {
+      value: originalBC,
+      writable: true,
       configurable: true,
     });
   });

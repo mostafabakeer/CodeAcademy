@@ -119,9 +119,11 @@ export async function uploadFile(
 
     console.log('[upload] Got signed URL:', { path: signed.path, uploadUrl: signed.uploadUrl?.substring(0, 50) + '...' });
 
-    // استخدام XMLHttpRequest لدعم التقدم والإلغاء
+    // استخدام XMLHttpRequest لدعم التقدم والإلغاء مع timeout
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      const UPLOAD_TIMEOUT_MS = 120_000; // 2 دقائق timeout للرفع
+      let timeoutId: ReturnType<typeof setTimeout>;
 
       // إلغاء من الخارج
       if (options?.signal) {
@@ -131,6 +133,7 @@ export async function uploadFile(
         }
         options.signal.addEventListener('abort', () => {
           xhr.abort();
+          clearTimeout(timeoutId);
         }, { once: true });
       }
 
@@ -143,6 +146,7 @@ export async function uploadFile(
       });
 
       xhr.addEventListener('load', () => {
+        clearTimeout(timeoutId);
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve();
         } else {
@@ -151,10 +155,12 @@ export async function uploadFile(
       });
 
       xhr.addEventListener('error', () => {
+        clearTimeout(timeoutId);
         reject(new Error('فشل رفع الملف: خطأ شبكة'));
       });
 
       xhr.addEventListener('abort', () => {
+        clearTimeout(timeoutId);
         reject(new DOMException('Aborted', 'AbortError'));
       });
 
@@ -162,6 +168,12 @@ export async function uploadFile(
       xhr.setRequestHeader('x-upsert', 'true');
       xhr.setRequestHeader('Content-Type', contentType);
       xhr.send(file);
+
+      // تعيين timeout
+      timeoutId = setTimeout(() => {
+        xhr.abort();
+        reject(new Error('انتهت مهلة رفع الملف (120 ثانية) — تحقق من اتصالك بالإنترنت وحاول مجدداً'));
+      }, UPLOAD_TIMEOUT_MS);
     });
 
     console.log('[upload] Upload response status: 200');
