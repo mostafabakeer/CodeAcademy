@@ -17,9 +17,7 @@ export default function ForgotPassword() {
   const [error, setError] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [code, setCode] = useState('');
   const [done, setDone] = useState(false);
-  const [codeExpired, setCodeExpired] = useState(false);
 
   const submitRequest = async (e: FormEvent) => {
     e.preventDefault();
@@ -46,10 +44,6 @@ export default function ForgotPassword() {
       );
       setStatus(d.status);
       if (d.status === 'none') setError(t('auth.forgotNoRequest'));
-      // If code expired, show message and allow resend
-      if (d.status === 'rejected' || d.status === 'none') {
-        setCodeExpired(true);
-      }
     } catch (err) {
       if (!silent) setError((err as Error).message);
     } finally {
@@ -60,14 +54,6 @@ export default function ForgotPassword() {
   const savePassword = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    // Validate code: exactly 6 digits
-    const codeTrimmed = code.trim();
-    if (
-      !codeTrimmed ||
-      codeTrimmed.length !== 6 ||
-      !/^\d{6}$/.test(codeTrimmed)
-    )
-      return setError(t('auth.forgotCodeWrong'));
     // Validate new password: at least 6 characters
     if (!newPassword || newPassword.length < 6)
       return setError(t('auth.forgotPasswordShort'));
@@ -81,7 +67,7 @@ export default function ForgotPassword() {
         { ok: boolean }
       >('/api/auth/forgot-password/complete', {
         method: 'POST',
-        body: { phone, password: newPassword, code: codeTrimmed },
+        body: { phone, password: newPassword },
       });
       if (res?.ok) {
         setDone(true);
@@ -90,12 +76,10 @@ export default function ForgotPassword() {
       }
     } catch (err) {
       const apiErr = err as Error;
-      // Distinguish error types for better UX
-      if (apiErr.message.includes('expired')) {
-        setCodeExpired(true);
-        setError(t('auth.forgotCodeExpired'));
-      } else if (apiErr.message.includes(' incorrect')) {
-        setError(t('auth.forgotCodeWrong'));
+      if (apiErr.message.includes('not active') || apiErr.message.includes('غير مفعل')) {
+        setError(t('auth.forgotNotActive'));
+      } else if (apiErr.message.includes('pending') || apiErr.message.includes('بانتظار')) {
+        setError(t('auth.forgotStepPendingMsg'));
       } else {
         setError(apiErr.message || t('auth.forgotGenericError'));
       }
@@ -142,38 +126,14 @@ export default function ForgotPassword() {
   // Reset form state when leaving the approved/form state
   useEffect(() => {
     if (status !== 'approved' && status !== 'pending') {
-      setCode('');
       setNewPassword('');
       setConfirmPassword('');
       setError('');
-      setCodeExpired(false);
     }
   }, [status]);
 
   const renderApprovedForm = (
     <form onSubmit={savePassword} className="space-y-4">
-      <div>
-        <label className="mb-1.5 block text-sm font-semibold text-gray-300">
-          {t('auth.forgotCodeLabel')}
-        </label>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          dir="ltr"
-          maxLength={6}
-          className="input-fire w-full rounded-xl px-4 py-3 text-center text-lg font-bold tracking-[0.5em]"
-          placeholder={t('auth.forgotCodePlaceholder')}
-          value={code}
-          onChange={(e) => {
-            const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-            setCode(val);
-          }}
-        />
-        <p className="mt-1.5 text-xs leading-relaxed text-gray-400">
-          {t('auth.forgotCodeHint')}
-        </p>
-      </div>
       <div>
         <label className="mb-1.5 block text-sm font-semibold text-gray-300">
           {t('auth.forgotNewPassword')}
@@ -235,28 +195,6 @@ export default function ForgotPassword() {
       </button>
     </div>
   );
-
-  // Show resend code message when code is expired
-  const renderCodeExpiredNotice = () => {
-    if (!codeExpired) return null;
-    return (
-      <div className="mt-3 p-3 rounded-xl bg-fire-500/15 border border-fire-500/30 text-sm">
-        {t('auth.forgotCodeExpiredNotice')}
-        <br />
-        <a
-          onClick={(e) => {
-            e.preventDefault();
-            // Reset the code expired state - user can request new code
-            // by going back to the phone entry state
-            setCodeExpired(false);
-          }}
-          className="text-fire-300 hover:text-fire-300 underline"
-        >
-          {t('auth.resendCode')}
-        </a>
-      </div>
-    );
-  };
 
   const renderBody = () => {
     if (done) {
@@ -349,8 +287,6 @@ export default function ForgotPassword() {
               {error}
             </div>
           )}
-
-          {renderCodeExpiredNotice()}
 
           {renderBody()}
         </div>

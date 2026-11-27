@@ -432,39 +432,18 @@ app.get('/auth/forgot-password/status', async (c) => {
   if (!reset) return c.json({ status: 'none' });
   return c.json({
     status: reset.status,
-    codeRequired: reset.status === 'approved',
-    codeExpiresAt: reset.codeExpiresAt ?? null,
   });
 });
 
-const PASSWORD_RESET_CODE_TTL_MS = 60 * 60 * 1000; // صلاحية الكود: ساعة
-
-/** كود تفعيل عشوائي من 6 أرقام. */
-function randomResetCode(): string {
-  const buf = new Uint8Array(4);
-  crypto.getRandomValues(buf);
-  const n = (buf[0] << 16) | (buf[1] << 8) | buf[2];
-  return String(100000 + (n % 900000));
-}
-
-/** مقارنة نصية ثابتة الزمن لمقاومة قياس التوقيت. */
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-/** الطالب يضع كلمة السر الجديدة بعد موافقة الإدارة — يتطلب كود التفعيل المرسل عبر واتساب. */
+/** الطالب يضع كلمة السر الجديدة بعد موافقة الإدارة — لا يحتاج كود، فقط رقم التليفون وكلمة السر الجديدة. */
 app.post('/auth/forgot-password/complete', async (c) => {
   const clientIp = ipOf(c.req.raw);
   if (!genericRateLimit(`pr-complete-ip:${clientIp}`, 5, 60_000)) {
     return c.json({ error: 'محاولات كثيرة، انتظر دقيقة' }, 429);
   }
-  const { phone, password, code } = await c.req.json().catch(() => ({}));
+  const { phone, password } = await c.req.json().catch(() => ({}));
   if (!phone || typeof phone !== 'string') return c.json({ error: 'رقم التليفون مطلوب' }, 400);
   if (!password || String(password).length < 6) return c.json({ error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
-  if (!code || !/^\d{6}$/.test(String(code))) return c.json({ error: 'الكود من الإدارة غير صحيح (6 أرقام)' }, 400);
   const normPhone = normalizePhone(phone);
   if (!normPhone) return c.json({ error: 'رقم التليفون غير صحيح' }, 400);
 
@@ -480,13 +459,7 @@ app.post('/auth/forgot-password/complete', async (c) => {
   if (!reset) return c.json({ error: 'لا يوجد طلب نشط لتغيير كلمة السر' }, 400);
   if (reset.status === 'pending') return c.json({ error: 'الطلب لم يتم تفعيله من الإدارة بعد' }, 400);
   if (reset.status === 'completed') return c.json({ error: 'تم استخدام هذا الطلب بالفعل. سجّل الدخول بكلمة السر الجديدة' }, 400);
-  if (!reset.resetCode) return c.json({ error: 'لم يُولَّد كود لهذا الطلب، تواصل مع الإدارة' }, 500);
-  if (reset.codeExpiresAt && reset.codeExpiresAt < Date.now()) {
-    return c.json({ error: 'انتهت صلاحية الكود، أرسل طلباً جديداً لتغيير كلمة السر' }, 400);
-  }
-  if (!safeEqual(reset.resetCode, String(code))) {
-    return c.json({ error: 'الكود غير صحيح، تحقق منه مع الإدارة' }, 400);
-  }
+  if (reset.status !== 'approved') return c.json({ error: 'طلب تغيير كلمة السر غير مفعل' }, 400);
 
   const passwordHash = await hashPassword(String(password));
   await updateUser(user.id, { passwordHash });
@@ -2388,7 +2361,7 @@ app.get('/admin/password-resets/diagnose', requireAuth, requireAdmin, async (c) 
   return c.json(diag);
 });
 
-/** موافقة على طلب تغيير كلمة السر → يولَّد كود من 6 أرقام (صلاحية ساعة) يُعاد مع بيانات الطالب لتمكين واتساب. */
+/** موافقة على طلب تغيير كلمة السر → يغير الحالة إلى approved مباشرة (بدون كود)، يمكن للطالب تغيير كلمة السر فوراً. */
 app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'معرف غير صحيح' }, 400);
@@ -2398,8 +2371,7 @@ app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async 
   if (!req) return c.json({ error: 'الطلب غير موجود' }, 404);
   if (req.status === 'completed') return c.json({ error: 'تم إتمام هذا الطلب بالفعل' }, 400);
 
-  const code = randomResetCode();
-  const updated = await approvePasswordReset(id, code, PASSWORD_RESET_CODE_TTL_MS);
+  const updated = await approvePasswordReset(id);
   if (!updated) return c.json({ error: 'فشل تحديث الحالة' }, 500);
 
   const user = await findUserById(req.userId);
@@ -2407,8 +2379,6 @@ app.post('/admin/password-resets/:id/approve', requireAuth, requireAdmin, async 
     ok: true,
     fullName: user?.fullName ?? req.fullName,
     phone: user?.phone ?? req.phone,
-    code,
-    codeExpiresAt: updated.codeExpiresAt,
   });
 });
 

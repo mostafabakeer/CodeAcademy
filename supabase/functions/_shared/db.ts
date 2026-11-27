@@ -283,24 +283,24 @@ export async function updatePasswordResetStatus(id: number, status: ResetStatus)
   return data ? resetFromRow(data) : null;
 }
 
-/** موافقة على طلب → توليد كود تفعيل من 6 أرقام مع صلاحية (TTL). تعود بالطلب المحدَّث. */
-export async function approvePasswordReset(id: number, code: string, ttlMs: number): Promise<PasswordReset | null> {
+/** موافقة على طلب → يغير الحالة إلى approved (بدون كود). تعود بالطلب المحدَّث. */
+export async function approvePasswordReset(id: number): Promise<PasswordReset | null> {
   const at = now();
   const { data } = await sb
     .from('password_resets')
-    .update({ status: 'approved', reset_code: code, code_expires_at: at + ttlMs, updated_at: at })
+    .update({ status: 'approved', updated_at: at })
     .eq('id', id)
     .select()
     .maybeSingle();
   return data ? resetFromRow(data) : null;
 }
 
-/** إكمال طلب → تصفير الكود (استخدام واحد فقط). */
+/** إكمال طلب → يغير الحالة إلى completed. */
 export async function completePasswordReset(id: number): Promise<PasswordReset | null> {
   const at = now();
   const { data } = await sb
     .from('password_resets')
-    .update({ status: 'completed', reset_code: null, code_expires_at: null, updated_at: at })
+    .update({ status: 'completed', updated_at: at })
     .eq('id', id)
     .select()
     .maybeSingle();
