@@ -2778,10 +2778,19 @@ app.post('/admin/top-students', requireAuth, requireAdmin, async (c) => {
   const b = await c.req.json().catch(() => ({}));
   if (!bodyText(b.name)) return c.json({ error: 'اسم الطالب مطلوب' }, 400);
   if (!TOP_GRADES.includes(b.grade)) return c.json({ error: 'الصف الدراسي غير صحيح' }, 400);
+  const rank = Math.max(1, Number(b.rank) || 1);
+
+  // التحقق من تكرار الترتيب في نفس الصف
+  const existing = await listTopStudents();
+  const duplicate = existing.some(s => s.grade === b.grade && s.rank === rank);
+  if (duplicate) {
+    return c.json({ error: 'هذا الترتيب مستخدم بالفعل في نفس الصف' }, 409);
+  }
+
   const student = await createTopStudent({
     name: bodyText(b.name),
     image: bodyText(b.image),
-    rank: Math.max(1, Number(b.rank) || 1),
+    rank,
     grade: b.grade,
     createdAt: Date.now(),
   });
@@ -2793,6 +2802,21 @@ app.put('/admin/top-students/:id', requireAuth, requireAdmin, async (c) => {
   const student = await findTopStudentById(id);
   if (!student) return c.json({ error: 'الطالب غير موجود' }, 404);
   const b = await c.req.json().catch(() => ({}));
+
+  // التحقق من تكرار الترتيب في نفس الصف (باستثناء الطالب الحالي)
+  if (b.rank !== undefined || b.grade !== undefined) {
+    const newRank = b.rank !== undefined ? Math.max(1, Number(b.rank) || 1) : student.rank;
+    const newGrade = b.grade !== undefined ? b.grade : student.grade;
+
+    if (newGrade !== student.grade || newRank !== student.rank) {
+      const existing = await listTopStudents();
+      const duplicate = existing.some(s => s.id !== id && s.grade === newGrade && s.rank === newRank);
+      if (duplicate) {
+        return c.json({ error: 'هذا الترتيب مستخدم بالفعل في نفس الصف' }, 409);
+      }
+    }
+  }
+
   const updated = await updateTopStudent(id, {
     name: b.name !== undefined ? bodyText(b.name) : student.name,
     image: b.image !== undefined ? bodyText(b.image) : student.image,

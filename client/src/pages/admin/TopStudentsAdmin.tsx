@@ -25,6 +25,7 @@ interface ApiResponse<T> {
   students?: T[];
   ok?: boolean;
   error?: string;
+  status?: number;
 }
 
 const empty = { name: '', image: '', rank: 1, grade: 'bac1' };
@@ -148,7 +149,7 @@ export default function TopStudentsAdmin() {
     if (!isGradeKey(form.grade)) return setError(t('admin.gradeInvalid'));
     if (form.image && !validateImageUrl(form.image)) return setError(t('admin.imageInvalid'));
 
-    // Check duplicate rank in same grade
+    // Check duplicate rank in same grade (local check first for immediate feedback)
     const excludeId = editing?.id;
     if (checkDuplicateRank(form.rank, form.grade, excludeId)) {
       return setError(t('admin.rankDuplicate'));
@@ -195,8 +196,19 @@ export default function TopStudentsAdmin() {
           setOpen(false);
         },
       );
-    } catch (err) {
-      setError((err as Error).message);
+    } catch (err: any) {
+      // التعامل مع أنواع الأخطاء المختلفة
+      if (err?.status === 409 || err?.message?.includes('هذا الترتيب مستخدم') || err?.message?.includes('already used')) {
+        setError(t('admin.rankDuplicate'));
+      } else if (err?.status === 400 || err?.message?.includes('الصف الدراسي') || err?.message?.includes('grade')) {
+        setError(t('admin.gradeInvalid'));
+      } else if (err?.status === 401) {
+        setError('انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
+      } else if (err?.status === 403) {
+        setError('ليس لديك صلاحية لهذا الإجراء');
+      } else {
+        setError(err?.message || t('errors.generic'));
+      }
     } finally {
       setSubmitting(false);
     }
