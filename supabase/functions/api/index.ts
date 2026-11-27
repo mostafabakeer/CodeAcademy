@@ -520,11 +520,12 @@ function contentFingerprint(str: string): string {
 }
 
 /**
- * كاش أسئلة الامتحان (60 ثانية لكل امتحان، مشترك بين كل الطلاب).
+ * كاش أسئلة الامتحان (15 ثانية لكل امتحان، مشترك بين كل الطلاب).
  * كل من يفتح الامتحان كان يعيد استعلام نفس الصفوف؛ الآن يُقرأ مرة واحدة
- * لكل نسخة دالة خلال الدقيقة. يُبطَل فوراً عند أي تعديل على الأسئلة/الامتحانات.
+ * لكل نسخة دالة خلال 15 ثانية. يُبطَل فوراً عند أي تعديل على الأسئلة/الامتحانات.
+ * مخفض من 60s إلى 15s لتحسين زمن التحديث مع الحفاظ على الحماية من الحمل.
  */
-const EXAM_QUESTIONS_TTL = 60_000;
+const EXAM_QUESTIONS_TTL = 15_000;
 const examQuestionsCache = new Map<number, { at: number; data: Question[] }>();
 
 /** إبطال كاش المحتوى فور أي تعديل من الأدمن (دروس/امتحانات/مذكرات/كورسات/أسئلة). */
@@ -1781,20 +1782,36 @@ app.get('/top-students', async (c) => {
   if (!genericRateLimit(`top-students:${clientIp}`, 60, 60_000)) {
     return c.json({ error: 'طلبات كثيرة، انتظر دقيقة' }, 429);
   }
+  const url = new URL(c.req.url);
+  const search = url.searchParams.get('search') ?? '';
+  const grade = url.searchParams.get('grade') ?? 'all';
+
   const items = await listTopStudents();
-  const students = items
+  let students = items
     .filter((s) => TOP_GRADES.includes(s.grade))
-    .sort((a, b) => (a.grade === b.grade ? (a.rank ?? 0) - (b.rank ?? 0) : 0))
-    .map((s) => ({
-      id: s.id,
-      name: s.name,
-      image: s.image ?? '',
-      rank: Number(s.rank) || 0,
-      grade: s.grade,
-      gradeName: GRADES[s.grade]?.name ?? s.grade,
-    }));
+    .sort((a, b) => (a.grade === b.grade ? (a.rank ?? 0) - (b.rank ?? 0) : 0));
+
+  // فلترة حسب البحث
+  if (search.trim()) {
+    const searchLower = search.trim().toLowerCase();
+    students = students.filter((s) => s.name.toLowerCase().includes(searchLower));
+  }
+
+  // فلترة حسب الصف
+  if (grade !== 'all') {
+    students = students.filter((s) => s.grade === grade);
+  }
+
+  const out = students.map((s) => ({
+    id: s.id,
+    name: s.name,
+    image: s.image ?? '',
+    rank: Number(s.rank) || 0,
+    grade: s.grade,
+    gradeName: GRADES[s.grade]?.name ?? s.grade,
+  }));
   c.header('Cache-Control', 'public, max-age=120, stale-while-revalidate=60');
-  return c.json({ students });
+  return c.json({ students: out });
 });
 
 /** أوائل ٣ من "الامتحان الأخير" لكل مرحلة (فرعي) — عام مثل /top-students، بكاش 60 ثانية. */
@@ -2032,24 +2049,36 @@ app.post('/admin/session/epoch', requireAuth, requireAdmin, async (c) => {
   return c.json({ ok: true, epoch });
 });
 
-/** نسخة كاملة من كل المستخدمين مع إحصائياتهم في طلب واحد (بدون pagination أو استعلامات count) —
- *  تُستخدم في لوحة الطلبة حيث تتم الفلترة والبحث والترقيم في المتصفح لتخفيف الضغط على الباك اند.
- *  limit إلزامي (1–500) حتى لا يُفرَّغ كل الجداول بأمر واحد. */
+/** نسخة كاملة من كل المستخدمين مع إحصائياتهم — تدعم pagination، البحث، والفلترة على الخادم. */
 app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
   const me = getUser(c);
-  if (!genericRateLimit(`admin-users-all:${me.id}`, 1, 30_000)) {
-    return c.json({ error: 'انتظر 30 ثانية بين كل طلب' }, 429);
+  // زيادة rate limit إلى 10 طلبات في الدقيقة
+  if (!genericRateLimit(`admin-users-all:${me.id}`, 10, 60_000)) {
+    return c.json({ error: 'انتظر دقيقة بين كل طلب' }, 429);
   }
+
   const url = new URL(c.req.url);
-  const rawLimit = url.searchParams.get('limit');
-  const limit = Number(rawLimit);
-  if (!Number.isInteger(limit) || limit <= 0 || limit > 500) {
-    return c.json({ error: 'حقل limit مطلوب (رقم صحيح بين 1 و 500)' }, 400);
-  }
-  const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
-  const all = await listAllUsers({ limit, offset });
-  const statsMap = await computeStudentStatsBatch(all.map((u) => u.id));
-  const out = all.map((u) => {
+  const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+  const search = url.searchParams.get('search') ?? undefined;
+  const filter = url.searchParams.get('filter') ?? 'all';
+  const grade = url.searchParams.get('grade') ?? 'all';
+
+  // استخدام listUsers التي تدعم pagination والفلترة
+  const result = await listUsers({
+    page,
+    limit,
+    search,
+    role: filter === 'subscribed' || filter === 'unsubscribed' ? 'student' : undefined,
+    grade: grade !== 'all' ? grade : undefined,
+    subscription: filter === 'subscribed' ? true : filter === 'unsubscribed' ? false : undefined,
+    blocked: filter === 'blocked' ? true : undefined,
+  });
+
+  // جلب الإحصائيات للمستخدمين في الصفحة الحالية فقط
+  const statsMap = await computeStudentStatsBatch(result.users.map((u) => u.id));
+
+  const out = result.users.map((u) => {
     const stats = statsMap.get(u.id);
     return {
       id: u.id,
@@ -2072,8 +2101,14 @@ app.get('/admin/users/all', requireAuth, requireAdmin, async (c) => {
       examScores: stats?.examScores ?? [],
     };
   }).sort((a, b) => b.points - a.points);
-  const { count } = await sb.from('users').select('id', { count: 'exact', head: true });
-  return c.json({ users: out, total: count ?? 0, page: Math.floor(offset / limit) + 1, limit, offset });
+
+  return c.json({
+    users: out,
+    total: result.total,
+    page: result.page,
+    limit: result.limit,
+    counts: result.counts
+  });
 });
 
 app.get('/admin/lessons', requireAuth, requireAdmin, async (c) => {

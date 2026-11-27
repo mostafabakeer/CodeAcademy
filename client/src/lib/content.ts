@@ -462,15 +462,28 @@ export interface ExamListItem extends Exam {
 const TOP_KEY = 'topStudents';
 const TOP_TTL = 5 * 60_000;
 
-export function loadTopStudents(force = false): Promise<TopStudent[]> {
-  if (!force) {
+export interface TopStudentsFilters {
+  search?: string;
+  grade?: string;
+}
+
+export function loadTopStudents(filters: TopStudentsFilters = {}, force = false): Promise<TopStudent[]> {
+  const { search, grade } = filters;
+  // لا نستخدم الكاش إذا كانت هناك فلاتر
+  if (!force && !search && !grade) {
     const cached = getCached<TopStudent[]>(TOP_KEY, TOP_TTL);
     if (cached) return Promise.resolve(cached);
   }
-  return api<{ students: TopStudent[] }>('/api/top-students')
+
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  if (grade && grade !== 'all') params.set('grade', grade);
+  const queryString = params.toString() ? `?${params.toString()}` : '';
+
+  return api<{ students: TopStudent[] }>(`/api/top-students${queryString}`)
     .then((d) => {
       const students = Array.isArray(d?.students) ? d.students : [];
-      setCached(TOP_KEY, students);
+      if (!search && !grade) setCached(TOP_KEY, students);
       return students;
     })
     .catch((e) => {

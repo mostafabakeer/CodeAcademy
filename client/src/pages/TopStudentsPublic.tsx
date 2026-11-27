@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useLang } from '../i18n';
@@ -7,7 +7,7 @@ import Sparkles from '../components/Sparkles';
 import DoctorCode from '../components/DoctorCode';
 import Seo from '../components/Seo';
 import { TopStudentCard, LatestExamCard, ExamLeaderboardCard } from '../components/TopStudentsShared';
-import { GRADE_ACCENT, GRADE_KEYS } from '../lib/grades';
+import { GRADE_ACCENT, GRADE_KEYS, GRADE_LABEL_KEY } from '../lib/grades';
 
 export default function TopStudentsPublic() {
   const { t, lang } = useLang();
@@ -17,13 +17,25 @@ export default function TopStudentsPublic() {
   const [boards, setBoards] = useState<ExamLeaderboard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [gradeFilter, setGradeFilter] = useState('all');
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError('');
-    // كل مصدر مستقل: فشل أحدها لا يُسقط الصفحة، وكل واحد له كاش على حدة
-    Promise.allSettled([loadTopStudents(), loadLatestExamTop(), loadExamLeaderboards()])
+    Promise.allSettled([
+      loadTopStudents({ search: debouncedSearch, grade: gradeFilter }),
+      loadLatestExamTop(),
+      loadExamLeaderboards()
+    ])
       .then(([s, l, b]) => {
         if (!alive) return;
         if (s.status === 'fulfilled') setStudents(s.value);
@@ -37,9 +49,9 @@ export default function TopStudentsPublic() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [debouncedSearch, gradeFilter]);
 
-  const all = students.slice().sort((a, b) => a.rank - b.rank);
+  const all = useMemo(() => students.slice().sort((a, b) => a.rank - b.rank), [students]);
 
   const handleLogin = () => navigate('/login');
   const handleRegister = () => navigate('/register');
@@ -150,6 +162,38 @@ export default function TopStudentsPublic() {
           </>
         )}
       </motion.section>
+
+      {/* فلاتر البحث والتصفية */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="card-fire rounded-2xl p-4"
+      >
+        <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+          <div className="relative min-w-0 flex-1">
+            <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-gray-500">🔍</span>
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t('admin.searchStudents') || 'البحث بالاسم...'}
+              className="input-fire w-full rounded-xl py-2.5 pe-10 ps-10 text-sm"
+            />
+          </div>
+          <select
+            value={gradeFilter}
+            onChange={(e) => setGradeFilter(e.target.value)}
+            className="input-fire rounded-xl px-3.5 py-2.5 text-sm w-full sm:w-auto"
+          >
+            <option value="all">{t('admin.gradeAll') || 'كل الصفوف'}</option>
+            {GRADE_KEYS.map((g) => (
+              <option key={g} value={g}>
+                {t(GRADE_LABEL_KEY[g])}
+              </option>
+            ))}
+          </select>
+        </div>
+      </motion.div>
 
       {/* أوائل آخر امتحان لكل مرحلة */}
       <motion.section

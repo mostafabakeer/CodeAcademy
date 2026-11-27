@@ -123,7 +123,7 @@ export function useExamDeadline({
 
 /**
  * هوك مخصص للعد التنازلي الموثوق الذي يعمل في التبويبات الخلفية
- * يستخدم setTimeout + Page Visibility API لضمان التفعيل عند انتهاء الوقت
+ * يستخدم setInterval + Page Visibility API + storage event لضمان التفعيل عند انتهاء الوقت
  */
 export function useExamAutoSubmit(
   deadline: number | null,
@@ -133,53 +133,52 @@ export function useExamAutoSubmit(
 ): void {
   const onExpireRef = useRef(onExpire);
   const enabledRef = useRef(enabled);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittedRef = useRef(false);
+  const checkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // تحديث المراجع عند التغير
   onExpireRef.current = onExpire;
   enabledRef.current = enabled;
 
+  // دالة التحقق من انتهاء الوقت
+  const checkExpired = useCallback(() => {
+    if (!enabledRef.current || !deadline || submittedRef.current || isSubmitting) return false;
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      submittedRef.current = true;
+      onExpireRef.current();
+      return true;
+    }
+    return false;
+  }, [deadline, isSubmitting]);
+
+  // التحقق الدوري (كل ثانية) - يعمل في التبويبات الخلفية في معظم المتصفحات الحديثة
   useEffect(() => {
-    // تنظيف عند إلغاء التفعيل
     if (!enabled || !deadline) {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+      if (checkIntervalRef.current) {
+        clearInterval(checkIntervalRef.current);
+        checkIntervalRef.current = null;
       }
       submittedRef.current = false;
       return;
     }
 
-    // لا نكرر الإرسال إذا تم بالفعل أو إذا كان هناك إرسال يدوي جارٍ
-    if (submittedRef.current || isSubmitting) return;
+    // فحص فوري
+    checkExpired();
 
-    const remaining = deadline - Date.now();
+    // فحص دوري كل 1000ms
+    checkIntervalRef.current = setInterval(() => {
+      checkExpired();
+    }, 1000);
 
-    if (remaining <= 0) {
-      // الوقت انتهى بالفعل
-      submittedRef.current = true;
-      onExpireRef.current();
-      return;
-    }
-
-    // نضبط setTimeout واحد للوقت المحدد
-    timeoutRef.current = setTimeout(() => {
-      if (!submittedRef.current && enabledRef.current && !isSubmitting) {
-        submittedRef.current = true;
-        onExpireRef.current();
-      }
-      timeoutRef.current = null;
-    }, remaining);
-
-    // دالة تنظيف
     return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+      if (checkIntervalRef.current) {
+        clearInterval(checkIntervalRef.current);
+        checkIntervalRef.current = null;
       }
     };
-  }, [deadline, enabled, isSubmitting]);
+  }, [enabled, deadline, checkExpired]);
 
   // Page Visibility API: نتحقق عند عودة التبويب للواجهة
   useEffect(() => {
@@ -187,16 +186,28 @@ export function useExamAutoSubmit(
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) {
-          // الوقت انتهى أثناء وجودنا في التبويب الخلفي
-          submittedRef.current = true;
-          onExpireRef.current();
-        }
+        checkExpired();
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [deadline, enabled, isSubmitting]);
+  }, [enabled, deadline, isSubmitting, checkExpired]);
+
+  // Storage event: مزامنة بين التبويبات (إذا تم التسليم في تبويب آخر)
+  useEffect(() => {
+    if (!enabled || !deadline) return;
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'exam_auto_submit_trigger' && e.newValue) {
+        const data = JSON.parse(e.newValue);
+        if (data.examId === deadline && !submittedRef.current) {
+          checkExpired();
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [enabled, deadline, checkExpired]);
 }

@@ -22,7 +22,7 @@ interface Exam {
   titleEn: string;
   passingScore: number;
   timeLimit: number | null;
-  order?: number;
+  order: number;
   grade?: string;
   allowRetake?: boolean;
   questionsCount?: number;
@@ -210,7 +210,19 @@ export default function ExamsAdmin() {
     }));
     const kept = pairs.filter((p) => p.text !== '');
     if (kept.length < 2) return setQError(t('errors.required'));
+
+    // تحسين: التحقق من صحة correctIndex بعد الفلترة
+    // إذا كان correctIndex يشير لخيار تم حذفه (فارغ)، نضبطه إلى -1
     const mappedCorrect = kept.findIndex((p) => p.sourceIndex === qForm.correctIndex);
+
+    // حماية إضافية: التأكد من أن mappedCorrect في نطاق الخيارات المحتفظ بها
+    const finalCorrectIndex = (mappedCorrect >= 0 && mappedCorrect < kept.length) ? mappedCorrect : -1;
+
+    // تحذير للمستخدم إذا تم إلغاء الإجابة الصحيحة
+    if (mappedCorrect === -1 && qForm.correctIndex >= 0) {
+      console.warn('[ExamsAdmin] Correct answer was removed because it was empty. correctIndex reset to -1');
+    }
+
     try {
       const body = {
         type: 'mcq',
@@ -219,7 +231,7 @@ export default function ExamsAdmin() {
         textEn: qForm.textEn,
         options: kept.map(({ text, textEn }) => ({ text, textEn })),
         // -1 = لا توجد إجابة صحيحة (الخيار الصحيح كان فارغًا وحُذف) بدل تخمين خاطئ.
-        correctIndex: mappedCorrect >= 0 ? mappedCorrect : -1,
+        correctIndex: finalCorrectIndex,
         explanation: qForm.explanation,
         explanationEn: qForm.explanationEn,
       };
@@ -353,6 +365,10 @@ export default function ExamsAdmin() {
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.grade')}</label>
             <GradeSelect value={form.grade} onChange={(v) => setForm({ ...form, grade: v })} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-semibold text-gray-300">{t('admin.order')}</label>
+            <input type="number" className="input-fire w-full rounded-xl px-4 py-2.5" value={form.order} onChange={(e) => setForm({ ...form, order: Number(e.target.value) })} />
           </div>
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-ink-600 bg-ink-900 px-4 py-3">
             <input

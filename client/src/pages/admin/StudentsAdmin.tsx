@@ -22,6 +22,9 @@ const PANEL_ID = 0;
 const RESETS_ID = 'resets';
 const WA_DEDUP_KEY = 'dr_admin_wa_dedup';
 const WA_DEDUP_TTL = 24 * 60 * 60 * 1000;
+const SEARCH_DEBOUNCE_MS = 300;
+
+// إزالة API_BASE القديمة - نستخدم api client مباشرة
 
 const EGYPT_CODE = '20';
 
@@ -236,7 +239,7 @@ export default function StudentsAdmin() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 150);
+    const timer = setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query]);
 
@@ -250,7 +253,8 @@ export default function StudentsAdmin() {
     let cancelled = false;
     setLoading(true);
     setError('');
-    api<{ users: Student[] }>('/api/admin/users/all?limit=500')
+    // استخدام API الجديد مع pagination - جلب أول 500 مستخدم للتخزين المؤقت
+    api<{ users: Student[]; total: number; page: number; limit: number; counts: any }>('/api/admin/users/all?limit=500')
       .then((d) => {
         if (cancelled) return;
         setAllUsers(d.users);
@@ -321,7 +325,7 @@ export default function StudentsAdmin() {
   }, [success]);
 
   const refresh = () => {
-    run(PANEL_ID, 'refresh', () => api<{ users: Student[] }>('/api/admin/users/all?limit=500'), (d) => {
+    run(PANEL_ID, 'refresh', () => api<{ users: Student[]; total: number; page: number; limit: number; counts: any }>('/api/admin/users/all?limit=500'), (d) => {
       setAllUsers(d.users);
       writeCache(d.users);
     }, undefined, { silent: false });

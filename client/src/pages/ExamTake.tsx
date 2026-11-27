@@ -508,6 +508,7 @@ export default function ExamTake() {
 
     // Validation: تأكد من إرسال essayAnswers دائماً (حتى لو فارغة)
     const essayQuestions = data?.questions.filter((q) => q.type === 'essay') ?? [];
+    const mcqQuestions = data?.questions.filter((q) => q.type === 'mcq') ?? [];
     const sanitizedEssayAnswers: Record<number, string> = {};
     let hasEmptyEssay = false;
 
@@ -517,10 +518,20 @@ export default function ExamTake() {
       if (!answer.trim()) hasEmptyEssay = true;
     }
 
+    // Validation: التحقق من إجابات MCQ - على الأقل إجابة واحدة للامتحانات التي تحتوي MCQ فقط
+    const unansweredMcq = mcqQuestions.filter((q) => answers[q.id] === undefined).length;
+    const totalMcq = mcqQuestions.length;
+
     // تنبيه إذا كانت هناك إجابات فارغة (لكن نسمح بالإرسال)
     if (hasEmptyEssay && essayQuestions.length > 0) {
       // لا نمنع الإرسال - الـ backend يتعامل مع الإجابات الفارغة (auto-finalize بصفر)
       console.log('[ExamTake] Some essay answers are empty, will be auto-graded as 0');
+    }
+
+    // تحذير للأسئلة غير المجابة (للمعلومات فقط، لا نمنع الإرسال)
+    if (unansweredMcq > 0 || hasEmptyEssay) {
+      const totalUnanswered = unansweredMcq + (hasEmptyEssay ? essayQuestions.filter((q) => !essayAnswers[q.id]?.trim()).length : 0);
+      console.log(`[ExamTake] ${totalUnanswered} unanswered questions out of ${data?.questions.length ?? 0}`);
     }
 
     setSubmitting(true);
